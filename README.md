@@ -130,6 +130,12 @@ tag. Pushes to `main` also update `latest`; tags such as `v1.2.3` publish that
 version without changing `latest`. Version tags use
 `vMAJOR.MINOR.PATCH` with an optional `-SUFFIX`.
 
+Tags identify a source revision or version, but a rebuild can replace the
+image behind a tag. For an immutable deployment, pin the image digest from
+the publication output or `docker pull`, using
+`ghcr.io/chrisbennight/mcp-unifi-rs@sha256:<digest>`.
+See GitHub's [pull by digest instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pull-by-digest).
+
 The workflows use GitHub-hosted Linux runners, public dependencies, and the
 job-scoped GitHub token for publication. No external registry credentials or
 private artifact proxy are required. The initial image target is Linux x86-64.
