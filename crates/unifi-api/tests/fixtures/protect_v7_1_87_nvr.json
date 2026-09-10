@@ -1,0 +1,21 @@
+{
+  "id": "synthetic-nvr-id-001",
+  "modelKey": "nvr",
+  "name": null,
+  "doorbellSettings": {
+    "defaultMessageText": "Synthetic welcome message",
+    "defaultMessageResetTimeoutMs": 60000,
+    "customMessages": [],
+    "customImages": []
+  },
+  "armMode": {
+    "status": "disabled",
+    "armProfileId": null,
+    "armedAt": null,
+    "willBeArmedAt": null,
+    "breachDetectedAt": null,
+    "breachEventCount": 0,
+    "breachTriggerEventId": null,
+    "breachEventId": null
+  }
+}

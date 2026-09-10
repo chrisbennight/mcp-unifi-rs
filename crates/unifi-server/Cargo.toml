@@ -1,0 +1,42 @@
+[package]
+name = "unifi-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration, ingress, and HTTP serving for the UniFi MCP server"
+
+[[bin]]
+name = "unifi-mcp-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+unifi-api.workspace = true
+unifi-mcp.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+wiremock.workspace = true
+
+[lints]
+workspace = true

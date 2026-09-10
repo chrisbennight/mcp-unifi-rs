@@ -1,0 +1,33 @@
+# Example deployment posture. Production Compose lives in the docker-home
+# repository; this file documents the intended hardening for any deployment.
+services:
+  unifi-mcp:
+    image: gitea.cacahuate.org/bennight/unifi-mcp-rs:latest
+    restart: unless-stopped
+    environment:
+      UNIFI_MCP_LOG_LEVEL: info
+      UNIFI_MCP_GATEWAY_BEARER_CURRENT: ${UNIFI_MCP_GATEWAY_BEARER_CURRENT}
+      UNIFI_MCP_IDENTITY_JWKS_URL: http://mcp-gateway:8080/.well-known/jwks.json
+      UNIFI_MCP_IDENTITY_ISSUER: https://mcp.cacahuate.org
+      UNIFI_MCP_IDENTITY_ACTOR: mcp.cacahuate.org
+      UNIFI_MCP_ALLOWED_HOSTS: unifi-mcp,unifi-mcp:8000
+      UNIFI_MCP_CONTROLLER_URL: ${UNIFI_MCP_CONTROLLER_URL}
+      UNIFI_MCP_CONTROLLER_API_KEY: ${UNIFI_MCP_CONTROLLER_API_KEY}
+      UNIFI_MCP_CONTROLLER_USERNAME: ${UNIFI_MCP_CONTROLLER_USERNAME}
+      UNIFI_MCP_CONTROLLER_PASSWORD: ${UNIFI_MCP_CONTROLLER_PASSWORD}
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "/unifi-mcp-rs", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

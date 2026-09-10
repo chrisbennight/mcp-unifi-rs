@@ -1,0 +1,58 @@
+enabled: true
+repo: bennight/unifi-mcp-rs
+base_branches:
+  - main
+renovate_mode: eval
+status_context: pr-review/gate
+intent_sources:
+  include_pr_body: true
+  include_linked_issues: true
+  include_pr_comments: true
+  include_referenced_files: true
+intent_requirements:
+  require_design_goal: true
+  require_acceptance_criteria: true
+  minimum_sections_present: 2
+  max_referenced_files: 8
+  allowed_reference_extensions:
+    - .md
+    - .txt
+    - .yaml
+    - .yml
+    - .toml
+    - .json
+    - .rs
+    - .py
+review:
+  llm_required: true
+  max_diff_chars: 80000
+  max_comment_chars: 16000
+  agent_enabled: true
+  agent_max_steps: 15
+  agent_max_file_chars: 30000
+sensitive_paths:
+  - crates/unifi-api/**
+  - crates/unifi-mcp/**
+  - crates/unifi-server/src/auth.rs
+  - crates/unifi-server/src/config.rs
+  - Dockerfile
+  - .gitea/workflows/**
+  - .gitea/pr-review/**
+impact_map:
+  crates/unifi-api/**: "UniFi controller credential, request, response-bound, and capability-detection boundary"
+  crates/unifi-mcp/**: "Model-visible schemas, tool dispatch, annotations, redaction, and gateway classification registry"
+  crates/unifi-server/src/auth.rs: "Private bearer and gateway identity JWT verification boundary"
+  crates/unifi-server/src/config.rs: "Environment-injected secret and bounded runtime configuration boundary"
+  Dockerfile: "Published non-root service image and build supply chain"
+  .gitea/workflows/**: "CI, registry publication, and Infisical bootstrap boundary"
+  .gitea/pr-review/**: "AERB review and security policy"
+research:
+  enabled: true
+  max_collect_steps: 15
+  max_enhance_steps: 8
+  max_page_chars: 12000
+  max_sources: 10
+  max_report_chars: 16000
+  timeout_seconds: 300
+security_policy: security.yaml
+timeout_seconds: 120

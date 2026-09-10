@@ -1,0 +1,9 @@
+.git
+.gitea
+target
+mutants.out*
+__pycache__
+*.pyc
+.env
+*.pem
+*.key

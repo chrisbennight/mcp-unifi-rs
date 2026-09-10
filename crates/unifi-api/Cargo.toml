@@ -1,0 +1,28 @@
+[package]
+name = "unifi-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded HTTP clients and allowlisted response models for UniFi controllers"
+
+[dependencies]
+reqwest.workspace = true
+rustls.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+
+[lints]
+workspace = true

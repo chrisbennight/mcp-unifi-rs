@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/unifi-api",
+    "crates/unifi-mcp",
+    "crates/unifi-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://gitea.cacahuate.org/bennight/unifi-mcp-rs"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
+http = "1"
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonschema = { version = "0.52", default-features = false }
+# Default features are off deliberately. reqwest already selects this same
+# rustls with defaults disabled, and Cargo unifies features across the
+# workspace: turning them on here would enable prefer-post-quantum for
+# every TLS connection this process makes, changing the ClientHello for
+# the existing trust modes as a side effect of adding a new one.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
+sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["cookies", "json", "rustls"] }
+rmcp = { version = "3", default-features = false, features = ["server", "transport-streamable-http-server"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+# `raw_value` keeps a property's original JSON text intact across a read and
+# the write that sends it back. Decoding into the value model would round a
+# number through f64, which is the same class of loss as rebuilding a record
+# from a struct.
+serde_json = { version = "1", features = ["raw_value"] }
+serde_path_to_error = "0.1"
+subtle = "2.6"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = { version = "0.5", features = ["limit", "util"] }
+tower-http = { version = "0.7", features = ["timeout", "trace"] }
+tracing = "0.1"
+unifi-api = { path = "crates/unifi-api" }
+unifi-mcp = { path = "crates/unifi-mcp" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+wiremock = "0.6"
+zeroize = "1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

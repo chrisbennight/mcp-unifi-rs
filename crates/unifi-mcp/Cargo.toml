@@ -1,0 +1,27 @@
+[package]
+name = "unifi-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP schemas, tool registry, normalization, and dispatch for the UniFi MCP server"
+
+[dependencies]
+http.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+unifi-api = { path = "../unifi-api" }
+zeroize.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+url.workspace = true
+wiremock.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

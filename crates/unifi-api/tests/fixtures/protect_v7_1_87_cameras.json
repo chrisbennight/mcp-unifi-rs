@@ -1,0 +1,46 @@
+[
+  {
+    "id": "synthetic-camera-id-001",
+    "modelKey": "camera",
+    "state": "CONNECTED",
+    "name": null,
+    "mac": "020000000001",
+    "isMicEnabled": true,
+    "osdSettings": {
+      "isNameEnabled": true,
+      "isDateEnabled": true,
+      "isLogoEnabled": false,
+      "isDebugEnabled": false,
+      "overlayLocation": "bottomRight"
+    },
+    "ledSettings": {
+      "isEnabled": true,
+      "welcomeLed": false,
+      "floodLed": false
+    },
+    "lcdMessage": {
+      "type": "DO_NOT_DISTURB",
+      "resetAt": null,
+      "text": "Synthetic display text"
+    },
+    "micVolume": 50,
+    "activePatrolSlot": null,
+    "videoMode": "default",
+    "hdrType": "auto",
+    "featureFlags": {
+      "supportFullHdSnapshot": true,
+      "hasHdr": true,
+      "smartDetectTypes": ["person", "vehicle"],
+      "smartDetectAudioTypes": ["alrmSmoke"],
+      "videoModes": ["default", "highFps"],
+      "hasMic": true,
+      "hasLedStatus": true,
+      "hasSpeaker": true
+    },
+    "smartDetectSettings": {
+      "objectTypes": ["person"],
+      "audioTypes": ["alrmSmoke"]
+    },
+    "hasPackageCamera": false
+  }
+]
