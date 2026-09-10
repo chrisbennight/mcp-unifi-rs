@@ -1,4 +1,4 @@
-# unifi-mcp-rs
+# mcp-unifi-rs
 
 Curated Rust MCP server for UniFi network controllers.
 
@@ -85,8 +85,8 @@ actually find the right tool for a real question.
 
 ```sh
 set -a && . ./.env && set +a               # gateway ingress settings are required at startup
-cargo run --bin unifi-mcp-rs               # binds 0.0.0.0:8000 (healthz + authenticated /mcp)
-cargo run --bin unifi-mcp-rs -- --healthcheck
+cargo run --bin mcp-unifi-rs               # binds 0.0.0.0:8000 (healthz + authenticated /mcp)
+cargo run --bin mcp-unifi-rs -- --healthcheck
 ```
 
 Startup fails closed without the gateway ingress and controller connection
@@ -101,6 +101,9 @@ what fails at load.
 
 ## Development
 
+The executable is `mcp-unifi-rs`. The workspace crates remain `unifi-api`,
+`unifi-mcp`, and `unifi-server`; environment settings still use `UNIFI_MCP_`.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -112,6 +115,31 @@ python3 -m unittest discover -s scripts/tests
 
 Repository guidance for agents and contributors: [AGENTS.md](AGENTS.md).
 Design decisions: [DECISIONS.md](DECISIONS.md).
+
+## CI and container images
+
+GitHub Actions runs the development checks and builds the image on pull
+requests. Its smoke test starts both Network and Protect containers with
+fake credentials and no external network access. This checks startup and
+liveness, not connectivity to a controller.
+
+After the source and image checks pass on a push to `main` or a version tag,
+a separate job publishes that tested image to
+`ghcr.io/chrisbennight/mcp-unifi-rs`. Every publication has a `sha-<full-commit>`
+tag. Pushes to `main` also update `latest`; tags such as `v1.2.3` publish that
+version without changing `latest`. Version tags use
+`vMAJOR.MINOR.PATCH` with an optional `-SUFFIX`.
+
+The workflows use GitHub-hosted Linux runners, public dependencies, and the
+job-scoped GitHub token for publication. No external registry credentials or
+private artifact proxy are required. The initial image target is Linux x86-64.
+Package visibility is managed separately in GitHub; a private package requires
+authentication to pull. To build locally:
+
+```sh
+docker build -t mcp-unifi-rs .
+python3 scripts/smoke_image.py mcp-unifi-rs
+```
 
 ## License
 

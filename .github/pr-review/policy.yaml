@@ -1,5 +1,5 @@
 enabled: true
-repo: bennight/unifi-mcp-rs
+repo: chrisbennight/mcp-unifi-rs
 base_branches:
   - main
 renovate_mode: eval
@@ -36,16 +36,20 @@ sensitive_paths:
   - crates/unifi-server/src/auth.rs
   - crates/unifi-server/src/config.rs
   - Dockerfile
-  - .gitea/workflows/**
-  - .gitea/pr-review/**
+  - scripts/image_tags.py
+  - scripts/smoke_image.py
+  - .github/workflows/**
+  - .github/pr-review/**
 impact_map:
   crates/unifi-api/**: "UniFi controller credential, request, response-bound, and capability-detection boundary"
   crates/unifi-mcp/**: "Model-visible schemas, tool dispatch, annotations, redaction, and gateway classification registry"
   crates/unifi-server/src/auth.rs: "Private bearer and gateway identity JWT verification boundary"
   crates/unifi-server/src/config.rs: "Environment-injected secret and bounded runtime configuration boundary"
   Dockerfile: "Published non-root service image and build supply chain"
-  .gitea/workflows/**: "CI, registry publication, and Infisical bootstrap boundary"
-  .gitea/pr-review/**: "AERB review and security policy"
+  scripts/image_tags.py: "Validation of image publication tags"
+  scripts/smoke_image.py: "Isolated source-image startup and liveness tests"
+  .github/workflows/**: "CI, tested image transfer, and GHCR publication boundary"
+  .github/pr-review/**: "AERB review and security policy"
 research:
   enabled: true
   max_collect_steps: 15

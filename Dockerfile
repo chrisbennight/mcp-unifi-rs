@@ -41,18 +41,18 @@ RUN if [ -n "${CRATES_INDEX_URL}" ]; then \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --release --locked --bin unifi-mcp-rs \
-    && cp target/release/unifi-mcp-rs /usr/local/bin/unifi-mcp-rs
+    cargo build --release --locked --bin mcp-unifi-rs \
+    && cp target/release/mcp-unifi-rs /usr/local/bin/mcp-unifi-rs
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77 AS runtime
 ARG SOURCE_REVISION=""
-LABEL org.opencontainers.image.source="https://gitea.cacahuate.org/bennight/unifi-mcp-rs" \
+LABEL org.opencontainers.image.source="https://github.com/chrisbennight/mcp-unifi-rs" \
       org.opencontainers.image.revision="${SOURCE_REVISION}"
-COPY --from=builder /usr/local/bin/unifi-mcp-rs /unifi-mcp-rs
+COPY --from=builder /usr/local/bin/mcp-unifi-rs /mcp-unifi-rs
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-    CMD ["/unifi-mcp-rs", "--healthcheck"]
+    CMD ["/mcp-unifi-rs", "--healthcheck"]
 
-ENTRYPOINT ["/unifi-mcp-rs"]
+ENTRYPOINT ["/mcp-unifi-rs"]

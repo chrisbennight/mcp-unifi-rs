@@ -1,76 +1,93 @@
 from pathlib import Path
 import re
+import tomllib
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / '.github' / 'workflows'
 
 
 class WorkflowContractTests(unittest.TestCase):
     def test_external_actions_are_pinned_to_immutable_commits(self) -> None:
-        workflow = (ROOT / ".gitea" / "workflows" / "build.yml").read_text(
-            encoding="utf-8"
-        )
-        action_refs = re.findall(r"^\s*-?\s*uses:\s+([^#\s]+)", workflow, re.MULTILINE)
+        files = list(WORKFLOWS.glob('*.yml'))
+        self.assertGreaterEqual(len(files), 2)
+        for path in files:
+            workflow = path.read_text(encoding='utf-8')
+            refs = re.findall(r'^\s*-?\s*uses:\s+([^#\s]+)', workflow, re.MULTILINE)
+            for action_ref in refs:
+                if action_ref.startswith('./'):
+                    self.assertTrue((ROOT / action_ref).is_file())
+                else:
+                    self.assertRegex(action_ref, r'^[\w-]+/[\w-]+@[0-9a-f]{40}$')
+            self.assertNotIn('persist-credentials: true', workflow)
+            self.assertEqual(workflow.count('actions/checkout@'), workflow.count('persist-credentials: false'))
 
-        self.assertGreaterEqual(len(action_refs), 2)
-        for action_ref in action_refs:
-            self.assertRegex(action_ref, r"@[0-9a-f]{40}$")
+    def test_pull_requests_cannot_publish_or_access_registry_credentials(self) -> None:
+        workflow = (WORKFLOWS / 'build.yml').read_text(encoding='utf-8')
+        before_publish, publish = workflow.split('\n  publish:\n')
+        self.assertIn('  pull_request:', before_publish)
+        self.assertIn('permissions:\n  contents: read\n', before_publish)
+        self.assertNotIn('packages: write', before_publish)
+        self.assertNotIn('secrets.', before_publish)
+        self.assertNotIn('pull_request_target', workflow)
+        self.assertIn('    needs: [test, image]', publish)
+        self.assertIn("if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'", publish)
+        self.assertIn('      packages: write', publish)
+        self.assertIn('secrets.GITHUB_TOKEN', publish)
+        self.assertIn('--password-stdin', publish)
+        self.assertLess(publish.index('Validate publication tags'), publish.index('docker login'))
 
-    def test_rust_builder_image_is_pinned_to_an_immutable_digest(self) -> None:
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    def test_publishes_the_tested_artifact_from_the_same_run(self) -> None:
+        workflow = (WORKFLOWS / 'build.yml').read_text(encoding='utf-8')
+        self.assertIn('python3 scripts/smoke_image.py', workflow)
+        self.assertLess(workflow.index('Smoke both runtime surfaces'), workflow.index('docker save'))
+        publish = workflow.split('\n  publish:\n')[1]
+        self.assertIn('name: tested-image', publish)
+        self.assertIn('digest-mismatch: error', publish)
+        self.assertNotIn('run-id:', publish)
+        self.assertNotIn('github-token:', publish)
+        self.assertNotIn('docker build', publish)
+        self.assertIn('test "$revision" = "$GITHUB_SHA"', publish)
+        self.assertLess(publish.index('test "$revision"'), publish.index('docker login'))
 
-        self.assertRegex(
-            dockerfile,
-            r"(?m)^FROM rust:\$\{RUST_VERSION\}-slim-bookworm@sha256:[0-9a-f]{64} AS builder$",
-        )
+    def test_github_builds_need_no_lab_service(self) -> None:
+        for path in WORKFLOWS.glob('*.yml'):
+            workflow = path.read_text(encoding='utf-8')
+            for private_dependency in ('cacahuate.org', 'infisical', 'CRATES_INDEX_URL', 'self-hosted', 'renovate-threat-gate'):
+                self.assertNotIn(private_dependency, workflow)
+        cargo_config = (ROOT / '.cargo/config.toml').read_text(encoding='utf-8')
+        self.assertNotIn('replace-with', cargo_config)
 
-    def test_image_smoke_passes_configuration_by_environment_name(self) -> None:
-        workflow = (ROOT / ".gitea" / "workflows" / "build.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertNotIn("_FILE", workflow)
-        self.assertNotIn("docker cp", workflow)
-        for command in ["docker create", "docker start"]:
-            self.assertIn(command, workflow)
-        for variable in [
-            "UNIFI_MCP_LOG_LEVEL",
-            "UNIFI_MCP_GATEWAY_BEARER_CURRENT",
-            "UNIFI_MCP_IDENTITY_JWKS_URL",
-            "UNIFI_MCP_IDENTITY_ISSUER",
-            "UNIFI_MCP_IDENTITY_ACTOR",
-            "UNIFI_MCP_CONTROLLER_URL",
-            "UNIFI_MCP_CONTROLLER_API_KEY",
-            "UNIFI_MCP_CONTROLLER_USERNAME",
-            "UNIFI_MCP_CONTROLLER_PASSWORD",
-        ]:
-            self.assertIn(f"-e {variable} \\", workflow)
-
-    def test_manifest_emission_is_gated_in_ci(self) -> None:
-        workflow = (ROOT / ".gitea" / "workflows" / "test.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("--emit-gateway-manifest", workflow)
-        for line in (
-            "name: unifi",
-            "classification_mode: mcp_annotations",
-            "bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_UNIFI",
-            "isolation: per_call",
+    def test_source_checks_and_manifest_emission_are_gated(self) -> None:
+        workflow = (WORKFLOWS / 'test.yml').read_text(encoding='utf-8')
+        self.assertIn('  workflow_call:', workflow)
+        for command in (
+            'cargo fmt --all -- --check',
+            'cargo clippy --workspace --all-targets --all-features --locked -- -D warnings',
+            'cargo test --workspace --all-features --locked',
+            'cargo doc --workspace --no-deps --locked',
+            'python3 scripts/check_docs.py',
+            'python3 -m unittest discover -s scripts/tests',
+            '--emit-gateway-manifest',
+            'classification_mode: mcp_annotations',
+            'bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_UNIFI',
+            'isolation: per_call',
         ):
-            self.assertIn(line, workflow)
+            self.assertIn(command, workflow)
 
-    def test_registry_credentials_come_only_from_infisical(self) -> None:
-        workflow = (ROOT / ".gitea" / "workflows" / "build.yml").read_text(
-            encoding="utf-8"
-        )
+    def test_image_and_executable_use_the_github_project_name(self) -> None:
+        package = tomllib.loads((ROOT / 'crates/unifi-server/Cargo.toml').read_text())
+        self.assertEqual(package['bin'][0]['name'], 'mcp-unifi-rs')
+        dockerfile = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+        self.assertRegex(dockerfile, r'(?m)^FROM rust:\$\{RUST_VERSION\}-slim-bookworm@sha256:[0-9a-f]{64} AS builder$')
+        self.assertIn('--bin mcp-unifi-rs', dockerfile)
+        self.assertIn('ENTRYPOINT ["/mcp-unifi-rs"]', dockerfile)
+        self.assertIn('CMD ["/mcp-unifi-rs", "--healthcheck"]', dockerfile)
+        self.assertIn('https://github.com/chrisbennight/mcp-unifi-rs', dockerfile)
+        for name in ('.dockerignore', '.gitignore'):
+            self.assertIn('.worktrees', (ROOT / name).read_text())
 
-        self.assertIn("infisical-secrets-action", workflow)
-        self.assertIn("secret-path: /bennight/unifi-mcp-rs", workflow)
-        self.assertNotIn("secrets.REGISTRY_TOKEN", workflow)
-        self.assertNotIn("secrets.REGISTRY_USER", workflow)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

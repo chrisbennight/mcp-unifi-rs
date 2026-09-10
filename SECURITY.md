@@ -17,4 +17,5 @@ owner via an issue marked security.
 - Mutations preview by default and verify persistence by read-back; they are
   never retried after an ambiguous transport result.
 - The container runs as a non-root distroless image with a digest-pinned,
-  locked build; publication credentials live only in Infisical.
+  locked build. GitHub Actions publishes the tested image to GHCR using a
+  job-scoped token; pull requests cannot publish images.

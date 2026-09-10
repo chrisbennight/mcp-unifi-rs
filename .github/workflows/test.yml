@@ -1,15 +1,16 @@
 name: test
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # renovate: datasource=github-tags depName=rust-lang/rustup
       RUSTUP_INIT_VERSION: "1.29.0"
@@ -37,23 +38,6 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install "${RUST_TOOLCHAIN_VERSION}" --profile minimal --component rustfmt,clippy
           rustup default "${RUST_TOOLCHAIN_VERSION}"
-
-      # These cargo invocations run on the runner, not in an image, so they see
-      # the job environment directly - but cargo reads no environment variable
-      # for a mirror, so the address still has to become a config file. Written
-      # here rather than committed: a checked-in mirror would be a hard
-      # dependency on a host that resolves only on the LAN.
-      - name: Point cargo at the crate proxy
-        run: |
-          set -euo pipefail
-          if [ -z "${CRATES_INDEX_URL:-}" ]; then
-            echo "SKIP: no crate index configured; cargo will use crates.io"
-            exit 0
-          fi
-          mkdir -p .cargo
-          printf '\n[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' \
-            "${CRATES_INDEX_URL}" >> .cargo/config.toml
-          echo "cargo source replacement written"
 
       - name: Verify formatting
         run: cargo fmt --all -- --check

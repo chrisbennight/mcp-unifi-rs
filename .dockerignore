@@ -1,5 +1,6 @@
 .git
-.gitea
+.github
+.worktrees
 target
 mutants.out*
 __pycache__

@@ -3,9 +3,9 @@
 ## System context
 
 ```
-agent/client ── mcp-tool-search-gateway ──(bearer + identity JWT, private network)──┬── unifi-mcp-rs [surface=network, aud=unifi] ── Network controller (Integration API, X-API-KEY;
+agent/client ── mcp-tool-search-gateway ──(bearer + identity JWT, private network)──┬── mcp-unifi-rs [surface=network, aud=unifi] ── Network controller (Integration API, X-API-KEY;
                                                                                     │                                               legacy API cookie + CSRF, capability-gated)
-                                                                                    └── unifi-mcp-rs [surface=protect, aud=unifi-protect] ── Protect console (Integration API, X-API-Key;
+                                                                                    └── mcp-unifi-rs [surface=protect, aud=unifi-protect] ── Protect console (Integration API, X-API-Key;
                                                                                                                                              optional local session for event history)
 ```
 

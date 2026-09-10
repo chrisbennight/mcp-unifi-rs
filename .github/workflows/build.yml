@@ -1,0 +1,100 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/chrisbennight/mcp-unifi-rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Dockerfile diagnostics
+        run: docker build --check --build-arg 'BUILDKIT_DOCKERFILE_CHECK=error=true' .
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          docker build --build-arg "SOURCE_REVISION=${GITHUB_SHA}" \
+            --tag "${IMAGE}:sha-${GITHUB_SHA}" .
+
+      - name: Smoke both runtime surfaces
+        run: python3 scripts/smoke_image.py "${IMAGE}:sha-${GITHUB_SHA}"
+
+      - name: Save tested image
+        if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
+        run: docker save --output "${RUNNER_TEMP}/image.tar" "${IMAGE}:sha-${GITHUB_SHA}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
+        with:
+          name: tested-image
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: [test, image]
+    if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/chrisbennight/mcp-unifi-rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate publication tags
+        run: python3 scripts/image_tags.py --sha "$GITHUB_SHA" --ref "$GITHUB_REF" > "${RUNNER_TEMP}/image-tags.txt"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tested-image
+          path: ${{ runner.temp }}/tested-image
+          digest-mismatch: error
+
+      - name: Load and verify tested image
+        run: |
+          set -euo pipefail
+          docker load --input "${RUNNER_TEMP}/tested-image/image.tar"
+          revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${IMAGE}:sha-${GITHUB_SHA}")"
+          test "$revision" = "$GITHUB_SHA"
+
+      - name: Publish image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${RUNNER_TEMP}/docker-publish"
+          mkdir -m 700 "$DOCKER_CONFIG"
+          trap 'docker logout ghcr.io' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          while IFS= read -r tag; do
+            docker tag "${IMAGE}:sha-${GITHUB_SHA}" "${IMAGE}:${tag}"
+            docker push "${IMAGE}:${tag}"
+          done < "${RUNNER_TEMP}/image-tags.txt"

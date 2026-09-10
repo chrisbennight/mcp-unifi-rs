@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Configuration, ingress, and HTTP serving for the UniFi MCP server"
 
 [[bin]]
-name = "unifi-mcp-rs"
+name = "mcp-unifi-rs"
 path = "src/main.rs"
 
 [dependencies]

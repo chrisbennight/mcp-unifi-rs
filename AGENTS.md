@@ -3,9 +3,9 @@
 ## Scope
 
 This repository owns the Rust UniFi MCP server, its image, and source-image
-tests. Production Compose, Infisical references, Komodo stack configuration,
-gateway policy publication, and live server manifests belong in their
-respective homelab repositories or control planes.
+tests. Site-specific deployments, secret-provider configuration, gateway
+policy publication, and live server manifests belong in their deployment
+repositories or control planes.
 
 Use an isolated worktree for every change. Search before adding a module, tool,
 or dependency. Keep each pull request behaviorally complete and small enough to
@@ -88,10 +88,12 @@ never line-number anchors.
 
 ## Pull requests and AERB
 
-The repository keeps `AERB` and `renovate` as Write collaborators and an active
-pull-request webhook to AERB. A merge requires `test / test (pull_request)` and
-`pr-review/gate` on the current head. A missing AERB status is an enrollment
-failure, not a reason to waive review.
+GitHub Actions runs the source checks and image smoke tests on pull requests.
+Both must pass on the current head before merging. Request an AERB review of
+the GitHub pull request and require `pr-review/gate` on that same head. A
+missing AERB status is an enrollment failure, not a reason to waive review.
+Repository administrators configure required checks after verifying their
+names in GitHub; private Gitea webhook and collaborator settings do not transfer.
 
 Fill the tailored pull-request template accurately. Authentication, bearer,
 identity JWT, credentials, tool classification, and authorization changes must

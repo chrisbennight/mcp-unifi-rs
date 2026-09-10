@@ -2,7 +2,7 @@
 # repository; this file documents the intended hardening for any deployment.
 services:
   unifi-mcp:
-    image: gitea.cacahuate.org/bennight/unifi-mcp-rs:latest
+    image: ghcr.io/chrisbennight/mcp-unifi-rs:latest
     restart: unless-stopped
     environment:
       UNIFI_MCP_LOG_LEVEL: info
@@ -26,7 +26,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
-      test: ["CMD", "/unifi-mcp-rs", "--healthcheck"]
+      test: ["CMD", "/mcp-unifi-rs", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
