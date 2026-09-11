@@ -35,6 +35,9 @@ sensitive_paths:
   - crates/unifi-mcp/**
   - crates/unifi-server/src/auth.rs
   - crates/unifi-server/src/config.rs
+  - crates/unifi-server/src/portable.rs
+  - crates/unifi-server/src/main.rs
+  - crates/unifi-server/src/server.rs
   - Dockerfile
   - scripts/image_tags.py
   - scripts/smoke_image.py
@@ -45,6 +48,9 @@ impact_map:
   crates/unifi-mcp/**: "Model-visible schemas, tool dispatch, annotations, redaction, and gateway classification registry"
   crates/unifi-server/src/auth.rs: "Private bearer and gateway identity JWT verification boundary"
   crates/unifi-server/src/config.rs: "Environment-injected secret and bounded runtime configuration boundary"
+  crates/unifi-server/src/portable.rs: "Independent client permissions, direct HTTP authentication and bounded stdio transport"
+  crates/unifi-server/src/main.rs: "Transport selection and payload-safe application logging"
+  crates/unifi-server/src/server.rs: "Gateway ingress and request limits"
   Dockerfile: "Published non-root service image and build supply chain"
   scripts/image_tags.py: "Validation of image publication tags"
   scripts/smoke_image.py: "Isolated source-image startup and liveness tests"

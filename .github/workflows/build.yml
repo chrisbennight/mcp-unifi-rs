@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 30
     env:
       IMAGE: ghcr.io/chrisbennight/mcp-unifi-rs
+      GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+      SYFT_IMAGE: anchore/syft:v1.51.1@sha256:95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,6 +37,19 @@ jobs:
         run: |
           docker compose --env-file .env.example -f compose.example.yml config --quiet
           docker compose --env-file .env.protect.example -f compose.protect.example.yml config --quiet
+
+      - name: Scan tracked source for secrets
+        run: |
+          set -euo pipefail
+          mkdir "${RUNNER_TEMP}/source-scan"
+          git archive HEAD | tar -x -C "${RUNNER_TEMP}/source-scan"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -v "${RUNNER_TEMP}/source-scan:/scan:ro" \
+            "$GITLEAKS_IMAGE" dir --redact=100 --no-banner /scan
+
+      - name: Verify build-context isolation
+        run: python3 scripts/check_build_context.py
 
       - name: Check Dockerfile diagnostics
         run: docker build --check --build-arg 'BUILDKIT_DOCKERFILE_CHECK=error=true' .
@@ -49,8 +64,40 @@ jobs:
         run: python3 scripts/smoke_image.py "${IMAGE}:sha-${GITHUB_SHA}"
 
       - name: Save tested image
-        if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
         run: docker save --output "${RUNNER_TEMP}/image.tar" "${IMAGE}:sha-${GITHUB_SHA}"
+
+      - name: Inventory source and tested image
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            --user "$(id -u):$(id -g)" \
+            -e SYFT_CHECK_FOR_APP_UPDATE=false -e SYFT_CACHE_DIR=/tmp/syft-cache \
+            -v "${RUNNER_TEMP}/source-scan:/scan:ro" \
+            "$SYFT_IMAGE" scan dir:/scan --source-name mcp-unifi-rs \
+              --source-version "$GITHUB_SHA" -o spdx-json > "${RUNNER_TEMP}/source.spdx.json"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            --user "$(id -u):$(id -g)" \
+            -e SYFT_CHECK_FOR_APP_UPDATE=false -e SYFT_CACHE_DIR=/tmp/syft-cache \
+            -v "${RUNNER_TEMP}/image.tar:/image.tar:ro" \
+            "$SYFT_IMAGE" scan docker-archive:/image.tar -o spdx-json > "${RUNNER_TEMP}/image.spdx.json"
+          docker image inspect --format '{{json .}}' "${IMAGE}:sha-${GITHUB_SHA}" > "${RUNNER_TEMP}/image-metadata.json"
+          printf '%s\n' "$GITHUB_SHA" > "${RUNNER_TEMP}/source-revision.txt"
+          cd "$RUNNER_TEMP"
+          sha256sum image.tar image.spdx.json source.spdx.json image-metadata.json source-revision.txt > inventory-checksums.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: software-inventory
+          path: |
+            ${{ runner.temp }}/image.spdx.json
+            ${{ runner.temp }}/source.spdx.json
+            ${{ runner.temp }}/image-metadata.json
+            ${{ runner.temp }}/source-revision.txt
+            ${{ runner.temp }}/inventory-checksums.txt
+          if-no-files-found: error
+          retention-days: 30
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'

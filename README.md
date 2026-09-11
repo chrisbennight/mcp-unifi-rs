@@ -191,6 +191,11 @@ the publication output or `docker pull`, using
 `ghcr.io/chrisbennight/mcp-unifi-rs@sha256:<digest>`.
 See GitHub's [pull by digest instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pull-by-digest).
 
+Each successful build also provides source and image software inventories.
+See [distribution and maintenance](docs/distribution.md) for verification,
+artifact retention, upgrades and rollback, and [SECURITY.md](SECURITY.md) for
+private reporting and the trust boundary.
+
 The workflows use GitHub-hosted Linux runners, public dependencies, and the
 job-scoped GitHub token for publication. No external registry credentials or
 private artifact proxy are required. The initial image target is Linux x86-64.
