@@ -64,12 +64,13 @@ class MarkdownValidationTests(unittest.TestCase):
             source.mkdir(parents=True)
             (root / "docs").mkdir()
             (source / "config.rs").write_text('"UNIFI_MCP_HOST"\n#[cfg(test)]\n"UNIFI_MCP_TEST_ONLY"')
-            (source / "portable.rs").write_text('"UNIFI_MCP_ALLOW_WRITES"')
+            (source / "portable.rs").write_text('"UNIFI_MCP_ALLOW_WRITES" "UNIFI_MCP_CONTROLLER_CERT_SHA256"')
             reference = root / "docs/configuration.md"
             reference.write_text('`UNIFI_MCP_HOST`')
             self.assertEqual(check_docs.configuration_coverage(root), [
-                'docs/configuration.md: missing setting UNIFI_MCP_ALLOW_WRITES'])
-            reference.write_text('`UNIFI_MCP_HOST` `UNIFI_MCP_ALLOW_WRITES`')
+                'docs/configuration.md: missing setting UNIFI_MCP_ALLOW_WRITES',
+                'docs/configuration.md: missing setting UNIFI_MCP_CONTROLLER_CERT_SHA256'])
+            reference.write_text('`UNIFI_MCP_HOST` `UNIFI_MCP_ALLOW_WRITES` `UNIFI_MCP_CONTROLLER_CERT_SHA256`')
             self.assertEqual(check_docs.configuration_coverage(root), [])
 
 

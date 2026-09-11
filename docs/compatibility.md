@@ -46,10 +46,10 @@ and redacted error if the documented setup does not work.
 | Capability | Backend used here |
 | --- | --- |
 | Network version, sites, device inventory/detail/statistics | Network Integration API |
-| Network client inventory and guest authorization | Network Integration API |
+| Guest authorization and its client ID resolution | Network Integration API |
 | Device restart and port power cycle | Network Integration API |
 | Zone-based firewall zones/policies and hotspot vouchers | Network Integration API |
-| Health, connected-client context, networks and wireless networks | Network legacy API |
+| Health, connected-client inventory/context, networks and wireless networks | Network legacy API |
 | Wireless updates, client block/unblock/reconnect, device locate | Network legacy API |
 | Port forwards, traffic rules/routes, events, alarms, historical statistics, neighboring APs | Network legacy API |
 | Protect camera and recorder identity | Protect Integration API |

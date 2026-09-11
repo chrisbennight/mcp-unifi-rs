@@ -43,7 +43,7 @@ def configuration_coverage(root: Path) -> list[str]:
     for filename in ("config.rs", "portable.rs"):
         source = (root / "crates/unifi-server/src" / filename).read_text(encoding="utf-8")
         production = source.split("#[cfg(test)]", maxsplit=1)[0]
-        variables.update(re.findall(r'"(UNIFI_MCP_[A-Z_]+)"', production))
+        variables.update(re.findall(r'"(UNIFI_MCP_[A-Z0-9_]+)"', production))
     reference = (root / "docs/configuration.md").read_text(encoding="utf-8")
     return [f"docs/configuration.md: missing setting {name}" for name in sorted(variables) if f"`{name}`" not in reference]
 
