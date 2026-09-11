@@ -86,6 +86,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('scripts/check_build_context.py', image)
         self.assertEqual(image.count('docker run '), 3)
         self.assertEqual(image.count('--network none --read-only --cap-drop ALL'), 3)
+        self.assertEqual(image.count('--user "$(id -u):$(id -g)"'), 2)
+        self.assertEqual(image.count('--tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777'), 2)
         self.assertNotIn('docker.sock', workflow)
         self.assertIn('scan docker-archive:/image.tar', image)
         self.assertIn('scan dir:/scan', image)

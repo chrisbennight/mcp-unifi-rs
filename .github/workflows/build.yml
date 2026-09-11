@@ -70,13 +70,15 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            --user "$(id -u):$(id -g)" \
             -e SYFT_CHECK_FOR_APP_UPDATE=false -e SYFT_CACHE_DIR=/tmp/syft-cache \
             -v "${RUNNER_TEMP}/source-scan:/scan:ro" \
             "$SYFT_IMAGE" scan dir:/scan --source-name mcp-unifi-rs \
               --source-version "$GITHUB_SHA" -o spdx-json > "${RUNNER_TEMP}/source.spdx.json"
           docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            --user "$(id -u):$(id -g)" \
             -e SYFT_CHECK_FOR_APP_UPDATE=false -e SYFT_CACHE_DIR=/tmp/syft-cache \
             -v "${RUNNER_TEMP}/image.tar:/image.tar:ro" \
             "$SYFT_IMAGE" scan docker-archive:/image.tar -o spdx-json > "${RUNNER_TEMP}/image.spdx.json"
