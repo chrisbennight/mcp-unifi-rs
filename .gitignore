@@ -20,4 +20,7 @@ __pycache__/
 *.pyc
 mutants.out*/
 .env
+.env.*
+!.env.example
+!.env.protect.example
 .worktrees/

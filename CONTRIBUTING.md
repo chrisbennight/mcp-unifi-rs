@@ -29,6 +29,7 @@ committed; use `--locked` when verifying a candidate.
 To check a runtime or image change:
 
 ```sh
+python3 scripts/check_build_context.py
 docker build --check .
 docker build -t mcp-unifi-rs:test .
 python3 scripts/smoke_image.py mcp-unifi-rs:test

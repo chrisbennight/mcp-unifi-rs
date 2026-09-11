@@ -505,7 +505,7 @@ mod tests {
 
     const CURRENT_BEARER: &str = "0123456789abcdef0123456789abcdef";
     const PREVIOUS_BEARER: &str = "fedcba9876543210fedcba9876543210";
-    const EXPECTED_ACTOR: &str = "mcp.cacahuate.org";
+    const EXPECTED_ACTOR: &str = "gateway.example.net";
 
     #[derive(Clone, Serialize)]
     struct TestActorClaim {

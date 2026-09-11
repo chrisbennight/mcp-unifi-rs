@@ -714,7 +714,7 @@ pub(crate) mod test_support {
             identity: IdentityVerifierSettings {
                 jwks_url: Url::parse("http://127.0.0.1:65534/jwks").expect("JWKS URL"),
                 issuer: "https://gateway.test".into(),
-                actor: "mcp.cacahuate.org".into(),
+                actor: "gateway.example.net".into(),
                 audience: "unifi".into(),
                 request_timeout: Duration::from_secs(1),
                 cache_ttl: Duration::from_mins(1),
@@ -752,7 +752,7 @@ mod tests {
             "UNIFI_MCP_GATEWAY_BEARER_CURRENT" => "0123456789abcdef0123456789abcdef",
             "UNIFI_MCP_IDENTITY_JWKS_URL" => "http://127.0.0.1:65533/jwks",
             "UNIFI_MCP_IDENTITY_ISSUER" => "https://gateway.test",
-            "UNIFI_MCP_IDENTITY_ACTOR" => "mcp.cacahuate.org",
+            "UNIFI_MCP_IDENTITY_ACTOR" => "gateway.example.net",
             "UNIFI_MCP_CONTROLLER_URL" => "https://192.0.2.1",
             "UNIFI_MCP_CONTROLLER_API_KEY" => "controller-api-key",
             "UNIFI_MCP_CONTROLLER_USERNAME" => "svc-mcp",

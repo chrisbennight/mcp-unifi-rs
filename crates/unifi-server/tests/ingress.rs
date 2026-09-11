@@ -38,7 +38,7 @@ use wiremock::{
 use zeroize::Zeroizing;
 
 const BEARER: &str = "0123456789abcdef0123456789abcdef";
-const ACTOR: &str = "mcp.cacahuate.org";
+const ACTOR: &str = "gateway.example.net";
 
 #[derive(Serialize)]
 struct ActorClaim {

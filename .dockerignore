@@ -6,5 +6,12 @@ mutants.out*
 __pycache__
 *.pyc
 .env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!.env.protect.example
 *.pem
 *.key
+**/*.pem
+**/*.key

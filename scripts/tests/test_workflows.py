@@ -76,6 +76,23 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(command, workflow)
 
+    def test_security_tools_are_pinned_isolated_and_scan_before_publication(self) -> None:
+        workflow = (WORKFLOWS / 'build.yml').read_text(encoding='utf-8')
+        image = workflow.split('\n  publish:\n')[0]
+        for tool in ('GITLEAKS', 'SYFT'):
+            self.assertRegex(image, rf'{tool}_IMAGE: [\w./-]+:v[\d.]+@sha256:[a-f0-9]{{64}}')
+        self.assertIn('git archive HEAD', image)
+        self.assertIn('--redact=100', image)
+        self.assertIn('scripts/check_build_context.py', image)
+        self.assertEqual(image.count('docker run '), 3)
+        self.assertEqual(image.count('--network none --read-only --cap-drop ALL'), 3)
+        self.assertNotIn('docker.sock', workflow)
+        self.assertIn('scan docker-archive:/image.tar', image)
+        self.assertIn('scan dir:/scan', image)
+        self.assertIn('name: software-inventory', image)
+        self.assertLess(image.index('Scan tracked source'), image.index('Build image'))
+        self.assertLess(image.index('Smoke both runtime surfaces'), image.index('Inventory source'))
+
     def test_image_and_executable_use_the_github_project_name(self) -> None:
         package = tomllib.loads((ROOT / 'crates/unifi-server/Cargo.toml').read_text())
         self.assertEqual(package['bin'][0]['name'], 'mcp-unifi-rs')
