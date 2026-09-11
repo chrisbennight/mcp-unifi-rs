@@ -29,6 +29,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate Compose examples
+        env:
+          UNIFI_MCP_HTTP_BEARER_CURRENT: 0123456789abcdef0123456789abcdef
+        run: |
+          docker compose --env-file .env.example -f compose.example.yml config --quiet
+          docker compose --env-file .env.protect.example -f compose.protect.example.yml config --quiet
+
       - name: Check Dockerfile diagnostics
         run: docker build --check --build-arg 'BUILDKIT_DOCKERFILE_CHECK=error=true' .
 

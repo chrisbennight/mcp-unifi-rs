@@ -1,233 +1,161 @@
 # Configuration
 
-Every setting is read from the environment once, at startup, by
-the selected transport's settings loader. There is no configuration file and
-no runtime reconfiguration: a value that is missing, malformed, or outside its
-range fails the process at load rather than on the first tool call that needs
-it. An operator finding out about a bad trust anchor from a failed container
-start is strictly better than finding out from a firewall audit that silently
-returned nothing.
+The server reads environment variables at startup; restart it to change them.
+It does not load `.env` itself. The examples show how to supply a protected
+file through a shell or Docker Compose. Missing required values and invalid
+bounds fail startup. Controller connections are lazy, so liveness does not
+prove that a controller is reachable.
 
-Secrets arrive as environment values injected by the deployment's secret
-provider. They are never written to a file in the image, never logged, never
-returned by a tool, and never selectable by a caller.
+Controller credentials are environment-injected, never selected by tool input,
+and scrubbed from results. Secret values are limited to 16384 bytes. A controller
+key or password that cannot survive the result redactor is refused at startup.
+For independent client permissions and HTTP bearer settings, see
+[Connecting a client](transports.md#permissions).
 
-A secret value that is part of the redaction marker — `redacted` itself, say —
-is refused at startup. Scrubbing replaces such a value with a marker that still
-contains it, so every result mentioning it would be withheld; on a write whose
-output cannot be produced again that would destroy what the write created.
-Failing at startup is the only place that can be caught safely.
+## Runtime and listener
 
-No other value is refused, because none needs to be. The scrub covers the
-string values in a result, and the check that nothing survived it covers
-exactly the same ground. A secret that happens to spell a property name is left
-alone by both: property names are server-authored constants, not anywhere
-controller data can appear.
-
-The variable table below is maintained by hand against
-`crates/unifi-server/src/config.rs`. Nothing enforces it, so treat the module
-as authoritative if the two ever disagree, and report the disagreement.
-
-For independent stdio and HTTP permissions, listener defaults, limits, and
-bearer settings, see [Connecting a client](transports.md). The gateway settings
-below apply only to `--transport gateway`; controller settings apply in every mode.
-
-## Runtime surface
-
-| Variable | Required | Meaning |
+| Variable | Default | Accepted values or meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_SURFACE` | no | `network` or `protect`. Defaults to `network`. |
+| `UNIFI_MCP_SURFACE` | `network` | `network` or `protect`; one application per process |
+| `UNIFI_MCP_HOST` | Gateway: `0.0.0.0`; direct HTTP: `127.0.0.1` | Bind address; ignored by stdio |
+| `UNIFI_MCP_PORT` | `8000` | Integer from 1 to 65535 |
+| `UNIFI_MCP_LOG_LEVEL` | `info` | Tracing filter; application logs go to stderr; SDK payload logs remain disabled |
+| `UNIFI_MCP_REQUEST_TIMEOUT_SECONDS` | `30` | Request/tool deadline, 1 to 120 seconds |
+| `UNIFI_MCP_MAX_CONCURRENT_REQUESTS` | `32` | Concurrent request/tool work, 1 to 256 |
+| `UNIFI_MCP_MAX_BODY_BYTES` | `1048576` | Request bytes, 1024 to 4194304; includes newline framing in stdio |
 
-One process serves one console family. The selector decides which upstream
-configuration is read, which tools are advertised and dispatched, which
-identity JWT audience is required in gateway mode (`unifi` or `unifi-protect`),
-and that mode's default `Host` allowlist. A `network` process reads no
-Protect variable and a `protect` process reads no controller variable, so a
-credential for the other surface present in the environment is ignored rather
-than half-wired. Any other value fails at load.
+Out-of-range numbers are rejected, not clamped. Response limits are separate;
+see [response bounds](architecture.md#response-bounds). A confirmed mutation can
+have taken effect before a timeout; check controller state before another action.
+The healthcheck reads only listener coordinates and needs no credentials.
 
-## Listener
+## Independent clients
 
-| Variable | Required | Meaning |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_HOST` | no | Bind address. Gateway defaults to all interfaces; direct HTTP defaults to 127.0.0.1. Stdio has no listener. |
-| `UNIFI_MCP_PORT` | no | Bind port. |
-| `UNIFI_MCP_LOG_LEVEL` | no | Tracing filter. |
+| `UNIFI_MCP_ALLOW_WRITES` | `false` | Exactly `true` permits mutation tools, including previews |
+| `UNIFI_MCP_ALLOW_SECRET_DISCLOSURE` | `false` | Exactly `true` permits `networks.read` with `includeSecrets` |
+| `UNIFI_MCP_HTTP_BEARER_CURRENT` | Required for direct HTTP | Dedicated bearer, at least 32 bytes, no whitespace; never reuse a controller key |
+| `UNIFI_MCP_HTTP_BEARER_PREVIOUS` | Unset | Optional distinct old bearer during rotation |
+| `UNIFI_MCP_ALLOWED_HOSTS` | Direct HTTP: localhost, 127.0.0.1 and [::1], with and without the configured port | Comma-separated exact Host values; configure the proxy hostname for remote access |
+| `UNIFI_MCP_ALLOWED_ORIGINS` | Empty | Comma-separated trusted Origin values; any supplied Origin is rejected unless listed |
 
-`UNIFI_MCP_HOST` and `UNIFI_MCP_PORT` are also read on their own by the
-container healthcheck, which needs the listener coordinates and must not
-require any credential to run.
-
-## Gateway ingress
-
-These establish the gateway security boundary. Both the bearer and the identity token
-are required on every gateway `/mcp` request; neither alone is sufficient, and network
-membership is not authentication.
-
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `UNIFI_MCP_GATEWAY_BEARER_CURRENT` | yes | The bearer the gateway presents. Compared in constant time. |
-| `UNIFI_MCP_GATEWAY_BEARER_PREVIOUS` | no | The bearer being retired. Accepting both for the length of a rotation is what makes rotation possible without a coordinated restart; leave it unset outside a rotation. |
-| `UNIFI_MCP_IDENTITY_JWKS_URL` | yes | Where the gateway's signing keys are published. Fetched with its own short timeout and cached briefly, so a key rotation is picked up without a restart. |
-| `UNIFI_MCP_IDENTITY_ISSUER` | yes | The issuer an identity token must claim. |
-| `UNIFI_MCP_IDENTITY_ACTOR` | yes | The actor an identity token must name. Taken exactly as given, with no trimming or case folding, because a value that differs only by whitespace is a different principal and quietly accepting it would widen the boundary. |
-| `UNIFI_MCP_ALLOWED_HOSTS` | no | Comma-separated `Host` values accepted. Defaults to the surface's service name (`unifi-mcp` or `unifi-protect-mcp`), its published port, and loopback. |
-| `UNIFI_MCP_ALLOWED_ORIGINS` | no | Comma-separated `Origin` values accepted. Empty by default: this server has no browser client, so an absent list means no cross-origin request is allowed rather than all of them. |
-
-The identity settings are checked at load rather than on the first request, so
-a malformed JWKS URL, issuer, or actor stops the process instead of failing
-every call later. That check is on the configuration only: the signing keys are
-fetched when they are first needed, so a JWKS endpoint that is unreachable at
-startup does not prevent one, and shows up when traffic arrives.
+Permission flags accept only `true` and `false`. They do not change gateway
+policy. Stdio requires no incoming bearer. Direct HTTP uses fixed, preconfigured
+bearer authentication; it has no OAuth discovery endpoint. Its local socket is
+plaintext: remote access needs HTTPS termination and a restricted proxy-to-server
+connection. See [HTTP setup](transports.md#direct-streamable-http).
 
 ## Controller
 
-Read only by the `network` surface; a `protect` process ignores this whole
-table.
+A Network process reads these variables; a Protect process ignores them.
+Obtain an application Integration API key and a dedicated local account as
+explained in [compatibility](compatibility.md#connection-and-permission-requirements).
 
-| Variable | Required | Meaning |
+| Variable | Default or requirement | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_CONTROLLER_URL` | yes | The console origin, scheme and host only. See the constraints below. |
-| `UNIFI_MCP_CONTROLLER_API_KEY` | yes | Integration API key, sent as `X-API-KEY`. |
-| `UNIFI_MCP_CONTROLLER_USERNAME` | yes | Local admin for the legacy API. |
-| `UNIFI_MCP_CONTROLLER_PASSWORD` | yes | That admin's password. |
-| `UNIFI_MCP_CONTROLLER_NAME` | no | Label carried in the `network.overview` result to say which console answered. It does not appear in logs, so it cannot be used to separate log streams. |
-| `UNIFI_MCP_CONTROLLER_SITE` | no | Legacy site name. Must be a plain name: a value containing a path separator, or `.`/`..`, is refused at load rather than being pasted into a request path. |
-| `UNIFI_MCP_CONTROLLER_TLS` | no | `system`, `custom-ca`, `pinned`, or `accept-invalid`. See below. |
-| `UNIFI_MCP_CONTROLLER_CA_FILE` | with `custom-ca` | PEM bundle to trust. Read through a byte ceiling enforced on the read itself, so a special file or one that grows cannot be read unbounded. |
-| `UNIFI_MCP_CONTROLLER_CERT_SHA256` | with `pinned` | One or more certificate fingerprints, comma separated. Accepts the colon-separated upper-case form `openssl` prints as well as bare hex. |
-| `UNIFI_MCP_CONTROLLER_TIMEOUT_SECONDS` | no | Per-request timeout toward the console. |
+| `UNIFI_MCP_CONTROLLER_URL` | Required | Console origin, such as `https://console.example.net` |
+| `UNIFI_MCP_CONTROLLER_API_KEY` | Required | Network Integration key, sent as `X-API-KEY` |
+| `UNIFI_MCP_CONTROLLER_USERNAME` | Required | Dedicated local account for the legacy API |
+| `UNIFI_MCP_CONTROLLER_PASSWORD` | Required | Local account password |
+| `UNIFI_MCP_CONTROLLER_NAME` | `unifi` | Operator label in results |
+| `UNIFI_MCP_CONTROLLER_SITE` | `default` | Legacy site short name; no `/`, `.` or `..` path segments |
+| `UNIFI_MCP_CONTROLLER_TIMEOUT_SECONDS` | `15` | Each upstream request, 1 to 60 seconds |
+| `UNIFI_MCP_CONTROLLER_TLS` | `system` | `system`, `custom-ca`, `pinned`, or `accept-invalid` |
+| `UNIFI_MCP_CONTROLLER_CA_FILE` | Required with `custom-ca` | Readable PEM bundle, at most 65536 bytes |
+| `UNIFI_MCP_CONTROLLER_CERT_SHA256` | Required with `pinned` | Comma-separated SHA-256 certificate fingerprints |
 
-### The Protect console
+## Protect
 
-Read only by the `protect` surface, where it is required: a Protect console is
-a different console with its own key and its own certificate, not a second
-site on the network controller, and it gets its own process. A `network`
-process ignores these variables entirely — camera questions belong to the
-`unifi-protect` server, not to a refusal here. The key is required alongside
-the URL, so a half-configured console fails at load rather than on the first
-camera question.
+A Protect process reads these variables; a Network process ignores them.
+The URL may be the same physical console as Network, but the key must belong
+to Protect. Its TLS settings are configured separately.
 
-| Variable | Required | Meaning |
+| Variable | Default or requirement | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_PROTECT_URL` | yes | Protect console origin, scheme and host only. |
-| `UNIFI_MCP_PROTECT_API_KEY` | yes | Protect integration API key, minted on the console itself and sent as `X-API-Key`. Not the network controller's key, and not a cloud key. |
-| `UNIFI_MCP_PROTECT_USERNAME` | no | Dedicated local Protect account used for bounded inventory enrichment and the undocumented historical event route. Must be supplied with the password. |
-| `UNIFI_MCP_PROTECT_PASSWORD` | with a Protect username | Password for the dedicated local-session account. Environment-injected, scrubbed, and never returned or logged. |
-| `UNIFI_MCP_PROTECT_NAME` | no | Label for the console. Defaults to `protect`. |
-| `UNIFI_MCP_PROTECT_TLS` | no | Same four modes as the controller. The CloudKey presents a different certificate from the router, so a pinned deployment needs its own digest here. |
-| `UNIFI_MCP_PROTECT_CA_FILE` | with `custom-ca` | PEM bundle to trust, read through the same byte ceiling. |
-| `UNIFI_MCP_PROTECT_CERT_SHA256` | with `pinned` | Fingerprints for the Protect console's own certificate. |
-| `UNIFI_MCP_PROTECT_TIMEOUT_SECONDS` | no | Per-request timeout toward the Protect console. |
+| `UNIFI_MCP_PROTECT_URL` | Required | Protect console origin |
+| `UNIFI_MCP_PROTECT_API_KEY` | Required | Protect Integration key, sent as `X-API-Key` |
+| `UNIFI_MCP_PROTECT_USERNAME` | Unset | Optional dedicated local account for enrichment and historical events |
+| `UNIFI_MCP_PROTECT_PASSWORD` | Required with username | The account password; supplying only one of the pair fails startup |
+| `UNIFI_MCP_PROTECT_NAME` | `protect` | Operator label in results |
+| `UNIFI_MCP_PROTECT_TIMEOUT_SECONDS` | `15` | Each upstream request, 1 to 60 seconds |
+| `UNIFI_MCP_PROTECT_TLS` | `system` | Same TLS modes as Network |
+| `UNIFI_MCP_PROTECT_CA_FILE` | Required with `custom-ca` | Readable PEM bundle, at most 65536 bytes |
+| `UNIFI_MCP_PROTECT_CERT_SHA256` | Required with `pinned` | Fingerprints of the Protect console certificate |
 
-The integration key is sufficient for basic camera and recorder inventory.
-When both local-session variables are present, the same read-only session adds
-hardware identity, feature, connection, firmware, recording, audio, recorder
-health, capacity, and aggregate storage facts, and enables `protect.events`.
-Supplying only one fails configuration at startup rather than deferring a
-half-configured secret to the first call.
+The key alone supports basic camera and recorder inventory. A local account
+adds hardware, firmware, recording, connection, recorder health and storage
+facts where available, and enables `protect.events`. Without that session,
+unsupported enrichment filters fail explicitly instead of returning a partial
+match. See the [tool reference](tool-surface.md).
 
-### What the controller URL may contain
+## Controller URL rules
 
-The API clients own every path beneath the origin, so the URL carries the
-origin and nothing else. Each of these fails at load:
+Supply only an origin: scheme, hostname or IP, and optional port. API paths
+are built by the clients. Paths other than `/`, query strings, fragments and
+userinfo are rejected. HTTPS is required except for loopback HTTP, which is
+used by local test fakes. A cloud Site Manager URL is not a substitute for the
+local application API.
 
-- a scheme other than `http` or `https`;
-- `http` to anything but a loopback host, since credentials travel to this
-  origin and a plaintext hop that leaves the machine exposes them;
-- a path, query, or fragment, which would mean the operator and the client
-  disagree about who builds request paths;
-- userinfo, because a credential in a URL ends up in logs and error text.
+## TLS modes
 
-### TLS modes
+| Mode | Behavior |
+| --- | --- |
+| `system` | Validate the certificate chain and hostname against system roots |
+| `custom-ca` | Validate with the supplied PEM bundle; the certificate must still cover the requested hostname/IP |
+| `pinned` | Require HTTPS and an exact SHA-256 fingerprint of the presented certificate; replaces chain/hostname validation |
+| `accept-invalid` | Disable certificate validation; an intercepted connection can disclose controller credentials |
 
-Consoles ship self-signed certificates, so the trust decision is explicit
-rather than inferred. An unrecognized value is an error, never a silent
-downgrade.
+Prefer a trusted certificate or custom CA. For a self-signed certificate whose
+name does not match the address, pinning can identify the certificate directly.
+An unknown mode fails startup. Pinning requires the digest of the certificate,
+not its public key. Colons and whitespace in the fingerprint are accepted.
 
-- `system` — validate against the system roots. The default.
-- `custom-ca` — validate against `UNIFI_MCP_CONTROLLER_CA_FILE`. The right
-  answer for a console with its own certificate authority, and only when the
-  certificate covers the address or name being dialed.
-- `pinned` — accept exactly the certificates whose SHA-256 digest is listed in
-  `UNIFI_MCP_CONTROLLER_CERT_SHA256`, and judge nothing else. Requires an
-  `https` URL, since a plaintext one never presents a certificate to check.
-  Read where the digest must come from before using it.
-- `accept-invalid` — do not validate. This turns off the protection that keeps
-  the console credentials from reaching an impostor, and is only defensible on
-  a link that cannot be intercepted.
-
-### When to pin
-
-A UniFi console ships a self-signed certificate naming `unifi.local` and
-loopback, and answers on a LAN address that appears nowhere in it. Trusting
-that certificate through `custom-ca` still fails, because the address being
-dialed is not one the certificate covers — the trust is fine and the name check
-is not. Pinning resolves that by making the certificate itself the identity:
-the chain is not built and the name is not matched, because the digest already
-fixes which certificate is acceptable more tightly than a name would.
-
-Two consequences worth knowing before choosing it.
-
-A console that legitimately regenerates its certificate stops being reachable
-until its new digest is listed. That is why more than one is accepted: add the
-next digest before the change, remove the old one after. Without that, a
-firmware update that rolls the certificate is an outage.
-
-#### Where the digest must come from
-
-A pin is exactly as trustworthy as the reading it came from, and this is the
-one part of the mode that no code here can protect.
-
-Reading the digest over the network gives whatever certificate answered. If
-something is intercepting that connection, it answers with its own certificate,
-its digest gets installed as the pin, and from then on the impostor is
-precisely what this server expects — it receives the Integration API key and
-the local administrator credentials on every request, and nothing ever warns,
-because the pin matches. Pinning does not remove the risk of impersonation so
-much as concentrate all of it into the moment the digest is taken.
-
-So take the reading, then confirm it against something the network cannot
-forge:
+To inspect the certificate presented by a console, replace `HOST` with its
+address:
 
 ```sh
 openssl s_client -connect HOST:443 </dev/null 2>/dev/null \
   | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
 ```
 
-The trailing `cut` matters: `openssl` labels its output `sha256 Fingerprint=`,
-and the setting takes the digest alone. Colons and spaces within it are
-ignored, so the printed form pastes as-is, in either case.
+This command alone does not establish trust: an interceptor can present a
+different certificate. Compare the fingerprint with the console through an
+already trusted administrative session or a trusted physical/local path before
+configuring it. A second untrusted network observation is not independent proof.
+If the readings disagree, resolve that difference before accepting a pin.
 
-Confirm it by at least one of:
+A legitimate certificate replacement requires a new pin. You can list old and
+new fingerprints during a planned rotation, then remove the old one. For Docker
+`custom-ca`, add a read-only mount for the bundle and set the corresponding
+`*_CA_FILE` to its path inside the container; the Compose examples do not mount
+host trust files automatically.
 
-- reading the same digest from the console's own interface, over a session you
-  already trust;
-- taking the reading again from a different host on a different path, and
-  comparing;
-- taking it from a link that cannot be intercepted at all — a direct
-  connection, or the console's local console.
+Compose forwards only the environment settings listed in its service block.
+Add an entry there when overriding another setting from the tables above.
 
-If the two readings disagree, do not pin either. That disagreement is the
-signal this mode exists to give you, and it is only available before the pin
-is set, never after.
+## Gateway ingress
 
-## Request bounds
+These settings apply only to `--transport gateway`, which remains the default.
+Every gateway `/mcp` request requires both the rotating bearer and a verified
+identity JWT. Network membership alone grants no access.
 
-| Variable | Required | Meaning |
+| Variable | Requirement | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_REQUEST_TIMEOUT_SECONDS` | no | How long one `/mcp` request may run. |
-| `UNIFI_MCP_MAX_CONCURRENT_REQUESTS` | no | Requests served at once. |
-| `UNIFI_MCP_MAX_BODY_BYTES` | no | Largest accepted request body. |
+| `UNIFI_MCP_GATEWAY_BEARER_CURRENT` | Required | Gateway service bearer, at least 32 bytes and no whitespace |
+| `UNIFI_MCP_GATEWAY_BEARER_PREVIOUS` | Optional | Distinct previous bearer during rotation |
+| `UNIFI_MCP_IDENTITY_JWKS_URL` | Required | Signing-key endpoint; HTTPS or permitted local/private HTTP |
+| `UNIFI_MCP_IDENTITY_ISSUER` | Required | Exact trusted issuer |
+| `UNIFI_MCP_IDENTITY_ACTOR` | Required | Exact expected actor; whitespace is significant |
 
-Each is clamped to a range and rejected outside it, so a mistyped value cannot
-remove the bound it was meant to set. The ranges live with the parse calls in
-`Settings::from_environment`; the response-size bounds that apply to what a
-tool returns are separate and are documented in
-[the architecture notes](architecture.md).
+The selected surface determines the JWT audience: `unifi` or `unifi-protect`.
+Signing keys are fetched lazily with a bounded timeout and cache. Gateway Host
+defaults are the selected service name (`unifi-mcp` or `unifi-protect-mcp`), that
+name with port 8000, localhost, and 127.0.0.1. Override
+`UNIFI_MCP_ALLOWED_HOSTS` when the Host header differs. The Origin allowlist is
+empty by default in both HTTP modes.
 
-## Deployment
-
-Compose files, Infisical references, and Komodo stack configuration live in the
-homelab deployment repositories, not here. This repository owns the image and
-the contract above.
+Operators own deployment-specific gateway policy and secret-provider settings.
+This repository supplies the executable, examples, and the manifest scaffold
+from `mcp-unifi-rs --emit-gateway-manifest`. The scaffold is not a published
+gateway policy; the gateway operator must complete its behavior approvals.

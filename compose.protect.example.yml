@@ -1,27 +1,24 @@
-# Network over directly authenticated HTTP, published only on host loopback.
+# Protect over directly authenticated HTTP, published only on host loopback.
 # Pin the image digest for repeatable deployment; see README.md.
 services:
-  unifi-mcp:
+  unifi-protect-mcp:
     image: ghcr.io/chrisbennight/mcp-unifi-rs:latest
     restart: unless-stopped
     command: ["--transport", "http"]
     environment:
-      UNIFI_MCP_SURFACE: network
+      UNIFI_MCP_SURFACE: protect
       UNIFI_MCP_HOST: 0.0.0.0
       UNIFI_MCP_LOG_LEVEL: ${UNIFI_MCP_LOG_LEVEL:-info}
       UNIFI_MCP_HTTP_BEARER_CURRENT: ${UNIFI_MCP_HTTP_BEARER_CURRENT:?Set the dedicated HTTP bearer}
       UNIFI_MCP_HTTP_BEARER_PREVIOUS:
       UNIFI_MCP_ALLOWED_HOSTS:
       UNIFI_MCP_ALLOWED_ORIGINS:
-      UNIFI_MCP_ALLOW_WRITES: ${UNIFI_MCP_ALLOW_WRITES:-false}
-      UNIFI_MCP_ALLOW_SECRET_DISCLOSURE: ${UNIFI_MCP_ALLOW_SECRET_DISCLOSURE:-false}
-      UNIFI_MCP_CONTROLLER_URL: ${UNIFI_MCP_CONTROLLER_URL:?Set the Network console URL}
-      UNIFI_MCP_CONTROLLER_API_KEY: ${UNIFI_MCP_CONTROLLER_API_KEY:?Set the Network key}
-      UNIFI_MCP_CONTROLLER_USERNAME: ${UNIFI_MCP_CONTROLLER_USERNAME:?Set the local account}
-      UNIFI_MCP_CONTROLLER_PASSWORD: ${UNIFI_MCP_CONTROLLER_PASSWORD:?Set its password}
-      UNIFI_MCP_CONTROLLER_SITE: ${UNIFI_MCP_CONTROLLER_SITE:-default}
-      UNIFI_MCP_CONTROLLER_TLS: ${UNIFI_MCP_CONTROLLER_TLS:-system}
-      UNIFI_MCP_CONTROLLER_CERT_SHA256: ${UNIFI_MCP_CONTROLLER_CERT_SHA256:-}
+      UNIFI_MCP_PROTECT_URL: ${UNIFI_MCP_PROTECT_URL:?Set the Protect console URL}
+      UNIFI_MCP_PROTECT_API_KEY: ${UNIFI_MCP_PROTECT_API_KEY:?Set the Protect key}
+      UNIFI_MCP_PROTECT_USERNAME: ${UNIFI_MCP_PROTECT_USERNAME:-}
+      UNIFI_MCP_PROTECT_PASSWORD: ${UNIFI_MCP_PROTECT_PASSWORD:-}
+      UNIFI_MCP_PROTECT_TLS: ${UNIFI_MCP_PROTECT_TLS:-system}
+      UNIFI_MCP_PROTECT_CERT_SHA256: ${UNIFI_MCP_PROTECT_CERT_SHA256:-}
     user: "65532:65532"
     read_only: true
     tmpfs:

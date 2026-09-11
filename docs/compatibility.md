@@ -1,143 +1,103 @@
 # Controller compatibility
 
-This server talks to a UniFi console over two APIs. Which one serves
-a given capability is not a preference — it is whichever one exposes the data
-at all. This document records that split, what changes between console
-generations, and how the difference is made visible rather than guessed at.
+This page describes the APIs this implementation uses. It does not claim that
+other APIs lack equivalent operations. Ubiquiti continues to expand its
+[application APIs](https://developer.ui.com/), including documented
+[Wi-Fi Broadcast reads](https://developer.ui.com/network/v10.1.84/getwifibroadcastdetails).
+Those reads do not by themselves establish support for the writes implemented here.
 
-## The two backends
+## Connection and permission requirements
 
-**The Integration API** (`/proxy/network/integration/v1` for Network and
-`/proxy/protect/integration/v1` for Protect) is the official,
-versioned, documented surface. It authenticates with an API key, returns
-camelCase JSON, and paginates explicitly. It is the primary backend and the one
-to prefer for anything it covers, because its shape is a published contract
-rather than an observation.
-
-**The legacy controller API** is what the console's own web interface uses. It
-authenticates with a local admin session, returns snake_case records wrapped in
-a result envelope, and is not versioned. It exists here because a large part of
-what an operator actually needs — wireless configuration, port forwards,
-events, historical statistics — has no Integration API equivalent.
-
-Its shape depends on the console. A UniFi OS console logs in at
-`/api/auth/login`, serves the API under `/proxy/network/api/s/{site}`, and
-issues a CSRF token that mutations must echo back. A standalone controller logs
-in at `/api/login`, serves `/api/s/{site}`, and uses no CSRF token.
-
-The client works out which it is talking to on its first login rather than
-requiring the operator to say, and remembers the answer for the session. One
-case deliberately does not settle it: a rate-limited or server-error response
-proves nothing about which routes exist, so no family is recorded and the next
-login probes again. Latching on that answer would misroute a standalone
-controller for the life of the process because it was probed during an outage.
-
-Neither is a general escape hatch. Both are wrapped in typed, allowlisted
-models; there is no path from a caller to an arbitrary endpoint on either.
-
-## Which backend serves what
-
-| Capability | Backend | Why |
+| Deployment | Required access | Current behavior and evidence |
 | --- | --- | --- |
-| Application version, site list | Integration | Published and stable. |
-| Device inventory, detail, statistics | Integration | Richer and typed. |
-| Device restart, port power cycle | Integration | Official action endpoints. |
-| Client list, guest authorization | Integration | Official, and the guest action exists only here. |
-| Zone-based firewall zones and policies | Integration | The only place they exist. |
-| Hotspot vouchers | Integration | The only place they exist. |
-| Site health subsystems | Legacy | No Integration equivalent. |
-| Connected client detail | Legacy | Carries signal, uplink, and access point attribution the Integration client record omits. |
-| Networks and wireless networks | Legacy | Wireless configuration is legacy-only. |
-| Wireless network updates | Legacy | Follows from the read. |
-| Client block, unblock, reconnect | Legacy | No Integration equivalent. |
-| Port forwards, traffic rules, traffic routes | Legacy | No Integration equivalent. |
-| Events and alarms | Legacy | No Integration equivalent. |
-| Deep packet inspection totals, WAN history | Legacy | No Integration equivalent. |
-| Neighboring access points | Legacy | No Integration equivalent. |
-| Device locate LED | Legacy | The Integration action set does not include it. |
-| Protect camera identity and connection state | Integration | Documented inventory; nullable names and the `camera` resource discriminator are preserved. |
-| Protect recorder identity | Integration | The documented endpoint returns one NVR object with the `nvr` resource discriminator. |
-| Protect historical detections | Local Protect session | The official subscription is realtime rather than a historical query. |
+| UniFi OS console running Network | Network Integration API key and a dedicated local account for legacy routes | Uses `/proxy/network/integration/v1` and the Network application session API; both must be available for the full Network tool set |
+| Standalone or self-hosted Network application | Depends on its Integration API route and local account support | Legacy login/route detection is covered by fake tests, but the Integration client still uses the UniFi OS proxy prefix; this is not a verified end-to-end standalone deployment |
+| UniFi OS console running Protect | Protect Integration API key | Basic camera and recorder inventory works without a local session |
+| Protect with local-session enrichment | Protect key plus a dedicated local account allowed to read the relevant application data | Adds hardware/firmware/recording/recorder details and historical events; those routes are not the public Integration API contract |
+| Controller accounts requiring MFA or cloud SSO | Interactive login | Not implemented; use a dedicated local account |
+| Site Manager cloud API or UniFi Access | Separate API credentials and endpoints | Not implemented |
 
-A tool that needs both crosses between them by hardware address, which is the
-one identifier both APIs report for the same thing.
+Network and Protect may share a physical console, but each process selects one
+application and reads only its credentials. Create the key for that application,
+not a Site Manager cloud key. Follow Ubiquiti's application API instructions for
+your installed version. The local session client accepts username/password
+login; use a dedicated account and restrict its controller permissions where
+possible. The server's read/write grants limit what its clients may invoke;
+they do not reduce the privileges of the stored controller account.
 
-The table describes where each capability's data comes from, not which tools
-ship. Some rows back a tool today, and some back a client method the tool
-surface does not yet expose.
+## Version evidence
 
-## Console generations
+Automated tests use loopback fakes, not live consoles. Protect fixtures record
+the 7.1.87 response shape with synthetic identifiers. This verifies parsing of
+that shape, not every behavior of that release or a promise about later releases.
+The [Protect API documentation](https://developer.ui.com/protect/v7.2.105/gettingstarted)
+and the Network API catalog are references for public endpoints. Local-session
+routes require separate testing when a console upgrade changes them.
 
-UniFi Network 9.0 replaced the classic rule-based firewall with a zone-based
-one. A console upgraded from an earlier release may still run the classic
-firewall; a console set up on 9.x runs the zone-based one. They are not
-variations of one model — a zone-based console has no classic rules, and a
-classic console has no zones or policies.
+The server reports application versions and probes capabilities rather than
+using a single minimum-version check. An untested release is not automatically
+unsupported. An absent endpoint, authentication failure, malformed response,
+and an empty inventory are different outcomes; failures are not converted into
+an empty list. File a compatibility issue with the application version, tool,
+and redacted error if the documented setup does not work.
 
-**This server supports the zone-based firewall only.** A classic console is
-refused by name rather than served, which is the whole reason the generation is
-still detected: both answer "no rules" in a way that looks identical from the
-outside, and a firewall audit that reported an empty policy list on a classic
-console would be describing an open network that is in fact filtered. Detecting
-the generation is what turns that silence into a refusal:
+## Backend used by each capability
 
-- The server probes the zone endpoint on each read that depends on the
-  answer. Success means zone-based. It is not cached: the server is stateless,
-  and a console can be migrated between two calls, so a remembered answer would
-  eventually describe a firewall the console no longer runs.
-- The console's documented rejection for that endpoint — an HTTP 400 whose
-  message names the zone-based firewall — means classic. Any other rejection is
-  a request failure and propagates; it never classifies.
-- `firewall.read` and `firewall.policies.update` both refuse a classic console
-  by naming the generation. The read's refusal also names `portForwards`,
-  `trafficRules`, and `trafficRoutes`, which read identically on either
-  generation and remain available by narrowing.
+| Capability | Backend used here |
+| --- | --- |
+| Network version, sites, device inventory/detail/statistics | Network Integration API |
+| Network client inventory and guest authorization | Network Integration API |
+| Device restart and port power cycle | Network Integration API |
+| Zone-based firewall zones/policies and hotspot vouchers | Network Integration API |
+| Health, connected-client context, networks and wireless networks | Network legacy API |
+| Wireless updates, client block/unblock/reconnect, device locate | Network legacy API |
+| Port forwards, traffic rules/routes, events, alarms, historical statistics, neighboring APs | Network legacy API |
+| Protect camera and recorder identity | Protect Integration API |
+| Protect hardware/firmware/recording and recorder/storage enrichment | Optional Protect local session |
+| Historical Protect detections | Protect local session |
 
-## How a firewall change is written
+The legacy client detects UniFi OS login (`/api/auth/login`) versus standalone
+login (`/api/login`). Network routes are then `/proxy/network/api/s/{site}` or
+`/api/s/{site}` respectively. Rate limits and server errors do not establish a
+route family. This detection applies to the legacy client only; it does not
+change the Integration API prefix.
 
-A zone-based policy accepts no useful partial update, unlike every other write
-here. The official Integration API's partial
-update accepts only the policy's logging flag, and its full replace requires
-the policy's action, source, destination, protocol scope, logging flag, name,
-and enabled state together.
+Both clients use typed, bounded responses. Neither exposes arbitrary endpoint
+forwarding. See the [tool reference](tool-surface.md) for the available actions.
 
-`firewall.policies.update` therefore resends the policy exactly as it was just
-read, altering only the switch. Nothing interprets the record in between, so a
-property this server does not model cannot be dropped by the write — which on
-the object that decides what the network permits is the failure that matters.
+## Firewall generations
 
-What it cannot do is merge. An edit made elsewhere between the read and the
-write is overwritten, because the interface offers no way to avoid that, and
-the preview says so before the change is confirmed.
+Ubiquiti introduced zone-based firewalling in Network 9.0 and documents a
+[migration for existing configurations](https://help.ui.com/hc/en-us/articles/28223082254743-Migrating-to-Zone-Based-Firewalls-in-UniFi).
+Its [requirements](https://help.ui.com/hc/en-us/articles/115003173168-Zone-Based-Firewalls-in-UniFi)
+include a supported gateway and Network 9.0 or later. The version alone does
+not prove that migration has happened.
 
-## Version assumptions
+This server reads and updates zone-based policies. Before a generation-dependent
+operation, it probes the zone endpoint. Success identifies zone-based mode; the
+specific documented rejection naming zone-based firewalling identifies classic
+mode. Other failures remain errors. The result is not cached across calls.
 
-The server does not pin a Network release. It asks the console what it is:
+A broad `firewall.read` or `firewall.policies.update` refuses classic mode.
+On either generation, a narrowed `firewall.read` can still read `portForwards`,
+`trafficRules`, or `trafficRoutes`. It never represents unsupported classic
+rules as an empty zone-based policy list.
 
-- The application version is read from the console and reported by
-  `network.overview`, so a result can be matched to the console that produced
-  it.
-- The firewall generation is probed rather than inferred from the version,
-  because the version does not determine it — an upgraded console reports 9.x
-  and can still run the classic firewall.
+## Firewall writes and concurrent edits
 
-Where an endpoint exists on some releases and not others, the read reports the
-absence explicitly instead of returning an empty list.
+The implemented policy update sends the full policy as read, changing only the
+enabled flag, because the applicable replacement endpoint requires the full
+record. Unknown properties survive the round trip. An external edit between
+that read and write can be overwritten; the controller interface supplies no
+conditional update used by this implementation. The preview warns about this.
+After the write, the server reads back and reports what persisted.
 
 ## Sites
 
-One deployment addresses one console. The legacy API addresses a site by the
-configured name directly. The Integration API identifies a site by an opaque
-id, which the server resolves at runtime by finding the site whose internal
-reference matches that name.
-
-When no site matches and the controller reports exactly one site, that sole
-site is used, because a controller does not always report the site key an
-operator configured and failing there would make the common single-site
-deployment need a value the operator cannot easily discover. The consequence is
-worth knowing: on a multi-site controller a name matching nothing is an error,
-but on a single-site controller the Integration calls address the site that
-exists while the legacy calls keep using the configured name, so a wrong name
-shows up as failing legacy reads rather than as a clean rejection.
-
-See [the configuration reference](configuration.md).
+One Network process addresses one configured legacy site name, defaulting to
+`default`. Integration calls resolve the corresponding opaque site ID by its
+internal reference. If no reference matches and the controller reports exactly
+one site, the Integration client uses that sole site. Legacy calls continue to
+use the configured name. Consequently, a wrong name can fail legacy reads even
+when an Integration read succeeds. On a multi-site controller, no matching site
+is an error. See [configuration](configuration.md#controller).

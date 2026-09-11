@@ -4,16 +4,18 @@
 
 Independent clients connect over stdio or direct Streamable HTTP with fixed
 operator-granted write and secret-disclosure permissions. See
-[Connecting a client](transports.md). The optional gateway deployment is:
+[Connecting a client](transports.md).
 
-```
-agent/client ── mcp-tool-search-gateway ──(bearer + identity JWT, private network)──┬── mcp-unifi-rs [surface=network, aud=unifi] ── Network controller (Integration API, X-API-KEY;
-                                                                                    │                                               legacy API cookie + CSRF, capability-gated)
-                                                                                    └── mcp-unifi-rs [surface=protect, aud=unifi-protect] ── Protect console (Integration API, X-API-Key;
-                                                                                                                                             optional local session for event history)
+```mermaid
+flowchart LR
+    Local[Local MCP client] -->|stdio| Server[mcp-unifi-rs]
+    Remote[HTTP MCP client] -->|dedicated bearer| Server
+    Gateway[Optional MCP gateway] -->|bearer and identity JWT| Server
+    Server -->|application key| Integration[Selected application Integration API]
+    Server -->|local session| Application[Selected application local API]
 ```
 
-The gateway owns caller authentication, authorization groups (`mcp-admins`
+In gateway mode, the gateway owns caller authentication, authorization groups (`mcp-admins`
 full surface; `unifi` standard access), rate limiting, and tool-search
 disclosure. This server owns the typed tool surface and the controller
 transports.
@@ -23,6 +25,7 @@ One process serves one console family. `UNIFI_MCP_SURFACE` selects `network`
 tools, gateway server name `unifi-protect`); each surface is a separate
 deployment of the same image with its own credentials, identity JWT audience,
 and gateway manifest, and neither process reads the other's configuration.
+The local account is required for Network and optional for Protect enrichment.
 
 ## Crates
 

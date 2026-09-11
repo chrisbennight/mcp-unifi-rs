@@ -1,30 +1,103 @@
 # mcp-unifi-rs
 
-Curated Rust MCP server for UniFi network controllers.
+MCP server for UniFi Network and Protect, written in Rust. It provides tools
+for inventory, troubleshooting, configuration reads, and selected network
+changes. Results are bounded, credentials stay in the server, and changes
+preview before they are confirmed.
 
-## Why
+## What you need
 
-Existing UniFi MCP servers mirror the controller API — one tool per endpoint,
-raw JSON responses, and hundreds of schemas that overwhelm an agent's context.
-This server takes the opposite approach: a small set of workflow tools
-(search, context, diagnose, audit, and narrow typed actions) designed for how
-agents actually operate a network, with bounded summarized responses,
-preview-then-confirm mutations, read-back write verification, and secret
-redaction by default.
+- A UniFi console exposing the local Integration API. See
+  [controller compatibility](docs/compatibility.md) for the backend and version limits.
+- For Network: an application Integration API key and a dedicated local account
+  for the legacy API. For Protect: its Integration API key; a local account is
+  optional for richer inventory and event history.
+- A client supporting MCP 2026-07-28 for independent stdio or HTTP connections.
+- Rust 1.96 and a native build toolchain for a source install, or Docker for the
+  Linux x86-64 image. CI runs on Linux; other host platforms are not tested here.
 
-## Status and non-goals
+## Quickstart: stdio
 
-The tool surface is complete: the reads and writes listed below, described in
-[docs/tool-surface.md](docs/tool-surface.md). Not yet deployed — production
-Compose, gateway registration, and access policy live in the homelab
-deployment repositories and are tracked separately.
+```sh
+git clone https://github.com/chrisbennight/mcp-unifi-rs.git
+cd mcp-unifi-rs
+cargo install --locked --path crates/unifi-server
+cp .env.example .env
+chmod 600 .env
+```
 
-The zone-based firewall is the one this server reads and writes; a console
-running the classic firewall is refused by name rather than answered.
+Edit `.env` with your Network console URL, Integration API key, and local
+account credentials. The URL is the console origin, such as
+`https://console.example.net`, without an API path. If its certificate is not
+trusted by your system, configure a custom CA or verify and pin the certificate
+using the [TLS instructions](docs/configuration.md#tls-modes).
 
-Non-goals for v1: UniFi Access, the Site Manager cloud API,
-backups, admin management, and MFA/SSO controller accounts (use a dedicated
-local admin per console).
+For Protect, copy [.env.protect.example](.env.protect.example) to `.env`
+instead and fill in its URL and key. Both applications may run on the same
+physical console; each server process selects one application and its credentials.
+
+Load your trusted environment file, then start your MCP client from that shell:
+
+```sh
+set -a
+. ./.env
+set +a
+```
+
+Configure a stdio server in the client:
+
+```json
+{
+  "mcpServers": {
+    "unifi": {
+      "command": "mcp-unifi-rs",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}
+```
+
+The client must pass the controller environment to the child process. Desktop
+clients may need an absolute binary path and their own protected environment
+configuration. Do not put credentials in a configuration file you share.
+
+List the server's tools, then call `clients.search` with `{}` for Network or
+`cameras.search` with `{}` for Protect. You should receive a bounded inventory
+result. An empty result means no matching devices; an unsupported API or failed
+request returns an explicit error. Neither call changes the controller.
+
+Writes and secret disclosure are disabled in independent modes until the
+operator grants them. See [permissions and troubleshooting](docs/transports.md).
+
+## HTTP and containers
+
+Direct HTTP uses a dedicated bearer supplied through
+`UNIFI_MCP_HTTP_BEARER_CURRENT`; generate a random value of at least 32 bytes
+through your secret manager. It is separate from your controller key.
+
+```sh
+mcp-unifi-rs --transport http
+```
+
+Connect a current MCP client to `http://127.0.0.1:8000/mcp` with that bearer.
+For remote access, put HTTPS at a reverse proxy and configure the Host and
+Origin allowlists. This mode accepts preconfigured bearer authentication;
+clients that require OAuth discovery need an authenticating gateway.
+
+For Docker Compose, use the same protected `.env`, including the direct HTTP
+bearer. Network uses [compose.example.yml](compose.example.yml); Protect uses
+[compose.protect.example.yml](compose.protect.example.yml):
+
+```sh
+docker compose --env-file .env -f compose.example.yml config --quiet
+docker compose --env-file .env -f compose.example.yml up -d
+```
+
+Both examples publish only on host loopback. The health endpoint checks process
+liveness; make the inventory call above to verify the console connection.
+See [transport configuration](docs/transports.md) for HTTP request examples and
+the existing gateway mode. Gateway remains the binary's default when
+`--transport` is omitted.
 
 ## Architecture
 
@@ -41,9 +114,8 @@ verifies a rotating gateway bearer plus a gateway-minted identity JWT on every
 selects the network controller tools or the Protect camera tools, each a
 separate deployment of the same image with its own credentials.
 
-Two UniFi APIs answer behind it — the official Integration API where it covers
-a capability, and the legacy controller API for the large part it does not.
-Which serves what, and how console generations differ, is in
+The implementation uses the official Integration API and local-session APIs
+for the capabilities listed in
 [docs/compatibility.md](docs/compatibility.md).
 
 ## Tools
@@ -81,28 +153,6 @@ partial update and so resends the policy exactly as it was read.
 [docs/evals.md](docs/evals.md) is the task set that checks whether an agent can
 actually find the right tool for a real question.
 
-## Quick start
-
-For an independent MCP client, start with [stdio or direct HTTP](docs/transports.md).
-Those modes do not require a gateway and default to read access. The existing
-gateway deployment starts as follows:
-
-```sh
-set -a && . ./.env && set +a               # gateway ingress settings are required at startup
-cargo run --bin mcp-unifi-rs               # binds 0.0.0.0:8000 (healthz + authenticated /mcp)
-cargo run --bin mcp-unifi-rs -- --healthcheck
-```
-
-Gateway startup fails closed without the gateway ingress and controller connection
-configuration; copy `.env.example` to `.env` and fill it in. The controller
-itself is dialed lazily, so the server boots and stays live while the console
-is unreachable. The default bind is `0.0.0.0` for
-container use; set `UNIFI_MCP_HOST=127.0.0.1` to keep a local run on loopback.
-
-Configuration is environment-driven; see `.env.example` and
-[docs/configuration.md](docs/configuration.md) for what each variable does and
-what fails at load.
-
 ## Development
 
 The executable is `mcp-unifi-rs`. The workspace crates remain `unifi-api`,
@@ -117,8 +167,9 @@ python3 scripts/check_docs.py
 python3 -m unittest discover -s scripts/tests
 ```
 
-Repository guidance for agents and contributors: [AGENTS.md](AGENTS.md).
-Design decisions: [DECISIONS.md](DECISIONS.md).
+Tests use loopback fakes and need no controller, gateway, or private services.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [support](SUPPORT.md),
+[repository guidance](AGENTS.md), and [design decisions](DECISIONS.md).
 
 ## CI and container images
 
@@ -153,4 +204,5 @@ python3 scripts/smoke_image.py mcp-unifi-rs
 
 ## License
 
-MIT
+[MIT](LICENSE). UniFi Access, cloud Site Manager, backup/admin management,
+and controller MFA/SSO login are outside the implemented tool surface.
