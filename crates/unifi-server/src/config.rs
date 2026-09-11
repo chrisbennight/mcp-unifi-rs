@@ -132,6 +132,22 @@ pub enum SettingsError {
 }
 
 impl Settings {
+    /// Read only controller configuration for an independent transport.
+    ///
+    /// # Errors
+    /// Returns an error for absent credentials or invalid controller settings.
+    pub fn runtime_from_env() -> Result<RuntimeSettings, SettingsError> {
+        let environment = &|variable| env::var(variable);
+        match surface_from_environment(environment)? {
+            ToolSurface::Network => {
+                controller_from_environment(environment).map(RuntimeSettings::Network)
+            }
+            ToolSurface::Protect => {
+                protect_from_environment(environment).map(RuntimeSettings::Protect)
+            }
+        }
+    }
+
     /// Read the complete runtime configuration, including secrets supplied
     /// by environment.
     ///

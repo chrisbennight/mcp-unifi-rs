@@ -14,7 +14,7 @@ use rmcp::{
     },
     service::RequestContext,
 };
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, Semaphore};
 use unifi_api::{IntegrationClient, LegacyClient, ProtectClient, models::PageRequest};
 use zeroize::Zeroizing;
 
@@ -37,9 +37,20 @@ const SITES_SCAN_CEILING: u64 = 10_000;
 #[derive(Clone)]
 pub struct UnifiMcp {
     runtime: Arc<Runtime>,
+    access: Option<LocalAccess>,
+    requests: Arc<Semaphore>,
+    request_timeout: std::time::Duration,
     /// Configured secret values retained solely so outgoing results can be
     /// scrubbed; never serialized, logged, or exposed.
     redact: Arc<[Zeroizing<String>]>,
+}
+
+/// Operator-granted permissions for a process or authenticated direct client.
+/// These grants are never derived from tool arguments or MCP annotations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocalAccess {
+    pub writes: bool,
+    pub secrets: bool,
 }
 
 enum Runtime {
@@ -67,6 +78,9 @@ impl UnifiMcp {
         redact: Vec<Zeroizing<String>>,
     ) -> Self {
         Self {
+            access: None,
+            requests: Arc::new(Semaphore::new(32)),
+            request_timeout: std::time::Duration::from_secs(30),
             runtime: Arc::new(Runtime::Network {
                 integration,
                 legacy,
@@ -87,6 +101,9 @@ impl UnifiMcp {
         redact: Vec<Zeroizing<String>>,
     ) -> Self {
         Self {
+            access: None,
+            requests: Arc::new(Semaphore::new(32)),
+            request_timeout: std::time::Duration::from_secs(30),
             runtime: Arc::new(Runtime::Protect {
                 protect,
                 protect_name: name.into(),
@@ -94,6 +111,25 @@ impl UnifiMcp {
             }),
             redact: redact.into(),
         }
+    }
+
+    /// Set the fixed authority of a local process or bearer-authenticated client.
+    #[must_use]
+    pub fn with_local_access(mut self, access: LocalAccess) -> Self {
+        self.access = Some(access);
+        self
+    }
+
+    pub(crate) fn local_access(&self) -> Option<LocalAccess> {
+        self.access
+    }
+
+    /// Bound concurrent tool execution and total time, including stdio calls.
+    #[must_use]
+    pub fn with_request_limits(mut self, concurrency: usize, timeout: std::time::Duration) -> Self {
+        self.requests = Arc::new(Semaphore::new(concurrency));
+        self.request_timeout = timeout;
+        self
     }
 
     pub(crate) fn redact(&self) -> &[Zeroizing<String>] {
@@ -241,6 +277,16 @@ impl UnifiMcp {
 }
 
 impl ServerHandler for UnifiMcp {
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        if self.access.is_some() {
+            std::borrow::Cow::Owned(vec![rmcp::model::ProtocolVersion::V_2026_07_28])
+        } else {
+            std::borrow::Cow::Borrowed(rmcp::model::ProtocolVersion::KNOWN_VERSIONS)
+        }
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(
@@ -280,8 +326,27 @@ impl ServerHandler for UnifiMcp {
             .get::<http::request::Parts>()
             .and_then(|parts| parts.extensions.get::<crate::IdentityPrincipal>())
             .cloned();
-        self.call(&request, principal.as_ref())
-            .await
+        if self.access.is_none() && principal.is_none() {
+            return Err(McpError::invalid_request(
+                "verified caller identity required",
+                None,
+            ));
+        }
+        let principal = self.access.map_or(principal, |access| {
+            Some(crate::IdentityPrincipal {
+                subject: "local-operator".to_owned(),
+                groups: if access.secrets {
+                    vec![crate::MCP_ADMIN_GROUP.to_owned()]
+                } else {
+                    vec![]
+                },
+            })
+        });
+        let _permit = self.requests.try_acquire().map_err(|_| {
+            McpError::internal_error("server is busy; no tool action was started", None)
+        })?;
+        tokio::time::timeout(self.request_timeout, self.call(&request, principal.as_ref()))
+            .await.map_err(|_| McpError::internal_error("request timed out; a confirmed mutation may have taken effect; inspect controller state before another action", None))?
             .map(CallToolResponse::from)
     }
 }

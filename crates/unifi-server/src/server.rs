@@ -120,6 +120,8 @@ pub fn build_router(
     handler: UnifiMcp,
     cancellation: &CancellationToken,
 ) -> Result<Router, crate::auth::AuthConfigError> {
+    let handler =
+        handler.with_request_limits(settings.max_concurrent_requests, settings.request_timeout);
     let verifier = IdentityVerifier::new(settings.identity.clone())?;
     let auth = IngressAuth::new(
         Arc::clone(&settings.bearers),

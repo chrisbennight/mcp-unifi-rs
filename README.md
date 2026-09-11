@@ -32,9 +32,9 @@ local admin per console).
 |---|---|
 | `unifi-api` | Bounded HTTP transports (official Integration API + legacy controller API), allowlisted models, capability detection |
 | `unifi-mcp` | MCP schemas, tool registry, normalization, dispatch, annotations, redaction |
-| `unifi-server` | Configuration, gateway ingress authentication, stateless Streamable HTTP, health checks |
+| `unifi-server` | Configuration, authenticated Streamable HTTP, stdio, health checks |
 
-The server runs stateless behind an MCP gateway that owns caller
+In gateway mode, the server runs stateless behind an MCP gateway that owns caller
 authentication, authorization groups, and rate limiting; the server itself
 verifies a rotating gateway bearer plus a gateway-minted identity JWT on every
 `/mcp` request. One process serves one console family — `UNIFI_MCP_SURFACE`
@@ -83,13 +83,17 @@ actually find the right tool for a real question.
 
 ## Quick start
 
+For an independent MCP client, start with [stdio or direct HTTP](docs/transports.md).
+Those modes do not require a gateway and default to read access. The existing
+gateway deployment starts as follows:
+
 ```sh
 set -a && . ./.env && set +a               # gateway ingress settings are required at startup
 cargo run --bin mcp-unifi-rs               # binds 0.0.0.0:8000 (healthz + authenticated /mcp)
 cargo run --bin mcp-unifi-rs -- --healthcheck
 ```
 
-Startup fails closed without the gateway ingress and controller connection
+Gateway startup fails closed without the gateway ingress and controller connection
 configuration; copy `.env.example` to `.env` and fill it in. The controller
 itself is dialed lazily, so the server boots and stays live while the console
 is unreachable. The default bind is `0.0.0.0` for

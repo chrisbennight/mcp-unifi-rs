@@ -30,10 +30,15 @@ usefully carry.
 
 ## Gateway-grade ingress in-process
 
-The server verifies a rotating bearer pair plus a gateway-minted identity JWT
+In gateway mode, the server verifies a rotating bearer pair plus a gateway-minted identity JWT
 itself, following the hardened pattern shared by the newest sibling servers.
 Rejected: trusting the private container network as the authentication
 boundary — network membership is not authentication.
+
+Independent stdio and HTTP clients use fixed operator grants for writes and
+secret disclosure. Stdio relies on the process owner; direct HTTP requires a
+dedicated bearer. Neither tool arguments nor advisory annotations can elevate
+those grants. The same typed dispatch and redaction apply in each mode.
 
 ## Read-back verification on every mutation
 

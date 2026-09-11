@@ -10,8 +10,8 @@ An MCP server that lets an agent operate UniFi network controllers safely:
 a small workflow-oriented tool surface with bounded summarized responses,
 preview-then-confirm mutations verified by read-back, secret redaction by
 default, and per-controller capability detection across UniFi's API
-generations. It runs stateless behind the homelab MCP gateway, which owns
-caller authentication, authorization groups, and rate limiting.
+generations. It supports independent stdio and HTTP clients and an optional
+gateway, which owns caller authentication, authorization groups, and rate limiting.
 
 ## Roadmap
 

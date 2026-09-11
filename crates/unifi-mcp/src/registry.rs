@@ -53,6 +53,34 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
+    /// Explicit authorization classification, independent of advisory annotations.
+    #[must_use]
+    pub const fn requires_write_access(self) -> bool {
+        match self {
+            Self::WlansUpdate
+            | Self::ClientsControl
+            | Self::DevicesControl
+            | Self::GuestsAuthorize
+            | Self::PortForwardsUpdate
+            | Self::FirewallPoliciesUpdate
+            | Self::VouchersCreate => true,
+            Self::NetworkOverview
+            | Self::ClientsSearch
+            | Self::ClientsContext
+            | Self::DevicesSearch
+            | Self::DevicesStatus
+            | Self::FirewallRead
+            | Self::NetworksRead
+            | Self::CamerasSearch
+            | Self::CamerasStatus
+            | Self::ProtectOverview
+            | Self::ProtectEvents
+            | Self::WifiDiagnose
+            | Self::EventsSearch
+            | Self::StatsQuery => false,
+        }
+    }
+
     #[must_use]
     pub const fn surface(self) -> ToolSurface {
         match self {

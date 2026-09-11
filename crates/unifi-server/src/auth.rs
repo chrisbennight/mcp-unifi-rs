@@ -65,7 +65,7 @@ impl GatewayBearers {
         Ok(Self { current, previous })
     }
 
-    fn accepts(&self, supplied: &[u8]) -> bool {
+    pub(crate) fn accepts(&self, supplied: &[u8]) -> bool {
         let current = constant_time_equal(supplied, self.current.as_bytes());
         let previous = self.previous.as_ref().map_or(Choice::from(0), |value| {
             constant_time_equal(supplied, value.as_bytes())

@@ -1876,6 +1876,26 @@ impl UnifiMcp {
                     None,
                 )
             })?;
+        if self.local_access().is_some_and(|access| !access.writes)
+            && spec.kind.requires_write_access()
+        {
+            return Err(McpError::invalid_request(
+                "write access is not enabled for this client",
+                None,
+            ));
+        }
+        if self.local_access().is_some_and(|access| !access.secrets)
+            && params
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("includeSecrets"))
+                == Some(&serde_json::Value::Bool(true))
+        {
+            return Err(McpError::invalid_request(
+                "secret disclosure is not enabled for this client",
+                None,
+            ));
+        }
         let result = match spec.kind {
             ToolKind::NetworkOverview => self.network_overview(params).await,
             ToolKind::ClientsSearch => self.clients_search(params).await,

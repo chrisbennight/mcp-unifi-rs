@@ -1,7 +1,7 @@
 # Configuration
 
 Every setting is read from the environment once, at startup, by
-`unifi_server::config::Settings::from_env`. There is no configuration file and
+the selected transport's settings loader. There is no configuration file and
 no runtime reconfiguration: a value that is missing, malformed, or outside its
 range fails the process at load rather than on the first tool call that needs
 it. An operator finding out about a bad trust anchor from a failed container
@@ -28,6 +28,10 @@ The variable table below is maintained by hand against
 `crates/unifi-server/src/config.rs`. Nothing enforces it, so treat the module
 as authoritative if the two ever disagree, and report the disagreement.
 
+For independent stdio and HTTP permissions, listener defaults, limits, and
+bearer settings, see [Connecting a client](transports.md). The gateway settings
+below apply only to `--transport gateway`; controller settings apply in every mode.
+
 ## Runtime surface
 
 | Variable | Required | Meaning |
@@ -36,8 +40,8 @@ as authoritative if the two ever disagree, and report the disagreement.
 
 One process serves one console family. The selector decides which upstream
 configuration is read, which tools are advertised and dispatched, which
-identity JWT audience is required (`unifi` or `unifi-protect`), and which
-service name the `Host` allowlist defaults to. A `network` process reads no
+identity JWT audience is required in gateway mode (`unifi` or `unifi-protect`),
+and that mode's default `Host` allowlist. A `network` process reads no
 Protect variable and a `protect` process reads no controller variable, so a
 credential for the other surface present in the environment is ignored rather
 than half-wired. Any other value fails at load.
@@ -46,7 +50,7 @@ than half-wired. Any other value fails at load.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_HOST` | no | Bind address. Defaults to all interfaces, because the container publishes nothing itself and the gateway reaches it over the compose network. |
+| `UNIFI_MCP_HOST` | no | Bind address. Gateway defaults to all interfaces; direct HTTP defaults to 127.0.0.1. Stdio has no listener. |
 | `UNIFI_MCP_PORT` | no | Bind port. |
 | `UNIFI_MCP_LOG_LEVEL` | no | Tracing filter. |
 
@@ -56,8 +60,8 @@ require any credential to run.
 
 ## Gateway ingress
 
-These establish the security boundary. Both the bearer and the identity token
-are required on every `/mcp` request; neither alone is sufficient, and network
+These establish the gateway security boundary. Both the bearer and the identity token
+are required on every gateway `/mcp` request; neither alone is sufficient, and network
 membership is not authentication.
 
 | Variable | Required | Meaning |

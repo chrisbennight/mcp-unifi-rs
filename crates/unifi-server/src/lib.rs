@@ -1,12 +1,12 @@
 //! Configuration, ingress, and HTTP serving for the `UniFi` MCP server.
 //!
 //! This crate owns environment-injected configuration, the liveness
-//! endpoint, gateway ingress authentication (rotating bearer plus verified
-//! gateway identity), the stateless Streamable HTTP MCP mount behind that
-//! ingress, and gateway manifest emission.
+//! endpoint, gateway or direct bearer authentication, bounded stdio, the
+//! stateless Streamable HTTP MCP mount, and gateway manifest emission.
 
 pub mod auth;
 pub mod config;
+pub mod portable;
 pub mod server;
 
 use unifi_mcp::{ToolSurface, tools_for_surface};

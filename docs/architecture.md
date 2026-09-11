@@ -2,6 +2,10 @@
 
 ## System context
 
+Independent clients connect over stdio or direct Streamable HTTP with fixed
+operator-granted write and secret-disclosure permissions. See
+[Connecting a client](transports.md). The optional gateway deployment is:
+
 ```
 agent/client ── mcp-tool-search-gateway ──(bearer + identity JWT, private network)──┬── mcp-unifi-rs [surface=network, aud=unifi] ── Network controller (Integration API, X-API-KEY;
                                                                                     │                                               legacy API cookie + CSRF, capability-gated)
@@ -30,8 +34,8 @@ and gateway manifest, and neither process reads the other's configuration.
   rejecting unknown fields, normalized bounded responses, the executable tool
   registry with MCP annotations, dispatch, redaction, and the mutation
   safety pipeline (preview/confirm, read-back verification).
-- **`unifi-server`** — environment configuration, gateway ingress
-  authentication, the stateless Streamable HTTP mount, `/healthz`, the
+- **`unifi-server`** — environment configuration, gateway or direct bearer
+  authentication, bounded stdio, the stateless Streamable HTTP mount, `/healthz`, the
   `--healthcheck` probe, and gateway manifest emission.
 
 ## Tool surface

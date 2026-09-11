@@ -30,9 +30,12 @@ trade the capability away to satisfy a stylistic or speculative concern.
 - Wi-Fi passphrases, PSKs, VPN keys, and SNMP strings are redacted by default
   in responses. A write containing a redaction marker is rejected rather than
   persisted.
-- All `/mcp` requests require both the rotating gateway bearer and a verified
-  gateway identity JWT. Network membership is not authentication. The gateway
-  catalog owns risk classification and group authorization.
+- Gateway `/mcp` requests require both the rotating gateway bearer and a
+  verified gateway identity JWT. Its catalog owns risk classification and
+  group authorization. Direct HTTP requires its separate rotating bearer;
+  stdio trusts the process owner. Independent modes enforce operator-granted
+  write and secret-disclosure permissions before dispatch. Network membership,
+  tool annotations, and confirmation arguments are not authorization.
 - Mutations preview by default, validate their complete bounded input before
   the upstream call, and are never retried after an ambiguous transport
   result. They verify persistence by reading back, because the controller

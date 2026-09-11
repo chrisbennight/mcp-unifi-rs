@@ -10,7 +10,7 @@ under test.
 
 ## What a run produces
 
-Run each task against the deployed server through the gateway, and keep the
+Run each task against the configured server through the selected transport, and keep the
 tool-call transcript. The transcript is the artifact; the answer is secondary.
 
 **Redact credentials out of the transcript before keeping it.** One task mints

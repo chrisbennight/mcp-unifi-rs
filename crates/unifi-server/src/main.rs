@@ -1,20 +1,32 @@
 use std::net::IpAddr;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use unifi_server::{
     config::Settings,
     gateway_manifest,
+    portable::{DirectHttpSettings, PortableSettings, build_direct_router, serve_stdio},
     server::{build_handler, build_router},
 };
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum, PartialEq, Eq)]
+enum Transport {
+    #[default]
+    Gateway,
+    Stdio,
+    Http,
+}
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Curated UniFi MCP server")]
 struct Args {
+    /// Connection mode: gateway, local stdio, or independently authenticated HTTP.
+    #[arg(long, value_enum, default_value_t = Transport::Gateway)]
+    transport: Transport,
     /// Check only the local liveness endpoint and exit.
     #[arg(long)]
     healthcheck: bool,
@@ -35,11 +47,39 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.transport != Transport::Gateway {
+        let settings = PortableSettings::from_env()?;
+        init_logging(&settings.log_level)?;
+        let runtime = Settings::runtime_from_env().context("invalid controller configuration")?;
+        let handler = build_handler(&runtime).context("build console clients")?;
+        let cancellation = CancellationToken::new();
+        if args.transport == Transport::Stdio {
+            // Leave process signals to the OS in stdio mode. Tokio's blocking
+            // stdin reader cannot be cancelled while waiting for another byte.
+            // EOF is the cooperative shutdown path used by the parent client.
+            return serve_stdio(
+                &settings,
+                handler,
+                tokio::io::stdin(),
+                tokio::io::stdout(),
+                cancellation,
+            )
+            .await;
+        }
+        let http = DirectHttpSettings::from_env()?;
+        let router = build_direct_router(&settings, &http, handler, &cancellation);
+        let listener = TcpListener::bind((http.host.as_str(), http.port))
+            .await
+            .context("bind listener")?;
+        info!(address = %listener.local_addr()?, "UniFi MCP listening");
+        return axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown(cancellation))
+            .await
+            .context("serve HTTP");
+    }
+
     let settings = Settings::from_env().context("invalid server configuration")?;
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(EnvFilter::try_new(&settings.log_level).context("invalid log filter")?)
-        .init();
+    init_logging(&settings.log_level)?;
 
     let handler = build_handler(&settings.runtime).context("build console clients")?;
     let cancellation = CancellationToken::new();
@@ -59,6 +99,21 @@ async fn shutdown(cancellation: CancellationToken) {
     let _ = signal::ctrl_c().await;
     // Ending in-flight MCP streams lets graceful shutdown finish promptly.
     cancellation.cancel();
+}
+
+fn init_logging(level: &str) -> Result<()> {
+    // The SDK logs complete requests, results and notifications, including
+    // secret-bearing fields. A separate filter keeps those events disabled
+    // even when an operator selects a more specific debug/trace directive.
+    let logs = tracing_subscriber::fmt::layer()
+        .json()
+        .with_writer(std::io::stderr)
+        .with_filter(EnvFilter::try_new(level).context("invalid log filter")?)
+        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+            !metadata.target().starts_with("rmcp")
+        }));
+    tracing_subscriber::registry().with(logs).init();
+    Ok(())
 }
 
 /// Map the configured bind address to the address the liveness probe dials.
