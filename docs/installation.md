@@ -4,8 +4,10 @@ Choose stdio for a client that launches a local process, or authenticated HTTP
 for a separately running service. Both can run without a gateway.
 
 Run commands below from the repository root after cloning. The Compose examples
-build the local source. Published images and digest selection are covered by
-the [distribution guide](distribution.md).
+run the published `ghcr.io/chrisbennight/mcp-unifi-rs:latest` image; they do not
+build the checked-out source. You need pull access to that package, including
+registry authentication if it is private. Select and pin an image digest using
+the [distribution guide](distribution.md) for a repeatable deployment.
 
 ## What you need
 
@@ -129,7 +131,7 @@ same file you started with:
 docker compose --env-file .env -f compose.example.yml down
 ```
 
-This leaves your `.env` and built images in place. Keep the environment file
+This leaves your `.env` and downloaded images in place. Keep the environment file
 private. To build and smoke-test an image without starting Compose:
 
 ```sh
