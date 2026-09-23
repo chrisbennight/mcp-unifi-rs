@@ -32,7 +32,7 @@ def smoke(image: str, surface: str) -> None:
         raise ValueError("unsupported smoke-test surface")
     name = f"mcp-unifi-smoke-{uuid.uuid4().hex}"
     command = [
-        "docker", "create", "--name", name, "--network", "none",
+        "docker", "create", "--pull=never", "--name", name, "--network", "none",
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--pids-limit", "128",
     ]

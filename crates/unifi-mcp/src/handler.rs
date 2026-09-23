@@ -299,19 +299,19 @@ impl ServerHandler for UnifiMcp {
             })
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send {
         // Registry order is the stable catalog order, so client and prompt
         // caches stay byte-identical between calls.
-        Ok(ListToolsResult::with_all_items(
+        std::future::ready(Ok(ListToolsResult::with_all_items(
             tools_for_surface(self.surface())
                 .map(ToolSpec::catalog_tool)
                 .collect(),
         )
-        .with_ttl_ms(CATALOG_TTL_MILLISECONDS))
+        .with_ttl_ms(CATALOG_TTL_MILLISECONDS)))
     }
 
     async fn call_tool(

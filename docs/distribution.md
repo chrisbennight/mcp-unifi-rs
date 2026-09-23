@@ -12,6 +12,10 @@ build and isolated smoke tests succeed. The publishing job loads the exact
 saved image from that workflow run and checks its source-revision label. It does
 not rebuild the image. Pull requests have no publication credentials.
 
+The smoke test uses the image tagged for that commit and disables registry pulls.
+If the locally built image is missing, validation fails rather than testing a
+different image downloaded under the same tag.
+
 Each publication gets `sha-<full-commit>`. A push to `main` also updates `latest`;
 a version tag such as `v1.2.3` publishes that version without moving `latest`.
 Version tags must match the format enforced by [image_tags.py](../scripts/image_tags.py).

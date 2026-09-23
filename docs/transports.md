@@ -40,7 +40,7 @@ markers in writes remain enabled in all modes.
 
 ## Stdio
 
-Build and install from a checkout with Rust 1.96 or later:
+Build and install from a checkout with the pinned Rust 1.98.1 toolchain:
 
 ```sh
 cargo install --locked --path crates/unifi-server
