@@ -76,3 +76,8 @@ compatibility or other projects need evidence. Helpful references are
 [Open Source Guides](https://opensource.guide/starting-a-project/),
 [Diátaxis](https://diataxis.fr/start-here/), and
 [Google's tone guidance](https://developers.google.com/style/tone).
+
+For artwork or README changes, follow the [visual identity and writing guide](docs/branding/README.md).
+Keep editable artwork and exports together, run the export check, and inspect
+both themes and small sizes. Add new pages to the [documentation guide](docs/README.md)
+when they help readers find a task.

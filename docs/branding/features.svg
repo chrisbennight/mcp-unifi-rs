@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <g id="network"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></g>
+    <g id="wireless"><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M8 16a6 6 0 0 1 8 0"/><circle cx="12" cy="20" r=".8"/></g>
+    <g id="camera"><path d="M3 4h18v6H3zM5 10v3a7 7 0 0 0 14 0v-3"/><circle cx="12" cy="14" r="2.5"/></g>
+    <g id="configuration"><path d="M3 6h18M3 12h18M3 18h18"/><path d="M8 3v6M16 9v6M10 15v6"/></g>
+  </defs>
+</svg>
