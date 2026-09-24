@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# syntax=docker/dockerfile:1.27@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
 
-ARG RUST_VERSION=1.96.0
+ARG RUST_VERSION=1.98.1
 
-FROM rust:${RUST_VERSION}-slim-bookworm@sha256:4732ca96fd086cb9be682050c3f0176288eebaac2b80aa2bcefccfaf198e1950 AS builder
+FROM rust:${RUST_VERSION}-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS builder
 WORKDIR /app
 
 # Optional public or operator-managed Cargo mirror. Do not put credentials in
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin mcp-unifi-rs \
     && cp target/release/mcp-unifi-rs /usr/local/bin/mcp-unifi-rs
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77 AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
 ARG SOURCE_REVISION=""
 LABEL org.opencontainers.image.source="https://github.com/chrisbennight/mcp-unifi-rs" \
       org.opencontainers.image.revision="${SOURCE_REVISION}"
