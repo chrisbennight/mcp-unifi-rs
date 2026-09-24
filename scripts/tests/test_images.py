@@ -52,6 +52,8 @@ class ImageSmokeTests(unittest.TestCase):
                 smoke.smoke("example/image:source", surface)
                 create = run.call_args_list[0]
                 argv = create.args[0]
+                self.assertIn("--pull=never", argv)
+                self.assertEqual(argv[-1], "example/image:source")
                 self.assertEqual(argv[argv.index("--network") + 1], "none")
                 self.assertIn("--read-only", argv)
                 self.assertEqual(create.kwargs["env"]["UNIFI_MCP_SURFACE"], surface)

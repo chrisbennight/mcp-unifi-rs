@@ -9,6 +9,13 @@ WORKFLOWS = ROOT / '.github' / 'workflows'
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_build_and_ci_use_the_repository_toolchain(self) -> None:
+        version = tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']['channel']
+        dockerfile = (ROOT / 'Dockerfile').read_text()
+        workflow = (WORKFLOWS / 'test.yml').read_text()
+        self.assertEqual(re.findall(r'^ARG RUST_VERSION=(\S+)$', dockerfile, re.MULTILINE), [version])
+        self.assertEqual(re.findall(r'^\s*RUST_TOOLCHAIN_VERSION: "([^"]+)"$', workflow, re.MULTILINE), [version])
+
     def test_external_actions_are_pinned_to_immutable_commits(self) -> None:
         files = list(WORKFLOWS.glob('*.yml'))
         self.assertGreaterEqual(len(files), 2)
@@ -41,6 +48,8 @@ class WorkflowContractTests(unittest.TestCase):
     def test_publishes_the_tested_artifact_from_the_same_run(self) -> None:
         workflow = (WORKFLOWS / 'build.yml').read_text(encoding='utf-8')
         self.assertIn('python3 scripts/smoke_image.py', workflow)
+        self.assertIn('--tag "${IMAGE}:sha-${GITHUB_SHA}"', workflow)
+        self.assertIn('python3 scripts/smoke_image.py "${IMAGE}:sha-${GITHUB_SHA}"', workflow)
         self.assertLess(workflow.index('Smoke both runtime surfaces'), workflow.index('docker save'))
         publish = workflow.split('\n  publish:\n')[1]
         self.assertIn('name: tested-image', publish)

@@ -49,7 +49,7 @@ verified end to end, and controller MFA/SSO login is not implemented.
 
 ## Quickstart: stdio
 
-Install Rust 1.96 and your platform's native build tools. CI validates Linux;
+Install Rust 1.98.1 and your platform's native build tools. CI validates Linux;
 other host platforms are not tested here. For Docker or HTTP, follow the
 [installation guide](docs/installation.md#http-and-containers).
 

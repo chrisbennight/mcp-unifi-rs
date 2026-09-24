@@ -17,7 +17,7 @@ the [distribution guide](distribution.md) for a repeatable deployment.
   for the legacy API. For Protect: its Integration API key; a local account is
   optional for richer inventory and event history.
 - A client supporting MCP 2026-07-28 for independent stdio or HTTP connections.
-- Rust 1.96 and a native build toolchain for a source install, or Docker for the
+- Rust 1.98.1 and a native build toolchain for a source install, or Docker for the
   Linux x86-64 image. CI runs on Linux; other host platforms are not tested here.
 
 ## Quickstart: stdio

@@ -8,7 +8,7 @@ controller inventories. See [support](SUPPORT.md) and [security](SECURITY.md).
 
 ## Local setup
 
-Install Rust 1.96 with rustfmt and clippy, Python 3.11 or later, and your
+Install Rust 1.98.1 with rustfmt and clippy, Python 3.11 or later, and your
 platform's native build tools. Docker is needed for image validation, not for
 the Rust unit and integration tests. Clone the repository and run:
 
