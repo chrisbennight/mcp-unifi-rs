@@ -93,7 +93,10 @@ and optional `severities`. Its response uses `data`, `page_number`,
 `total_element_count`, and `total_page_count`. This local-session endpoint
 is not part of the public Integration API contract. The live checks verified
 the response shape, one-row total queries, HIGH/VERY_HIGH filtering, and
-client MAC identifiers under `parameters.CLIENT.id`.
+client identifiers under `parameters.CLIENT.id`. That identifier is a MAC
+address for ordinary network clients, but VPN events can use other identifiers.
+Event rows populate `clientMac` only for valid unicast client MAC addresses;
+other events remain visible without `clientMac`.
 [Unpoller's implementation](https://github.com/unpoller/unifi/blob/master/system_log.go)
 provided the initial route and field reference; the installed controller's
 bounded responses were the compatibility evidence.

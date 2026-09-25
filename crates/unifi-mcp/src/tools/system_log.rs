@@ -2,7 +2,10 @@
 
 use unifi_api::{ApiError, system_log::SystemLogEntry};
 
-use super::{EVENT_MESSAGE_CEILING, EventRow, McpError, api_error, bounded_text, current_time_ms};
+use super::{
+    EVENT_MESSAGE_CEILING, EventRow, McpError, api_error, bounded_text, current_time_ms,
+    is_client_address,
+};
 
 pub(super) fn log_window(hours: u32) -> Result<(u64, u64), McpError> {
     let end = current_time_ms()?;
@@ -23,7 +26,11 @@ pub(super) fn event_row(entry: SystemLogEntry) -> EventRow {
         message,
         category: entry.category,
         severity: entry.severity,
-        client_mac: entry.parameters.client.and_then(|client| client.id),
+        client_mac: entry
+            .parameters
+            .client
+            .and_then(|client| client.id)
+            .filter(|id| is_client_address(id)),
     }
 }
 
@@ -78,6 +85,32 @@ fn message(entry: &SystemLogEntry) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_client_mac_excludes_non_mac_identifiers_without_dropping_events() {
+        for (id, expected_mac) in [
+            ("aa:bb:cc:dd:ee:01", Some("aa:bb:cc:dd:ee:01")),
+            ("AA:BB:CC:DD:EE:01", Some("AA:BB:CC:DD:EE:01")),
+            ("vpn:synthetic-client:synthetic-session", None),
+            ("aa:bb:cc:dd:ee:01:suffix", None),
+            ("00:00:00:00:00:00", None),
+            ("ff:ff:ff:ff:ff:ff", None),
+            ("", None),
+        ] {
+            let entry: SystemLogEntry = serde_json::from_value(serde_json::json!({
+                "timestamp": 1,
+                "key": "CLIENT_CONNECTED",
+                "message_raw": "{CLIENT} connected",
+                "parameters": {"CLIENT": {"id": id, "name": "test client"}}
+            }))
+            .unwrap();
+            let row = event_row(entry);
+            assert_eq!(row.client_mac.as_deref(), expected_mac);
+            assert_eq!(row.time, 1);
+            assert_eq!(row.key.as_deref(), Some("CLIENT_CONNECTED"));
+            assert_eq!(row.message.as_deref(), Some("test client connected"));
+        }
+    }
 
     #[test]
     fn message_substitution_is_literal_allowlisted_and_bounded() {
