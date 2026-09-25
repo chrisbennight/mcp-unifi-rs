@@ -35,6 +35,10 @@ use crate::{
     registry::{ToolBehavior, ToolKind, ToolSpec},
 };
 
+mod system_log;
+use system_log::{event_row, log_window};
+use unifi_api::system_log::{SystemLogQuery, SystemLogSeverity};
+
 const ACTION_METADATA_KEY: &str = "io.modelcontextprotocol/action-metadata";
 const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 
@@ -43,9 +47,6 @@ const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 /// A tool whose result carries credentials this call created is exempt, since
 /// there is nothing for the caller to recover by narrowing.
 pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
-
-/// Ceiling on legacy alarm rows counted for the overview.
-const ALARM_COUNT_LIMIT: u32 = 1000;
 
 /// Search pagination bounds shared by the list tools.
 const MAXIMUM_SEARCH_LIMIT: u16 = 200;
@@ -68,7 +69,7 @@ const STORAGE_DISTRIBUTION_CEILING: usize = 32;
 const IDLE_CAMERA_LIST_CEILING: usize = 100;
 /// Ceiling on device inventory rows scanned per call.
 const DEVICE_INVENTORY_CEILING: u64 = 1000;
-/// Legacy event rows scanned when building one client's recent events.
+/// System-log rows scanned when building one client's recent events.
 const EVENT_SCAN_LIMIT: u32 = 200;
 /// Recent events returned for one client.
 const CONTEXT_EVENT_LIMIT: usize = 20;
@@ -122,16 +123,25 @@ struct NetworkOverviewOutput {
     application_version: String,
     /// Controller-reported health per subsystem; unnamed rows are dropped.
     subsystems: Vec<SubsystemHealth>,
-    /// Active alarm count, saturating at the bounded read ceiling.
-    active_alarms: u64,
-    /// Present when the alarm read returned a full page: the count is a
-    /// floor, not an exact total.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    active_alarms_saturated: Option<bool>,
+    /// System-log totals for the last 24 hours, not outstanding alarms.
+    recent_events: RecentEventCounts,
     /// Total adopted devices on the site.
     devices: u64,
     /// Total known clients on the site.
     clients: u64,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RecentEventCounts {
+    /// Beginning of the counting window, in epoch milliseconds.
+    window_start: u64,
+    /// End of the counting window, in epoch milliseconds.
+    window_end: u64,
+    /// Controller-reported total across all severities.
+    total: u64,
+    /// Controller-reported total with `HIGH` or `VERY_HIGH` severity.
+    high_severity: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
@@ -287,10 +297,11 @@ struct ClientContextOutput {
     fixed_ip: Option<String>,
     tx_bytes: Option<u64>,
     rx_bytes: Option<u64>,
-    /// Most recent controller events for this client, newest first.
+    /// Up to 20 events for this client from a 200-row site-wide system-log
+    /// scan over the last 24 hours, newest first.
     recent_events: Vec<ClientEvent>,
-    /// Present when the bounded site-wide event page was full: this
-    /// client's older events may exist beyond the scan.
+    /// Present when the controller reports additional site-wide rows or
+    /// more than 20 events matched this client.
     #[serde(skip_serializing_if = "Option::is_none")]
     recent_events_truncated: Option<bool>,
     /// Present when the access-point name join was built from a truncated
@@ -1526,26 +1537,24 @@ struct WifiDiagnoseOutput {
     rogue_aps_truncated: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "lowercase")]
-enum EventKind {
-    #[default]
-    All,
-    Events,
-    Alarms,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum EventSeverity {
+    Low,
+    Medium,
+    High,
+    VeryHigh,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct EventsSearchInput {
-    /// Restrict to controller events, active alarms, or both.
-    #[serde(default)]
-    kind: EventKind,
-    /// Window in hours ending now, 1-168. Defaults to 24. Rows without a
-    /// timestamp are excluded from windowed results.
+    /// Restrict to one system-log severity before the bounded upstream read.
+    severity: Option<EventSeverity>,
+    /// Window in hours ending now, 1-168. Defaults to 24.
     last_hours: Option<u32>,
     /// Case-insensitive substring matched against the event key or
-    /// subsystem, such as `wan`, `roam`, or `ips`.
+    /// category, such as `wan`, `roam`, or `security`.
     category: Option<String>,
     /// Restrict to one client MAC address.
     client: Option<String>,
@@ -1560,15 +1569,15 @@ struct EventsSearchInput {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct EventRow {
-    /// `event` or `alarm`.
-    kind: &'static str,
     /// Epoch milliseconds.
-    time: Option<u64>,
+    time: u64,
     key: Option<String>,
     /// Bounded controller-reported message text; untrusted.
     message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    subsystem: Option<String>,
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_mac: Option<String>,
 }
@@ -1583,8 +1592,7 @@ struct EventsSearchOutput {
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<u16>,
-    /// Present when an upstream fetch returned a full page: rows inside the
-    /// requested window may exist beyond what was scanned.
+    /// Present when the controller reports rows beyond the bounded scan.
     #[serde(skip_serializing_if = "Option::is_none")]
     fetch_window_truncated: Option<bool>,
 }
@@ -1941,16 +1949,20 @@ impl UnifiMcp {
                 })
             })
             .collect();
-        let alarm_rows = self
+        let (window_start, window_end) = log_window(DEFAULT_EVENT_WINDOW_HOURS)?;
+        let query = SystemLogQuery::new(window_start, window_end, 1).map_err(api_error)?;
+        let total = self
             .legacy()
-            .alarms(self.legacy_site(), ALARM_COUNT_LIMIT)
+            .system_log(self.legacy_site(), &query)
             .await
-            .map_err(api_error)?;
-        let active_alarms_saturated = alarm_rows.len() >= ALARM_COUNT_LIMIT as usize;
-        let active_alarms = alarm_rows
-            .iter()
-            .filter(|alarm| alarm.archived != Some(true))
-            .count() as u64;
+            .map_err(system_log::read_error)?
+            .total_element_count;
+        let high_severity = self
+            .legacy()
+            .system_log(self.legacy_site(), &query.high_severity())
+            .await
+            .map_err(system_log::read_error)?
+            .total_element_count;
         let site_id = self.site_id().await?;
         let devices = self
             .integration()
@@ -1968,8 +1980,12 @@ impl UnifiMcp {
             controller: self.controller_name().to_owned(),
             application_version: info.application_version,
             subsystems,
-            active_alarms,
-            active_alarms_saturated: active_alarms_saturated.then_some(true),
+            recent_events: RecentEventCounts {
+                window_start,
+                window_end,
+                total,
+                high_severity,
+            },
             devices,
             clients,
         })
@@ -2066,25 +2082,34 @@ impl UnifiMcp {
             (std::collections::HashMap::new(), false)
         };
         let client_mac = client.mac.as_deref().map(normalize_mac);
+        let (window_start, window_end) = log_window(DEFAULT_EVENT_WINDOW_HOURS)?;
+        let query =
+            SystemLogQuery::new(window_start, window_end, EVENT_SCAN_LIMIT).map_err(api_error)?;
         let scanned_events = self
             .legacy()
-            .events(self.legacy_site(), EVENT_SCAN_LIMIT)
+            .system_log(self.legacy_site(), &query)
             .await
-            .map_err(api_error)?;
-        // A full page means the bounded site-wide scan may not reach this
-        // client's older events; the result says so instead of appearing
-        // authoritative.
-        let recent_events_truncated = scanned_events.len() >= EVENT_SCAN_LIMIT as usize;
-        let recent_events = scanned_events
+            .map_err(system_log::read_error)?;
+        let mut recent_events_truncated = scanned_events.has_more();
+        let mut matching_events: Vec<_> = scanned_events
+            .data
             .into_iter()
+            .map(event_row)
             .filter(|event| {
-                event.user.as_deref().map(normalize_mac) == client_mac && client_mac.is_some()
+                event.client_mac.as_deref().map(normalize_mac) == client_mac
+                    && client_mac.is_some()
+                    && (window_start..=window_end).contains(&event.time)
             })
+            .collect();
+        matching_events.sort_by_key(|event| std::cmp::Reverse(event.time));
+        recent_events_truncated |= matching_events.len() > CONTEXT_EVENT_LIMIT;
+        let recent_events = matching_events
+            .into_iter()
             .take(CONTEXT_EVENT_LIMIT)
             .map(|event| ClientEvent {
-                time: event.time,
+                time: Some(event.time),
                 key: event.key,
-                message: event.msg.map(bounded_text),
+                message: event.message,
             })
             .collect();
 
@@ -3769,61 +3794,35 @@ impl UnifiMcp {
                 None,
             ));
         }
-        let now_ms = u64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| McpError::internal_error("system clock before epoch", None))?
-                .as_millis(),
-        )
-        .map_err(|_| McpError::internal_error("system clock out of range", None))?;
-        let window_start_ms = now_ms.saturating_sub(u64::from(window_hours) * 3_600_000);
-
-        let mut rows: Vec<EventRow> = Vec::new();
-        let mut fetch_window_truncated = false;
-        if matches!(input.kind, EventKind::All | EventKind::Events) {
-            let events = self
-                .legacy()
-                .events(self.legacy_site(), EVENT_FETCH_LIMIT)
-                .await
-                .map_err(api_error)?;
-            fetch_window_truncated |= events.len() >= EVENT_FETCH_LIMIT as usize;
-            rows.extend(events.into_iter().map(|event| EventRow {
-                kind: "event",
-                time: event.time,
-                key: event.key,
-                message: event.msg.map(bounded_text),
-                subsystem: event.subsystem,
-                client_mac: event.user,
-            }));
+        let (window_start_ms, now_ms) = log_window(window_hours)?;
+        let mut query =
+            SystemLogQuery::new(window_start_ms, now_ms, EVENT_FETCH_LIMIT).map_err(api_error)?;
+        if let Some(severity) = input.severity {
+            query = query.severity(match severity {
+                EventSeverity::Low => SystemLogSeverity::Low,
+                EventSeverity::Medium => SystemLogSeverity::Medium,
+                EventSeverity::High => SystemLogSeverity::High,
+                EventSeverity::VeryHigh => SystemLogSeverity::VeryHigh,
+            });
         }
-        if matches!(input.kind, EventKind::All | EventKind::Alarms) {
-            let alarms = self
-                .legacy()
-                .alarms(self.legacy_site(), EVENT_FETCH_LIMIT)
-                .await
-                .map_err(api_error)?;
-            fetch_window_truncated |= alarms.len() >= EVENT_FETCH_LIMIT as usize;
-            rows.extend(alarms.into_iter().map(|alarm| EventRow {
-                kind: "alarm",
-                time: alarm.time,
-                key: alarm.key,
-                message: alarm.msg.map(bounded_text),
-                subsystem: None,
-                client_mac: None,
-            }));
-        }
+        let page = self
+            .legacy()
+            .system_log(self.legacy_site(), &query)
+            .await
+            .map_err(system_log::read_error)?;
+        let fetch_window_truncated = page.has_more();
+        let mut rows: Vec<_> = page.data.into_iter().map(event_row).collect();
 
         rows.retain(|row| {
-            row.time
-                .is_some_and(|time| time >= window_start_ms && time <= now_ms)
+            (window_start_ms..=now_ms).contains(&row.time)
                 && category.as_deref().is_none_or(|category| {
                     row.key
                         .as_deref()
                         .is_some_and(|key| key.to_lowercase().contains(category))
                         || row
-                            .subsystem
+                            .category
                             .as_deref()
-                            .is_some_and(|subsystem| subsystem.to_lowercase().contains(category))
+                            .is_some_and(|value| value.to_lowercase().contains(category))
                 })
                 && client.as_deref().is_none_or(|client| {
                     row.client_mac.as_deref().map(normalize_mac) == Some(client.to_owned())

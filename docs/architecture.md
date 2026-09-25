@@ -201,15 +201,15 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | Weak-client list | 50 rows | wifi.diagnose | declared top-N | "the 50 weakest, worst first" is the contract | diagnosis needs the worst cases, not a census |
 | Port table | 128 rows | devices.status, per device | signaled | `portsTruncated` | largest real switches are 52 ports |
 | Radio table | 16 rows | devices.status, wifi.diagnose | signaled | `radiosTruncated` | real access points carry 2-4 radios |
-| Recent client events | 20 rows | clients.context | declared most-recent-N | schema documents the contract; events.search pages the full window | context is a summary, the search tool is the archive |
-| Client-event scan | 200 rows | clients.context | signaled | `recentEventsTruncated` when the page was full | one bounded page balances freshness against fan-out |
+| Recent client events | 20 rows | clients.context | signaled | `recentEventsTruncated` when more matches were omitted | context summarizes the bounded site-wide scan |
+| Client-event scan | 200 rows over 24 hours | clients.context | signaled | `recentEventsTruncated` when controller totals exceed the scan | one bounded system-log page balances freshness against fan-out |
 | AP-name join | inherits device inventory scan | clients.search, clients.context | signaled | `apLookupTruncated`; wifi.diagnose folds it into `accessPointsTruncated` | a join can only be as complete as its scan |
-| Event fetch window | 1000 events + 1000 alarms | events.search | signaled | `fetchWindowTruncated` when a full page returned | legacy API clamps at 1000 per read |
+| Event fetch window | 1000 system logs | events.search | signaled | `fetchWindowTruncated` when controller totals exceed the scan | narrow time or severity to reduce the upstream result |
 | Protect event page | 1-200 rows plus one lookahead, default 50 | protect.events | caller-paged | `nextCursor` freezes the window and filters, then advances by a time key without splitting an equal-timestamp group; an oversized group fails loudly | each call stays within the response budget and never presents a bounded prefix as complete |
 | Protect event window | at most 168 h per window, default latest 24 h | protect.events | caller-windowed | explicit `start`/`end` accept older adjacent windows; invalid spans fail before login | the undocumented route is bounded per request while all console-retained history remains addressable |
 | Event message text | 256 chars | events.search, clients.context | marked | `…` appended only when cut | one line of context, never a silent excerpt |
-| Alarm count read | 1000 rows | network.overview | signaled | `activeAlarmsSaturated`: the count is a floor | legacy API clamps at 1000 per read |
-| Event/alarm window | 1-168 h, default 24 | events.search | caller-chosen | validated, two-edged | seven days matches the controller report bound |
+| Overview event counts | two one-row queries over 24 hours | network.overview | controller totals | `recentEvents` gives the window, total, and HIGH/VERY_HIGH count | response totals avoid count saturation; the two reads are not atomic |
+| Network event window | 1-168 h, default 24 | events.search | caller-chosen | validated, two-edged | keeps system-log queries bounded |
 | WAN report window | 1-168 h, default 24 | stats.query | caller-chosen | validated | the upstream report rejects longer windows |
 | Top applications | 1-50, default 10 | stats.query | caller-chosen | validated | ranking beyond 50 stops being "top" |
 | Weak-signal floor | -100..-30 dBm, default -75 | wifi.diagnose | caller-chosen | validated | -75 dBm is the usual roaming threshold |

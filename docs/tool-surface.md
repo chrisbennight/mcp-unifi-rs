@@ -24,11 +24,11 @@ watching is disclosure-relevant even without an image.
 ### `network.overview`
 
 No parameters. One controller snapshot: application version, per-subsystem
-health, active alarm count, and device and client totals. Cheap enough for a
-monitoring loop.
-
-The alarm count saturates at the bounded read ceiling and says so when it does,
-so a large number is never quietly a wrong number.
+health, device and client totals, and `recentEvents` for the last 24 hours.
+That summary gives `windowStart` and `windowEnd` in epoch milliseconds,
+`total`, and `highSeverity` (HIGH or VERY_HIGH). Counts come from two bounded
+system-log queries and their controller-reported totals. They describe recent
+history, not outstanding alarms; the queries are not an atomic snapshot.
 
 ### `clients.search`
 
@@ -47,6 +47,10 @@ One client end to end: identity, connection and access point, signal,
 addressing including any fixed IP, usage, and its recent controller events. The
 tool to reach for when the question is about one device rather than a
 population.
+
+Recent events cover the last 24 hours: scan up to 200 site-wide system logs,
+then return up to 20 matching client events. `recentEventsTruncated` signals
+additional upstream rows or matching events beyond the output limit.
 
 ### `devices.search`
 
@@ -95,11 +99,18 @@ points. The place to start on a slow-wifi question.
 
 ### `events.search`
 
-`kind`, `lastHours`, `category`, `client`, `offset`, `limit`.
+`severity`, `lastHours`, `category`, `client`, `offset`, `limit`.
 
-Recent controller events and active alarms in one bounded window, newest first.
-Rows without a timestamp are excluded from windowed results rather than
-silently dated.
+Network system logs, newest first. `severity` accepts `low`, `medium`, `high`,
+or `veryHigh` and filters upstream. `lastHours` defaults to 24 and accepts
+1-168. The tool scans one page of up to 1000 rows, then applies case-insensitive
+category/key substring and client MAC filters and paginates those matches.
+`totalMatches` counts matches in that scan; `fetchWindowTruncated` signals
+additional upstream rows. Narrow the time window or severity when it is set.
+Rows include `time` in epoch milliseconds, `key`, `message`, `category`,
+`severity`, and `clientMac` when available. Missing timestamps fail decoding.
+Known entity placeholders in messages are replaced literally; messages are
+limited to 256 characters with a visible ellipsis when shortened.
 
 ### `stats.query`
 

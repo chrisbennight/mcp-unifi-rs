@@ -37,6 +37,13 @@ configuration; it does not expose arbitrary controller API requests.
 
 ## Before you start
 
+The current compatibility targets are **UniFi Network 10.6.106** and
+**UniFi Protect 7.2.105**, running on UniFi OS consoles. Older and newer
+application releases are outside the tested support target. The
+[version evidence](docs/compatibility.md#supported-versions) records which
+operations were checked; it does not imply that every write was exercised on
+a live network.
+
 You need a UniFi OS console with the application's local Integration API and
 an MCP client supporting protocol version 2026-07-28. Network needs its API key
 and a dedicated local account. Protect needs its own API key; local-session

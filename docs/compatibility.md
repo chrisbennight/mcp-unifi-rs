@@ -25,7 +25,21 @@ login; use a dedicated account and restrict its controller permissions where
 possible. The server's read/write grants limit what its clients may invoke;
 they do not reduce the privileges of the stored controller account.
 
-## Version evidence
+## Supported versions
+
+The compatibility target is deliberately limited to these application versions
+on UniFi OS consoles. Other versions and standalone Network deployments are
+not supported targets. We do not maintain fallbacks for retired event and alarm
+APIs.
+
+| Application | Supported target | Live evidence |
+| --- | --- | --- |
+| UniFi Network | 10.6.106 | Application version, local login, subsystem health, connected-client reads, and system-log reads/count filters checked on 2026-09-25 |
+| UniFi Protect | 7.2.105 | `protect.overview` with public inventory and local-session enrichment checked on 2026-09-25 |
+
+These checks exercise the named reads. They do not claim that every tool or
+mutation has been exercised against a live controller. Automated regression
+tests use loopback fakes and never change a production network.
 
 Automated tests use loopback fakes, not live consoles. Protect fixtures record
 the 7.1.87 response shape with synthetic identifiers. This verifies parsing of
@@ -34,12 +48,12 @@ The [Protect API documentation](https://developer.ui.com/protect/v7.2.105/gettin
 and the Network API catalog are references for public endpoints. Local-session
 routes require separate testing when a console upgrade changes them.
 
-The server reports application versions and probes capabilities rather than
-using a single minimum-version check. An untested release is not automatically
-unsupported. An absent endpoint, authentication failure, malformed response,
-and an empty inventory are different outcomes; failures are not converted into
-an empty list. File a compatibility issue with the application version, tool,
-and redacted error if the documented setup does not work.
+The server reports application versions and checks capabilities such as the
+firewall generation. Those checks do not extend the supported version range.
+An absent endpoint, authentication failure, malformed response, and an empty
+inventory are different outcomes; failures are not converted into an empty
+list. File a compatibility issue with the application version, tool, and
+redacted error if the documented setup does not work.
 
 ## Backend used by each capability
 
@@ -51,7 +65,8 @@ and redacted error if the documented setup does not work.
 | Zone-based firewall zones/policies and hotspot vouchers | Network Integration API |
 | Health, connected-client inventory/context, networks and wireless networks | Network legacy API |
 | Wireless updates, client block/unblock/reconnect, device locate | Network legacy API |
-| Port forwards, traffic rules/routes, events, alarms, historical statistics, neighboring APs | Network legacy API |
+| Port forwards, traffic rules/routes, historical statistics, neighboring APs | Network legacy API |
+| Network event search, recent client events, overview event counts | Network v2 system-log API, using the local session |
 | Protect camera and recorder identity | Protect Integration API |
 | Protect hardware/firmware/recording and recorder/storage enrichment | Optional Protect local session |
 | Historical Protect detections | Protect local session |
@@ -64,6 +79,37 @@ change the Integration API prefix.
 
 Both clients use typed, bounded responses. Neither exposes arbitrary endpoint
 forwarding. See the [tool reference](tool-surface.md) for the available actions.
+
+## Network 10.6 system logs
+
+Network 10.6.106 returned HTTP 404 with `api.err.NotFound` for both
+`stat/alarm` and `stat/event` during the live checks. `network.overview` failed
+at its alarm read even though version, login, health, and client reads worked.
+`list/alarm` was also rejected and is not a fallback.
+
+The replacement is `POST /proxy/network/v2/api/site/{site}/system-log/all`.
+Its request uses `timestampFrom`, `timestampTo`, `pageNumber`, `pageSize`,
+and optional `severities`. Its response uses `data`, `page_number`,
+`total_element_count`, and `total_page_count`. This local-session endpoint
+is not part of the public Integration API contract. The live checks verified
+the response shape, one-row total queries, HIGH/VERY_HIGH filtering, and
+client MAC identifiers under `parameters.CLIENT.id`.
+[Unpoller's implementation](https://github.com/unpoller/unifi/blob/master/system_log.go)
+provided the initial route and field reference; the installed controller's
+bounded responses were the compatibility evidence.
+
+This changes the tool contract: `network.overview` replaces `activeAlarms`
+and `activeAlarmsSaturated` with `recentEvents`, containing 24-hour totals
+and the counting window. High-severity history is not an outstanding alarm
+count. `events.search` replaces `kind` with optional `severity`; rows expose
+`category` and `severity` instead of `kind` and `subsystem`. `clients.context`
+uses system logs for recent events. Retired routes are not retried.
+
+System-log failures identify the operation in the tool error. The API logger
+records the fixed endpoint name `network.system_log` and the HTTP status for
+controller rejections, without response bodies, credentials, or event text.
+These records use the existing process logging pipeline and can be queried
+in Loki where the deployment collects the server's logs.
 
 ## Firewall generations
 

@@ -254,7 +254,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::NetworkOverview,
         "network.overview",
         "One bounded controller snapshot: application version, per-subsystem \
-         health, active alarm count, and device and client totals. Cheap enough \
+         health, 24-hour system-log totals, and device and client totals. Cheap enough \
          for monitoring loops; never returns raw controller records.",
     ),
     read_spec(
@@ -345,8 +345,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::EventsSearch,
         "events.search",
-        "Search recent controller events and active alarms in one bounded \
-         window, filtered by time, category, or client MAC, newest first \
+        "Search Network system logs in one bounded \
+         window, filtered by time, severity, category, or client MAC, newest first \
          with pagination.",
     ),
     read_spec(

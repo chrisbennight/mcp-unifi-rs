@@ -737,37 +737,6 @@ async fn network_and_wlan_configuration_reads_decode_allowlisted_fields() {
 }
 
 #[tokio::test]
-async fn event_and_alarm_reads_clamp_their_limits() {
-    let server = logged_in_server().await;
-    let prefix = "/proxy/network/api/s/default";
-    Mock::given(method("POST"))
-        .and(path(format!("{prefix}/stat/event")))
-        .and(body_json(serde_json::json!({"_limit": 1000})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
-            &serde_json::json!([{"key": "EVT_WU_Connected", "msg": "client connected", "time": 1_755_300_000_000_u64, "subsystem": "wlan"}]),
-        )))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path(format!("{prefix}/stat/alarm")))
-        .and(body_json(serde_json::json!({"_limit": 25, "archived": false})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
-            &serde_json::json!([{"_id": "al1", "key": "EVT_GW_WANTransition", "msg": "wan down", "time": 1_755_300_000_000_u64, "archived": false}]),
-        )))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = client_for(&server);
-    // An over-large request is clamped to the bounded page.
-    let events = client.events("default", 5000).await.expect("events");
-    assert_eq!(events[0].key.as_deref(), Some("EVT_WU_Connected"));
-    let alarms = client.alarms("default", 25).await.expect("alarms");
-    assert_eq!(alarms[0].archived, Some(false));
-}
-
-#[tokio::test]
 async fn report_windows_are_validated_before_any_request() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";
@@ -857,26 +826,26 @@ async fn rate_limited_post_bodied_reads_retry_once_like_any_idempotent_read() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";
     Mock::given(method("POST"))
-        .and(path(format!("{prefix}/stat/event")))
+        .and(path(format!("{prefix}/stat/sitedpi")))
         .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path(format!("{prefix}/stat/event")))
+        .and(path(format!("{prefix}/stat/sitedpi")))
         .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
-            &serde_json::json!([{"key": "EVT_WU_Connected", "msg": "ok", "time": 1_755_300_000_000_u64}]),
+            &serde_json::json!([{"app": 5, "cat": 4, "tx_bytes": 100}]),
         )))
         .expect(1)
         .mount(&server)
         .await;
 
-    let events = client_for(&server)
-        .events("default", 10)
+    let applications = client_for(&server)
+        .dpi_by_application("default")
         .await
         .expect("retried idempotent read");
-    assert_eq!(events[0].key.as_deref(), Some("EVT_WU_Connected"));
+    assert_eq!(applications[0].app, Some(5));
 }
 
 #[tokio::test]

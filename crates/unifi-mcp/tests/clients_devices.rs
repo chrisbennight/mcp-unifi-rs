@@ -9,9 +9,12 @@ use unifi_mcp::UnifiMcp;
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_json, header, method, path},
+    matchers::{header, method, path},
 };
 use zeroize::Zeroizing;
+
+#[path = "support/network_logs.rs"]
+mod network_logs;
 
 const API_KEY: &str = "test-integration-key";
 const USERNAME: &str = "svc-mcp";
@@ -166,19 +169,29 @@ async fn console_fixture() -> MockServer {
         )
         .mount(&server)
         .await;
+    let now = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
     Mock::given(method("POST"))
-        .and(path("/proxy/network/api/s/default/stat/event"))
-        .and(body_json(serde_json::json!({"_limit": 200})))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
-                {"key": "EVT_WU_Roam", "msg": "laptop roamed", "time": 1_755_300_000_000_u64,
-                 "user": LAPTOP_MAC},
-                {"key": "EVT_WU_Connected", "msg": "phone connected",
-                 "time": 1_755_299_000_000_u64, "user": "aa:bb:cc:dd:ee:03"},
-                {"key": "EVT_WU_Connected", "msg": "laptop connected",
-                 "time": 1_755_298_000_000_u64, "user": "AA:BB:CC:DD:EE:01"},
-            ]))),
-        )
+        .and(path(network_logs::ROUTE))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({"pageSize": 200}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(network_logs::page(
+            serde_json::json!([
+                {"key": "EVT_WU_Roam", "message_raw": "laptop roamed", "timestamp": now - 1000,
+                 "parameters": {"CLIENT": {"id": LAPTOP_MAC}}},
+                {"key": "EVT_WU_Connected", "message_raw": "phone connected",
+                 "timestamp": now - 2000, "parameters": {"CLIENT": {"id": "aa:bb:cc:dd:ee:03"}}},
+                {"key": "EVT_WU_Connected", "message_raw": "laptop connected",
+                 "timestamp": now - 3000, "parameters": {"CLIENT": {"id": "AA:BB:CC:DD:EE:01"}}},
+            ]),
+            3,
+        )))
         .mount(&server)
         .await;
     server
@@ -388,8 +401,10 @@ async fn an_identifier_selector_is_never_shadowed_by_a_colliding_name() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/proxy/network/api/s/default/stat/event"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .and(path(network_logs::ROUTE))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(network_logs::page(serde_json::json!([]), 0)),
+        )
         .mount(&server)
         .await;
     let handler = handler_for(&server);

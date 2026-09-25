@@ -17,6 +17,9 @@ use wiremock::{
 };
 use zeroize::Zeroizing;
 
+#[path = "support/network_logs.rs"]
+mod network_logs;
+
 const API_KEY: &str = "test-integration-key";
 const USERNAME: &str = "svc-mcp";
 const PASSWORD: &str = "test-legacy-password";
@@ -197,7 +200,7 @@ async fn over_ceiling_port_and_radio_tables_are_reported_truncated() {
 }
 
 #[tokio::test]
-async fn a_full_upstream_event_page_is_reported_as_a_truncated_window() {
+async fn an_incomplete_upstream_event_page_is_reported_as_a_truncated_window() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     let now = u64::try_from(
@@ -207,35 +210,14 @@ async fn a_full_upstream_event_page_is_reported_as_a_truncated_window() {
             .as_millis(),
     )
     .expect("timestamp range");
-    let events: Vec<serde_json::Value> = (0_u64..1000)
-        .map(|index| {
-            serde_json::json!({
-                "key": format!("EVT_{index}"),
-                "time": now - index,
-            })
-        })
-        .collect();
+    let events = serde_json::json!([
+        {"key": "EVT_LongMessage", "message_raw": "a".repeat(300), "timestamp": now - 1},
+        {"key": "EVT_CeilingMessage", "message_raw": "b".repeat(256), "timestamp": now - 2}
+    ]);
+    // Even a short page is partial when the controller reports more rows.
     Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/event")))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!(events))),
-        )
-        .mount(&server)
-        .await;
-    // A long alarm message is cut with a visible marker; one exactly at
-    // the ceiling passes through untouched.
-    let long_message = "a".repeat(300);
-    let ceiling_message = "b".repeat(256);
-    Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/alarm")))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
-                {"_id": "alarm-1", "key": "EVT_LongMessage", "msg": long_message,
-                 "time": now - 1},
-                {"_id": "alarm-2", "key": "EVT_CeilingMessage", "msg": ceiling_message,
-                 "time": now - 2}
-            ]))),
-        )
+        .and(path(network_logs::ROUTE))
+        .respond_with(ResponseTemplate::new(200).set_body_json(network_logs::page(events, 1001)))
         .mount(&server)
         .await;
     let handler = handler_for(&server);
@@ -268,7 +250,7 @@ async fn a_full_upstream_event_page_is_reported_as_a_truncated_window() {
 }
 
 #[tokio::test]
-async fn a_full_alarm_page_marks_the_overview_count_as_a_floor() {
+async fn overview_counts_use_totals_beyond_the_page_size() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     site_mock(&server).await;
@@ -276,7 +258,7 @@ async fn a_full_alarm_page_marks_the_overview_count_as_a_floor() {
         .and(path(format!("{INTEGRATION}/info")))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"applicationVersion": "9.4.19"})),
+                .set_body_json(serde_json::json!({"applicationVersion": "10.6.106"})),
         )
         .mount(&server)
         .await;
@@ -294,14 +276,13 @@ async fn a_full_alarm_page_marks_the_overview_count_as_a_floor() {
         .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
         .mount(&server)
         .await;
-    let alarms: Vec<serde_json::Value> = (0..1000)
-        .map(|index| serde_json::json!({"_id": format!("alarm-{index}")}))
-        .collect();
     Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/alarm")))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!(alarms))),
-        )
+        .and(path(network_logs::ROUTE))
+        .respond_with(ResponseTemplate::new(200).set_body_json(network_logs::page(
+            serde_json::json!([{"timestamp": 1}]),
+            5000,
+        )))
+        .expect(2)
         .mount(&server)
         .await;
     let handler = handler_for(&server);
@@ -310,12 +291,13 @@ async fn a_full_alarm_page_marks_the_overview_count_as_a_floor() {
     params.name = "network.overview".into();
     let result = handler.call(&params, None).await.expect("overview");
     let output = result.structured_content.expect("structured");
-    assert_eq!(output["activeAlarms"], 1000);
-    assert_eq!(output["activeAlarmsSaturated"], true);
+    assert_eq!(output["recentEvents"]["total"], 5000);
+    assert_eq!(output["recentEvents"]["highSeverity"], 5000);
+    assert!(output.get("activeAlarms").is_none());
 }
 
 #[tokio::test]
-async fn a_full_event_page_marks_client_context_events_as_truncated() {
+async fn additional_system_log_pages_mark_client_context_as_truncated() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     Mock::given(method("GET"))
@@ -327,15 +309,15 @@ async fn a_full_event_page_marks_client_context_events_as_truncated() {
         )
         .mount(&server)
         .await;
-    // Exactly one full 200-row page: the client's older events may lie
-    // beyond the scan, and the result must say so.
+    // The client's older events may lie beyond the scan.
     let events: Vec<serde_json::Value> = (0_u64..200)
-        .map(|index| serde_json::json!({"key": format!("EVT_{index}"), "time": index}))
+        .map(|index| serde_json::json!({"key": format!("EVT_{index}"), "timestamp": index}))
         .collect();
     Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/event")))
+        .and(path(network_logs::ROUTE))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!(events))),
+            ResponseTemplate::new(200)
+                .set_body_json(network_logs::page(serde_json::json!(events), 201)),
         )
         .mount(&server)
         .await;
@@ -350,6 +332,59 @@ async fn a_full_event_page_marks_client_context_events_as_truncated() {
         .expect("context");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["recentEventsTruncated"], true);
+}
+
+#[tokio::test]
+async fn client_context_marks_omitted_matches_even_when_the_scan_is_complete() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{LEGACY}/stat/sta")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"mac": "aa:bb:cc:dd:ee:01", "hostname": "laptop", "is_wired": true}
+            ]))),
+        )
+        .mount(&server)
+        .await;
+    let now = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let events: Vec<_> = (1..=21)
+        .rev()
+        .map(|index| {
+            serde_json::json!({
+                "timestamp": now - index,
+                "key": format!("event-{index}"),
+                "parameters": {"CLIENT": {"id": "aa:bb:cc:dd:ee:01"}}
+            })
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(path(network_logs::ROUTE))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(network_logs::page(serde_json::json!(events), 21)),
+        )
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call("clients.context", &serde_json::json!({"client": "laptop"})),
+            None,
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(result["recentEventsTruncated"], true);
+    assert_eq!(result["recentEvents"].as_array().unwrap().len(), 20);
+    assert_eq!(result["recentEvents"][0]["key"], "event-1");
+    assert_eq!(result["recentEvents"][19]["key"], "event-20");
 }
 
 #[tokio::test]
@@ -404,8 +439,10 @@ async fn a_truncated_inventory_marks_the_ap_name_join() {
 
     // The same truncated join is signaled on the single-client context.
     Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/event")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .and(path(network_logs::ROUTE))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(network_logs::page(serde_json::json!([]), 0)),
+        )
         .mount(&server)
         .await;
     let result = handler
@@ -498,7 +535,7 @@ async fn an_over_ceiling_diagnose_radio_table_is_reported_truncated() {
 }
 
 #[tokio::test]
-async fn a_full_alarm_page_alone_marks_the_fetch_window_truncated() {
+async fn a_complete_full_system_log_page_is_not_marked_truncated() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     let now = u64::try_from(
@@ -508,35 +545,36 @@ async fn a_full_alarm_page_alone_marks_the_fetch_window_truncated() {
             .as_millis(),
     )
     .expect("timestamp range");
-    let alarms: Vec<serde_json::Value> = (0_u64..1000)
+    let events: Vec<serde_json::Value> = (0_u64..1000)
         .map(|index| {
             serde_json::json!({
-                "_id": format!("alarm-{index}"),
+                "severity": "HIGH",
                 "key": format!("EVT_A{index}"),
-                "time": now - index,
+                "timestamp": now - index,
             })
         })
         .collect();
     Mock::given(method("POST"))
-        .and(path(format!("{LEGACY}/stat/alarm")))
+        .and(path(network_logs::ROUTE))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!(alarms))),
+            ResponseTemplate::new(200)
+                .set_body_json(network_logs::page(serde_json::json!(events), 1000)),
         )
         .mount(&server)
         .await;
     let handler = handler_for(&server);
 
-    // Alarms-only: the alarm-side saturation must set the signal on its own.
+    // Totals prove this full page is complete; its size alone is not a signal.
     let result = handler
         .call(
             &call(
                 "events.search",
-                &serde_json::json!({"kind": "alarms", "limit": 5}),
+                &serde_json::json!({"severity": "high", "limit": 5}),
             ),
             None,
         )
         .await
         .expect("search");
     let output = result.structured_content.expect("structured");
-    assert_eq!(output["fetchWindowTruncated"], true);
+    assert!(output.get("fetchWindowTruncated").is_none());
 }
