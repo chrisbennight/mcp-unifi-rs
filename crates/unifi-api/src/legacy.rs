@@ -21,12 +21,13 @@ use tracing::{debug, warn};
 use url::Url;
 use zeroize::Zeroizing;
 
+mod system_log;
+
 use crate::{
     ApiError, BoundedMessage, TlsMode, http,
     models::{
-        ActiveClient, Alarm, DpiApplication, HealthSubsystem, LegacyEvent, NetworkConf,
-        PortForward, PortForwardPatch, RogueAp, SiteWanSample, TrafficRoute, TrafficRule, WlanConf,
-        WlanPatch,
+        ActiveClient, DpiApplication, HealthSubsystem, NetworkConf, PortForward, PortForwardPatch,
+        RogueAp, SiteWanSample, TrafficRoute, TrafficRule, WlanConf, WlanPatch,
     },
     protect::{
         ProtectBootstrap, ProtectEvent, ProtectEventContinuation, ProtectEventPage,
@@ -37,7 +38,7 @@ use crate::{
 /// Longest `Retry-After` honored before retrying an idempotent read once.
 const MAXIMUM_RETRY_AFTER: Duration = Duration::from_secs(10);
 const CSRF_HEADER: &str = "x-csrf-token";
-/// Largest page a bounded event or alarm read requests from the controller.
+/// Largest page a bounded Protect event read requests from the controller.
 const MAXIMUM_RECORD_LIMIT: u32 = 1000;
 /// One row is reserved for the lookahead that proves a time-keyset boundary
 /// does not split simultaneous events.
@@ -585,23 +586,6 @@ impl LegacyClient {
         .await
     }
 
-    /// Recent controller events, newest first, bounded by `limit`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`ApiError`] when the session, request, or decoding fails.
-    pub async fn events(&self, site: &str, limit: u32) -> Result<Vec<LegacyEvent>, ApiError> {
-        let body = serde_json::json!({ "_limit": limit.min(MAXIMUM_RECORD_LIMIT) });
-        self.request_with_reauth(
-            RequestClass::IdempotentRead,
-            Method::POST,
-            site,
-            &["stat", "event"],
-            Some(body),
-        )
-        .await
-    }
-
     /// One caller-pageable slice of historical Protect events, newest first.
     ///
     /// The official Protect integration API exposes only a live WebSocket;
@@ -705,29 +689,6 @@ impl LegacyClient {
             }
             other => other,
         }
-    }
-
-    /// Recent unarchived controller alarms, bounded by `limit`.
-    ///
-    /// The archived filter is applied by the controller, so the bounded page
-    /// holds active alarms rather than truncating history before filtering.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`ApiError`] when the session, request, or decoding fails.
-    pub async fn alarms(&self, site: &str, limit: u32) -> Result<Vec<Alarm>, ApiError> {
-        let body = serde_json::json!({
-            "_limit": limit.min(MAXIMUM_RECORD_LIMIT),
-            "archived": false,
-        });
-        self.request_with_reauth(
-            RequestClass::IdempotentRead,
-            Method::POST,
-            site,
-            &["stat", "alarm"],
-            Some(body),
-        )
-        .await
     }
 
     /// Site-wide deep-packet-inspection counters grouped by application.

@@ -14,6 +14,9 @@ use wiremock::{
 };
 use zeroize::Zeroizing;
 
+#[path = "support/network_logs.rs"]
+mod network_logs;
+
 const API_KEY: &str = "test-integration-key";
 const USERNAME: &str = "svc-mcp";
 const PASSWORD: &str = "test-legacy-password";
@@ -43,7 +46,7 @@ async fn console_fixture() -> MockServer {
         .and(header("X-API-KEY", API_KEY))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"applicationVersion": "9.4.19"})),
+                .set_body_json(serde_json::json!({"applicationVersion": "10.6.106"})),
         )
         .expect(2)
         .mount(&server)
@@ -113,19 +116,27 @@ async fn console_fixture() -> MockServer {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/proxy/network/api/s/default/stat/alarm"))
-        .and(body_json(
-            serde_json::json!({"_limit": 1000, "archived": false}),
+        .and(path(network_logs::ROUTE))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({"pageNumber": 0, "pageSize": 1}),
         ))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
-                {"_id": "alarm-1", "key": "EVT_GW_WANTransition"},
-                {"_id": "alarm-2", "key": "EVT_AP_Lost_Contact"},
-                {"_id": "alarm-3", "key": "EVT_SW_StpPortBlocking", "archived": false},
-                {"_id": "alarm-4", "key": "EVT_AP_RestartedUnknown", "archived": true},
-            ]))),
-        )
-        .expect(2)
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            let start = body["timestampFrom"].as_u64().unwrap();
+            let end = body["timestampTo"].as_u64().unwrap();
+            assert_eq!(end - start, 86_400_000);
+            let total = if body.get("severities").is_some() {
+                assert_eq!(body["severities"], serde_json::json!(["HIGH", "VERY_HIGH"]));
+                3
+            } else {
+                1200
+            };
+            ResponseTemplate::new(200).set_body_json(network_logs::page(
+                serde_json::json!([{"timestamp": start + 1}]),
+                total,
+            ))
+        })
+        .expect(4)
         .mount(&server)
         .await;
 
@@ -176,7 +187,7 @@ async fn overview_normalizes_both_transports_and_caches_the_site_id() {
 
     // Two calls through one handler: the sites mock's expect(1) proves the
     // resolved site id is cached, everything else is fetched fresh per call.
-    // The archived alarm row must not count as active.
+    // System-log counts come from totals, not the single returned row.
     for _ in 0..2 {
         let result = handler
             .call(&overview_params(), None)
@@ -184,16 +195,24 @@ async fn overview_normalizes_both_transports_and_caches_the_site_id() {
             .expect("overview");
         assert_eq!(result.is_error, Some(false));
         let output = result.structured_content.as_ref().expect("structured");
+        let counts = &output["recentEvents"];
+        assert_eq!(counts["total"], 1200);
+        assert_eq!(counts["highSeverity"], 3);
+        assert_eq!(
+            counts["windowEnd"].as_u64().unwrap() - counts["windowStart"].as_u64().unwrap(),
+            86_400_000
+        );
+        assert!(output.get("activeAlarms").is_none());
         assert_eq!(
             output,
             &serde_json::json!({
                 "controller": "home",
-                "applicationVersion": "9.4.19",
+                "applicationVersion": "10.6.106",
                 "subsystems": [
                     {"subsystem": "wan", "status": "ok"},
                     {"subsystem": "wlan", "status": "warning"},
                 ],
-                "activeAlarms": 3,
+                "recentEvents": counts,
                 "devices": 7,
                 "clients": 42,
             })
@@ -220,7 +239,7 @@ async fn upstream_failures_surface_only_the_server_authored_vocabulary() {
         .and(path(format!("{INTEGRATION}/info")))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"applicationVersion": "9.4.19"})),
+                .set_body_json(serde_json::json!({"applicationVersion": "10.6.106"})),
         )
         .mount(&server)
         .await;
@@ -239,8 +258,10 @@ async fn upstream_failures_surface_only_the_server_authored_vocabulary() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/proxy/network/api/s/default/stat/alarm"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .and(path(network_logs::ROUTE))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(network_logs::page(serde_json::json!([]), 0)),
+        )
         .mount(&server)
         .await;
 
@@ -285,7 +306,7 @@ async fn a_catalog_larger_than_the_scan_ceiling_is_refused_not_truncated() {
         .and(path(format!("{INTEGRATION}/info")))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"applicationVersion": "9.4.19"})),
+                .set_body_json(serde_json::json!({"applicationVersion": "10.6.106"})),
         )
         .mount(&server)
         .await;
@@ -319,8 +340,10 @@ async fn minimal_legacy_mocks(server: &MockServer) {
         .mount(server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/proxy/network/api/s/default/stat/alarm"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .and(path(network_logs::ROUTE))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(network_logs::page(serde_json::json!([]), 0)),
+        )
         .mount(server)
         .await;
 }
@@ -342,7 +365,7 @@ async fn reflected_credentials_are_redacted_from_successful_results() {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/info")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "applicationVersion": format!("9.4.19+{API_KEY}")
+            "applicationVersion": format!("10.6.106+{API_KEY}")
         })))
         .mount(&server)
         .await;
@@ -366,7 +389,7 @@ async fn reflected_credentials_are_redacted_from_successful_results() {
         .await
         .expect("overview");
     let output = result.structured_content.expect("structured");
-    assert_eq!(output["applicationVersion"], "9.4.19+[redacted]");
+    assert_eq!(output["applicationVersion"], "10.6.106+[redacted]");
     let rendered = output.to_string();
     assert!(!rendered.contains(API_KEY));
     assert!(!rendered.contains(PASSWORD));
@@ -414,7 +437,7 @@ async fn site_resolution_scans_past_the_first_page() {
         .and(path(format!("{INTEGRATION}/info")))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"applicationVersion": "9.4.19"})),
+                .set_body_json(serde_json::json!({"applicationVersion": "10.6.106"})),
         )
         .mount(&server)
         .await;
@@ -427,7 +450,7 @@ async fn site_resolution_scans_past_the_first_page() {
         .await
         .expect("overview");
     let output = result.structured_content.expect("structured");
-    assert_eq!(output["applicationVersion"], "9.4.19");
+    assert_eq!(output["applicationVersion"], "10.6.106");
     assert_eq!(output["devices"], 0);
 }
 

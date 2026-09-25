@@ -377,18 +377,6 @@ pub struct TrafficRoute {
     pub domains: Vec<String>,
 }
 
-/// Controller event from the bounded legacy `stat/event` read.
-#[derive(Debug, Clone, Deserialize)]
-pub struct LegacyEvent {
-    pub key: Option<String>,
-    pub msg: Option<String>,
-    /// Epoch milliseconds.
-    pub time: Option<u64>,
-    pub subsystem: Option<String>,
-    /// Client MAC address for client-scoped events.
-    pub user: Option<String>,
-}
-
 /// One currently connected client from the legacy `stat/sta` read. Legacy
 /// API fields are `snake_case` on the wire, so no rename applies. Every
 /// field is controller-reported and untrusted.
@@ -529,18 +517,6 @@ impl WlanPatch {
             && self.x_passphrase.is_none()
             && self.hide_ssid.is_none()
     }
-}
-
-/// Controller alarm from the bounded legacy `stat/alarm` read.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Alarm {
-    #[serde(rename = "_id")]
-    pub id: String,
-    pub key: Option<String>,
-    pub msg: Option<String>,
-    /// Epoch milliseconds.
-    pub time: Option<u64>,
-    pub archived: Option<bool>,
 }
 
 /// Per-application deep-packet-inspection counters from `stat/sitedpi`.

@@ -30,6 +30,7 @@ mod legacy;
 pub mod models;
 pub mod pinning;
 pub mod protect;
+pub mod system_log;
 
 pub use client::IntegrationClient;
 pub use config::{ControllerConfig, TlsMode};
