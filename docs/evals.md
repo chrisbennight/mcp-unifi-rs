@@ -155,10 +155,12 @@ start or reset interval, no rate, and no proven WAN-only scope. Uptime does not
 establish a counter's start. Read `counterCoverage` and `counterSemantics`, and
 never treat a missing counter as zero. So
 they rank how much a client has moved, not how fast it is moving now. A laptop
-connected all week can out-total the one saturating the link this minute. The
-stats reports cannot close the gap either: they cover the site's WAN totals and
-its top applications, and neither names a client. `clientWanHistory` explicitly
-reports that this server has no verified per-client WAN history source.
+connected all week can out-total the one saturating the link this minute. For
+historical Internet volume, use `clientWanHistory` with fixed timestamps.
+It ranks controller-attributed client usage and reports differences from site
+WAN totals. This is useful attribution, but neither an instantaneous rate nor
+proof of complete per-client collection. Its site graph timestamps do not
+establish every client's observed interval.
 Watches for: two ways to be confidently wrong. Whether the agent qualifies a
 cumulative total as the volume it is instead of reporting it as current
 bandwidth; and whether it notices that clients come back name-sorted and paged,

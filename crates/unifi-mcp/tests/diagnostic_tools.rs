@@ -418,7 +418,7 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
         .and(path(format!("{LEGACY}/stat/report/hourly.site")))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
-                {"time": 1_755_300_000_000_u64, "wan-tx_bytes": 1024.0,
+                {"time": now_ms() - 3_600_000, "wan-tx_bytes": 1024.0,
                  "wan-rx_bytes": 4096.0},
             ]))),
         )
@@ -489,7 +489,7 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
         )
         .await
         .expect_err("cross parameter");
-    assert!(error.message.contains("dpiApplications"));
+    assert!(error.message.contains("top"));
 }
 
 #[tokio::test]
@@ -635,10 +635,10 @@ async fn dpi_permission_errors_remain_errors_and_are_not_reported_as_disabled() 
 }
 
 #[tokio::test]
-async fn client_wan_history_is_explicitly_unavailable_without_substituting_counters() {
+async fn client_history_unsupported_is_not_substituted_with_connection_counters() {
     let server = MockServer::start().await;
-    let handler = handler_for(&server);
-    let output = handler
+    login_mock(&server).await;
+    let output = handler_for(&server)
         .call(
             &call(
                 "stats.query",
@@ -647,44 +647,14 @@ async fn client_wan_history_is_explicitly_unavailable_without_substituting_count
             None,
         )
         .await
-        .expect("availability")
+        .expect("unsupported source")
         .structured_content
         .expect("structured");
-    assert_eq!(output["coverage"]["status"], "unavailable");
-    assert!(
-        output["coverage"]["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("Controller support is unknown")
-    );
-    assert_eq!(output["counterSemantics"]["source"], "none");
-    let semantics = &output["counterSemantics"];
-    assert_eq!(
-        semantics["requestedEndMs"].as_u64().expect("end")
-            - semantics["requestedStartMs"].as_u64().expect("start"),
-        168 * 3_600_000
-    );
-    assert!(output.get("wanHourly").is_none());
-    assert!(output.get("topApplications").is_none());
-    for arguments in [
-        serde_json::json!({"report":"clientWanHistory","hours":0}),
-        serde_json::json!({"report":"clientWanHistory","hours":169}),
-        serde_json::json!({"report":"clientWanHistory","top":1}),
-    ] {
-        assert!(
-            handler
-                .call(&call("stats.query", &arguments), None)
-                .await
-                .is_err()
-        );
-    }
-    assert!(
-        server
-            .received_requests()
-            .await
-            .expect("requests")
-            .is_empty()
-    );
+    assert_eq!(output["coverage"]["status"], "unsupported");
+    assert!(output.get("activity").is_none());
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|r| !r.url.path().contains("stat/sta")));
 }
 
 #[tokio::test]
@@ -723,7 +693,7 @@ async fn wan_coverage_preserves_missing_counters_and_empty_reports() {
     for (data, status) in [
         (serde_json::json!([]), "empty"),
         (
-            serde_json::json!([{"time":1_755_300_000_000_u64,"wan-rx_bytes":0}]),
+            serde_json::json!([{"time":now_ms()-3_600_000,"wan-rx_bytes":0}]),
             "partial",
         ),
     ] {

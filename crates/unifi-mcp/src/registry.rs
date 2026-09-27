@@ -352,10 +352,10 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::StatsQuery,
         "stats.query",
-        "Traffic reports with explicit coverage and counter semantics: hourly WAN throughput over a chosen \
-         window up to seven days, or top applications by deep packet \
-         inspection volume (numeric application ids). clientWanHistory explicitly \
-         reports that this server has no verified per-client WAN history source.",
+        "Internet usage over a bounded window: clientWanHistory attributes download/upload bytes to clients; \
+         dpiApplications ranks applications with names and stable IDs; wanHourly reads site WAN counters. \
+         Use fixed startMs/endMs for comparable reports and client pagination. Activity reports include \
+         observed site graph timestamps, collection limitations, and signed differences from WAN totals.",
     ),
     sensitive_read_spec(
         ToolKind::NetworksRead,

@@ -93,11 +93,21 @@ establish historical client reporting, not WAN-only attribution. The v2
 totals, but no verified contract connected the client totals to WAN-only use;
 it did not contain a `traffic_identification` report in this check.
 
-`stats.query` with `report: "clientWanHistory"` reports server-side unavailability
-and leaves controller support unknown. No investigated source established
-bounded historical per-client WAN-only attribution. This is not a claim that
-the controller has no other suitable API. Such a source must be verified before
-the server can return measurements. No controller configuration was changed.
+Further read-only discovery found the Network Activity view's v2 `traffic`
+endpoint, with explicit `start`, `end`, and `includeUnidentified` parameters.
+It returned useful per-client and application receive/transmit counters on
+Network 10.6.106. The UI describes this view as Internet activity and labels
+received bytes as download and transmitted bytes as upload. `stats.query`
+now uses that source for `clientWanHistory` and `dpiApplications`.
+
+The Activity response supplies no per-client collection timestamps or retention
+completeness. Its site graph is separate evidence, and its totals differ from
+site WAN counters. The server reports these limitations and signed differences
+without replacing missing measurements or forcing totals to agree. Legacy DPI
+normalization remains available when the Activity endpoint is absent.
+See [traffic source evidence](traffic-history.md) for tested requests, prerequisites,
+remaining unknowns, and the distinction between useful attribution and complete
+accounting. No controller configuration was changed during discovery.
 
 ## Backend used by each capability
 

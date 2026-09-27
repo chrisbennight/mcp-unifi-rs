@@ -22,6 +22,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 mod system_log;
+mod traffic;
 
 use crate::{
     ApiError, BoundedMessage, TlsMode, http,

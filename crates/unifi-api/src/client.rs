@@ -89,6 +89,53 @@ impl IntegrationClient {
         self.get_json(&["info"], &[]).await
     }
 
+    /// Resolve a bounded set of official application IDs to display names.
+    /// # Errors
+    /// Rejects an empty or oversized selection and propagates upstream failures.
+    pub async fn dpi_names(
+        &self,
+        ids: &[u32],
+        categories: bool,
+    ) -> Result<Vec<crate::traffic::DpiName>, ApiError> {
+        if ids.is_empty() || ids.len() > 50 {
+            return Err(ApiError::Config(
+                "DPI name selection must contain 1-50 IDs".to_owned(),
+            ));
+        }
+        let filter = format!(
+            "id.in({})",
+            ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
+        );
+        let page: Page<crate::traffic::DpiName> = self
+            .get_json(
+                &[
+                    "dpi",
+                    if categories {
+                        "categories"
+                    } else {
+                        "applications"
+                    },
+                ],
+                &[
+                    ("offset", "0".to_owned()),
+                    ("limit", "50".to_owned()),
+                    ("filter", filter),
+                ],
+            )
+            .await?;
+        // The controller's filtered totalCount is the unfiltered catalog size.
+        // Validate the actual selected rows instead of paging that total.
+        if page.data.len() > ids.len()
+            || page
+                .data
+                .iter()
+                .any(|row| !ids.contains(&row.id) || row.name.len() > 4096)
+        {
+            return Err(ApiError::Decode("unexpected DPI name selection".into()));
+        }
+        Ok(page.data)
+    }
+
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the request or decoding fails.
