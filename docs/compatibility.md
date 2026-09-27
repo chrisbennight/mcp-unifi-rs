@@ -61,8 +61,18 @@ Traffic normalization has isolated fixtures for flat DPI application records,
 legacy `by_app` tables, and wired and wireless client counters. Field contracts
 are corroborated by [Unpoller's DPI models](https://github.com/unpoller/unifi/blob/master/dpi.go)
 and [aiounifi's client model](https://github.com/Kane610/aiounifi/blob/master/aiounifi/models/client.py).
-The fixtures use synthetic numeric values and identifiers; they are not captures
-from Network 10.6.106. Live validation of these traffic shapes remains pending.
+Bounded read-only checks on Network 10.6.106 on 2026-09-27 confirmed that
+wired clients supplied `wired-tx_bytes` and `wired-rx_bytes` without the generic
+byte fields. Wireless clients supplied `tx_bytes` and `rx_bytes`. A
+[sanitized fixture](../crates/unifi-mcp/tests/fixtures/README.md) preserves these
+field shapes with synthetic identifiers and numeric values.
+
+The same controller returned `{"meta":{"rc":"ok"},"data":[{}]}` from
+`stat/sitedpi` with `type: "by_app"`, while its DPI setting reported enabled.
+The tool therefore reports unrecognized coverage, excludes the object, and
+does not invent a zero-traffic application. No nonempty application response
+was observed on this controller; synthetic tests cover the independently
+sourced flat and `by_app` contracts without claiming live validation of them.
 
 The legacy DPI source supplies no verified common measurement window, counter
 reset interval, or WAN-only classification coverage. Empty or malformed data
@@ -75,9 +85,19 @@ exposes `stat_hourly_user` through `stat/report/hourly.user` with `rx_bytes` and
 `tx_bytes`, conditional on historical retention settings. That contract does
 not establish WAN-only scope. The server therefore does not substitute this
 report or current connection counters for historical per-client WAN usage.
+Live one-hour queries of `stat/report/hourly.user` on Network 10.6.106 returned
+hourly `time`, `rx_bytes`, and `tx_bytes` values for sampled wired and wireless
+clients, including fractional byte values. The requested general counters
+establish historical client reporting, not WAN-only attribution. The v2
+`aggregated-dashboard` response also contained client rankings and site WAN
+totals, but no verified contract connected the client totals to WAN-only use;
+it did not contain a `traffic_identification` report in this check.
+
 `stats.query` with `report: "clientWanHistory"` reports server-side unavailability
-and leaves controller support unknown. A verified WAN-only source and sanitized
-controller fixtures are needed before measurements can be returned.
+and leaves controller support unknown. No investigated source established
+bounded historical per-client WAN-only attribution. This is not a claim that
+the controller has no other suitable API. Such a source must be verified before
+the server can return measurements. No controller configuration was changed.
 
 ## Backend used by each capability
 

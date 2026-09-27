@@ -1,0 +1,24 @@
+{
+  "clients": {
+    "meta": { "rc": "ok" },
+    "data": [
+      {
+        "mac": "02:00:00:00:00:01",
+        "is_wired": true,
+        "uptime": 1500000,
+        "wired-tx_bytes": 5000000000000,
+        "wired-rx_bytes": 2800000000000
+      },
+      {
+        "mac": "02:00:00:00:00:02",
+        "is_wired": false,
+        "uptime": 400,
+        "tx_bytes": 1000,
+        "rx_bytes": 16000,
+        "tx_packets": 8,
+        "rx_packets": 100
+      }
+    ]
+  },
+  "dpi": { "meta": { "rc": "ok" }, "data": [{}] }
+}

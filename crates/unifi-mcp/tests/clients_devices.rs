@@ -679,3 +679,46 @@ async fn wired_counter_selection_preserves_missing_values_and_pagination() {
     assert!(compact["clients"][0].get("counterCoverage").is_none());
     assert!(compact["clients"][0].get("rxBytes").is_none());
 }
+
+#[tokio::test]
+async fn observed_network_traffic_fields_preserve_large_wired_and_wireless_counters() {
+    let observed: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/network_10_6_106_traffic.json"))
+            .expect("sanitized controller fixture");
+    let server = console_fixture().await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/api/s/default/stat/sta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&observed["clients"]))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call("clients.search", &serde_json::json!({"detail":"full"})),
+            None,
+        )
+        .await
+        .expect("observed traffic shape")
+        .structured_content
+        .expect("structured");
+    let clients = output["clients"].as_array().expect("clients");
+    assert_eq!(clients.len(), 2);
+    for (connection, tx, rx, fields) in [
+        (
+            "wired",
+            5_000_000_000_000_u64,
+            2_800_000_000_000_u64,
+            "wired-tx_bytes, wired-rx_bytes",
+        ),
+        ("wireless", 1000, 16000, "tx_bytes, rx_bytes"),
+    ] {
+        let client = clients
+            .iter()
+            .find(|row| row["connection"] == connection)
+            .expect("connection");
+        assert_eq!(client["txBytes"], tx);
+        assert_eq!(client["rxBytes"], rx);
+        assert_eq!(client["counterCoverage"]["status"], "reported");
+        assert_eq!(client["counterCoverage"]["fields"], fields);
+    }
+}
