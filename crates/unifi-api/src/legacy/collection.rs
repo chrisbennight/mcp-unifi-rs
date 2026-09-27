@@ -1,11 +1,10 @@
 use reqwest::Method;
 use serde_json::value::RawValue;
 
-use super::{LegacyClient, LegacyEnvelope, RequestClass, is_login_required};
+use super::{LegacyClient, RequestClass, is_login_required};
 use crate::{
     ApiError,
-    collection::{SourceReport, SourceStatus, TrafficSnapshot},
-    models::SiteWanSample,
+    collection::{SourceReport, SourceStatus, TrafficSnapshot, WanReport},
     traffic::{ActivityBucket, ActivityRead, ActivityReport, ActivityWindow},
 };
 
@@ -62,10 +61,9 @@ impl LegacyClient {
             source::<Vec<ActivityBucket>>(self.activity_read(site, window, true).await, |rows| {
                 rows.len() <= 2017
             });
-        let wan = source::<LegacyEnvelope<SiteWanSample>>(
-            self.collect_wan(site, window).await,
-            |report| report.meta.rc == "ok" && report.data.len() <= 169,
-        );
+        let wan = source::<WanReport>(self.collect_wan(site, window).await, |report| {
+            report.meta.rc == "ok" && report.data.len() <= 169
+        });
         Ok(TrafficSnapshot {
             start_ms: window.start,
             end_ms: window.end,

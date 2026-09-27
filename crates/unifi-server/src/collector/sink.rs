@@ -1,11 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use unifi_api::{
-    collection::{SourceStatus, TrafficSnapshot, activity_totals},
-    models::SiteWanSample,
+    collection::{SourceStatus, TrafficSnapshot, WanReport, activity_totals},
     traffic::ActivityReport,
 };
 
@@ -96,11 +94,7 @@ impl Publication {
         // A retrieved empty or incomplete WAN report is still retained and
         // successfully collected; absent counters do not become invented zeroes.
         if snapshot.wan.status == SourceStatus::Collected {
-            #[derive(Deserialize)]
-            struct Wan {
-                data: Vec<SiteWanSample>,
-            }
-            let wan: Wan = serde_json::from_str(
+            let wan: WanReport = serde_json::from_str(
                 snapshot
                     .wan
                     .data

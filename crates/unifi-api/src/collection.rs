@@ -3,6 +3,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+/// The collection projection requires an explicit data array. Absence is an
+/// unrecognized response, not a successful empty report.
+#[derive(Deserialize)]
+pub struct WanReport {
+    pub meta: WanMeta,
+    pub data: Vec<crate::models::SiteWanSample>,
+}
+
+#[derive(Deserialize)]
+pub struct WanMeta {
+    pub rc: String,
+}
+
 /// One complete response from a fixed traffic-report source. No Debug implementation:
 /// the archive contains unredacted report data and must not enter diagnostic logs.
 #[derive(Serialize, Deserialize)]

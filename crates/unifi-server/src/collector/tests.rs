@@ -471,3 +471,62 @@ async fn pending_publication_recovery_preserves_unscheduled_outage_gaps() {
     assert_eq!(restarted.status.expired_gaps, 24);
     assert_eq!(restarted.status.last_published_interval, Some(START));
 }
+
+#[tokio::test]
+async fn unrecognized_wan_envelope_still_publishes_other_sources_and_advances() {
+    let server = MockServer::start().await;
+    let directory = Directory::new();
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/v2/api/site/default/traffic"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(snapshot().activity.data.unwrap().get()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/v2/api/site/default/app-traffic-rate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/api/s/default/stat/report/hourly.site"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"meta":{"rc":"ok"}})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v2/write"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let mut controller = crate::config::test_support::controller();
+    controller.base_url = server.uri().parse().unwrap();
+    let runtime = RuntimeSettings::Network(controller);
+    let mut config = settings(&server, &directory);
+    config.history_hours = 1;
+    config.correction_hours = 1;
+    config.intervals_per_cycle = 1;
+    let mut worker = Worker::new(config, &runtime).unwrap();
+    worker.cycle().await.unwrap();
+    assert!(worker.status.last_published_interval.is_some());
+    assert_eq!(worker.status.cursor, worker.status.last_published_interval);
+    assert!(worker.status.last_collected_interval.is_none());
+    assert_eq!(worker.status.error.as_deref(), Some("source_incomplete"));
+    assert!(!directory.0.join("pending.json").exists());
+    let requests = server.received_requests().await.unwrap();
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/api/v2/write")
+        .map(|request| String::from_utf8(request.body.clone()).unwrap())
+        .collect();
+    let body = writes.concat();
+    assert!(body.contains("activity_status=\"collected\""));
+    assert!(body.contains("graph_status=\"collected\""));
+    assert!(body.contains("wan_status=\"unrecognized\""));
+    assert!(body.contains("client_rx_bytes=700u"));
+    assert!(writes.last().unwrap().starts_with("unifi_publication,"));
+}
