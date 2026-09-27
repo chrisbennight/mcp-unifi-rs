@@ -165,6 +165,12 @@ impl Worker {
     fn schedule(&mut self, now: u64) -> Vec<u64> {
         let end = now.saturating_sub(self.settings.delay_ms) / HOUR * HOUR;
         let start = end.saturating_sub(self.settings.history_hours * HOUR);
+        // A stopped worker can miss entire hours beyond its last scheduled
+        // window. Those hours never entered the map, but remain missing when
+        // they are already too old for the current recovery window.
+        if let Some((last, _)) = self.status.intervals.last_key_value() {
+            self.status.expired_gaps += start.saturating_sub(last.saturating_add(HOUR)) / HOUR;
+        }
         self.status.expired_gaps += self
             .status
             .intervals

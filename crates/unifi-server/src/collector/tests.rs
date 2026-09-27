@@ -396,3 +396,78 @@ async fn restart_rejects_changed_destination_before_export() {
     assert!(Worker::new(changed, &runtime).is_err());
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn restart_counts_hours_that_expired_before_they_could_be_scheduled() {
+    let server = MockServer::start().await;
+    let directory = Directory::new();
+    let runtime = RuntimeSettings::Network(crate::config::test_support::controller());
+    let mut worker = Worker::new(settings(&server, &directory), &runtime).unwrap();
+    let old_end = START + 24 * HOUR;
+    worker.schedule(old_end);
+    worker
+        .status
+        .intervals
+        .values_mut()
+        .for_each(|complete| *complete = true);
+    worker.save().unwrap();
+    drop(worker);
+    let mut restarted = Worker::new(settings(&server, &directory), &runtime).unwrap();
+    restarted.schedule(old_end + 48 * HOUR);
+    assert_eq!(restarted.status.expired_gaps, 24);
+    assert_eq!(restarted.status.intervals.len(), 24);
+    assert!(
+        restarted
+            .status
+            .intervals
+            .values()
+            .all(|complete| !complete)
+    );
+    restarted.save().unwrap();
+    drop(restarted);
+    let mut restarted = Worker::new(settings(&server, &directory), &runtime).unwrap();
+    restarted.schedule(old_end + 48 * HOUR);
+    assert_eq!(
+        restarted.status.expired_gaps, 24,
+        "the same outage is not counted twice"
+    );
+}
+
+#[tokio::test]
+async fn pending_publication_recovery_preserves_unscheduled_outage_gaps() {
+    let server = MockServer::start().await;
+    let directory = Directory::new();
+    let runtime = RuntimeSettings::Network(crate::config::test_support::controller());
+    let mut worker = Worker::new(settings(&server, &directory), &runtime).unwrap();
+    let old_end = START + 24 * HOUR;
+    worker.schedule(old_end);
+    worker
+        .status
+        .intervals
+        .values_mut()
+        .for_each(|complete| *complete = true);
+    worker.status.intervals.insert(START, false);
+    worker.save().unwrap();
+    atomic_write(
+        &directory.0,
+        "pending.json",
+        &serde_json::to_vec(&snapshot()).unwrap(),
+    )
+    .unwrap();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    assert!(worker.publish_pending().await.is_err());
+    drop(worker);
+    server.reset().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let mut restarted = Worker::new(settings(&server, &directory), &runtime).unwrap();
+    restarted.publish_pending().await.unwrap();
+    restarted.schedule(old_end + 48 * HOUR);
+    assert_eq!(restarted.status.expired_gaps, 24);
+    assert_eq!(restarted.status.last_published_interval, Some(START));
+}
