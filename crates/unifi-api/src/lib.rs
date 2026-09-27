@@ -14,7 +14,11 @@
 //! upstream fields, and upstream error bodies never cross this crate's
 //! boundary beyond a bounded message.
 //!
-//! One deliberate exception: a zone-based firewall policy is read and written
+//! The [`collection`] interface also preserves complete fixed traffic reports
+//! for direct export to operator-owned storage. These records are not MCP
+//! responses and must not be logged or returned through interactive tools.
+//!
+//! Another deliberate exception: a zone-based firewall policy is read and written
 //! as its raw record, because the upstream interface offers no partial update
 //! and a model can only resend what it understands — including a number model,
 //! so each property keeps its original JSON text rather than being parsed and
@@ -23,6 +27,7 @@
 
 pub mod capability;
 mod client;
+pub mod collection;
 mod config;
 mod error;
 mod http;

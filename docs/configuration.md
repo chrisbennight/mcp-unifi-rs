@@ -159,3 +159,9 @@ Operators own deployment-specific gateway policy and secret-provider settings.
 This repository supplies the executable, examples, and the manifest scaffold
 from `mcp-unifi-rs --emit-gateway-manifest`. The scaffold is not a published
 gateway policy; the gateway operator must complete its behavior approvals.
+
+## Optional traffic collection
+
+See [retained traffic collection](traffic-collection.md) for the opt-in worker,
+its environment settings, persistent state, InfluxDB setup, and Grafana queries.
+Collection is disabled by default and does not require a model or MCP caller.

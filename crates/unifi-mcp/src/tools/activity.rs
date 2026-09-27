@@ -352,65 +352,24 @@ impl UnifiMcp {
 }
 
 fn totals(report: &ActivityReport) -> Result<(Vec<ClientRow>, Bytes, Bytes), McpError> {
-    let mut seen = BTreeSet::new();
-    let mut clients = Vec::new();
-    let mut total = Bytes::default();
-    for row in &report.client_usage_by_app {
-        if row.usage_by_app.is_empty() {
-            return Err(McpError::internal_error(
-                "activity client has no reported counters",
-                None,
-            ));
-        }
-        let mac = super::normalize_mac(&row.client.mac);
-        if !super::is_client_address(&mac) || !seen.insert(mac.clone()) {
-            return Err(McpError::internal_error(
-                "activity response contains invalid or duplicate client identities",
-                None,
-            ));
-        }
-        let bytes = sum(&row.usage_by_app)?;
-        add(&mut total, &bytes)?;
-        clients.push(ClientRow {
-            mac,
-            name: row.client.name.clone().map(bounded_text),
-            bytes,
-        });
-    }
-    Ok((clients, total, sum(&report.total_usage_by_app)?))
-}
-
-fn sum(rows: &[ApplicationActivity]) -> Result<Bytes, McpError> {
-    let mut total = Bytes::default();
-    let mut seen = BTreeSet::new();
-    for row in rows {
-        if !seen.insert((row.category, row.application)) {
-            return Err(McpError::internal_error(
-                "activity response contains duplicate application counters",
-                None,
-            ));
-        }
-        add(
-            &mut total,
-            &Bytes {
-                rx_bytes: row.bytes_received,
-                tx_bytes: row.bytes_transmitted,
-            },
-        )?;
-    }
-    Ok(total)
-}
-
-fn add(total: &mut Bytes, value: &Bytes) -> Result<(), McpError> {
-    total.rx_bytes = total
-        .rx_bytes
-        .checked_add(value.rx_bytes)
-        .ok_or_else(|| McpError::internal_error("activity byte total overflow", None))?;
-    total.tx_bytes = total
-        .tx_bytes
-        .checked_add(value.tx_bytes)
-        .ok_or_else(|| McpError::internal_error("activity byte total overflow", None))?;
-    Ok(())
+    let (clients, total, applications) =
+        unifi_api::collection::activity_totals(report).map_err(api_error)?;
+    let convert = |value: unifi_api::collection::Bytes| Bytes {
+        rx_bytes: value.rx_bytes,
+        tx_bytes: value.tx_bytes,
+    };
+    Ok((
+        clients
+            .into_iter()
+            .map(|row| ClientRow {
+                mac: row.mac,
+                name: row.name.map(bounded_text),
+                bytes: convert(row.bytes),
+            })
+            .collect(),
+        convert(total),
+        convert(applications),
+    ))
 }
 
 fn temporal(read: ActivityRead<Vec<ActivityBucket>>, window: ActivityWindow) -> TemporalEvidence {
