@@ -747,3 +747,119 @@ async fn wan_coverage_preserves_missing_counters_and_empty_reports() {
         }
     }
 }
+
+#[tokio::test]
+async fn dpi_login_route_failures_remain_errors_before_any_report_request() {
+    for status in [404, 405] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+        if status == 404 {
+            Mock::given(method("POST"))
+                .and(path("/api/login"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path(format!("{LEGACY}/stat/sitedpi")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let error = handler_for(&server)
+            .call(
+                &call(
+                    "stats.query",
+                    &serde_json::json!({"report":"dpiApplications"}),
+                ),
+                None,
+            )
+            .await
+            .expect_err("session error");
+        assert!(error.message.contains(&status.to_string()));
+    }
+}
+
+#[tokio::test]
+async fn dpi_refresh_failures_remain_errors_without_retrying_the_report() {
+    for status in [404, 405] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("set-cookie", "TOKEN=session-1; Path=/"),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{LEGACY}/stat/sitedpi")))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = handler_for(&server)
+            .call(
+                &call(
+                    "stats.query",
+                    &serde_json::json!({"report":"dpiApplications"}),
+                ),
+                None,
+            )
+            .await
+            .expect_err("refresh error");
+        assert!(error.message.contains(&status.to_string()));
+    }
+}
+
+#[tokio::test]
+async fn dpi_expired_session_reauthenticates_once_before_classifying_endpoint_absence() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "TOKEN=session-1; Path=/"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/stat/sitedpi")))
+        .respond_with(ResponseTemplate::new(401))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/stat/sitedpi")))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "stats.query",
+                &serde_json::json!({"report":"dpiApplications"}),
+            ),
+            None,
+        )
+        .await
+        .expect("endpoint coverage")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["coverage"]["status"], "unsupported");
+}

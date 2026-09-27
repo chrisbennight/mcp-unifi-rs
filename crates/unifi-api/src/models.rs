@@ -553,6 +553,16 @@ pub(crate) enum DpiRecord {
 pub struct DpiReport {
     pub applications: Vec<DpiApplication>,
     pub unrecognized_records: usize,
+    pub availability: DpiAvailability,
+}
+
+/// Availability classified only from the DPI endpoint's own response.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum DpiAvailability {
+    #[default]
+    Reported,
+    Unsupported,
+    Unrecognized,
 }
 
 impl DpiReport {

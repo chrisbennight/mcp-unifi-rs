@@ -18,8 +18,8 @@ use unifi_api::{
     ApiError, ProtectAvailability, RecordFingerprint,
     capability::{self, FirewallGeneration},
     models::{
-        ActiveClient, DeviceStatistics, DeviceSummary, PageRequest, PortForward, PortForwardPatch,
-        VoucherCreate, WlanConf, WlanPatch,
+        ActiveClient, DeviceStatistics, DeviceSummary, DpiAvailability, PageRequest, PortForward,
+        PortForwardPatch, VoucherCreate, WlanConf, WlanPatch,
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
@@ -3972,37 +3972,36 @@ impl UnifiMcp {
     }
 
     async fn dpi_stats(&self, top: u16) -> Result<CallToolResult, McpError> {
-        let result = self.legacy().dpi_by_application(self.legacy_site()).await;
-        let report = match result {
-            Ok(report) => report,
-            Err(error) => {
-                let (status, reason) = match error {
-                    ApiError::Status {
-                        status: 404 | 405, ..
-                    } => (
-                        CoverageStatus::Unsupported,
-                        "The legacy DPI endpoint is unavailable on this controller. This does not establish that DPI is disabled.",
-                    ),
-                    ApiError::Decode(_) => (
-                        CoverageStatus::Unrecognized,
-                        "The controller response could not be interpreted as a DPI report.",
-                    ),
-                    other => return Err(api_error(other)),
-                };
-                return structured(StatsQueryOutput {
-                    report: "dpiApplications",
-                    coverage: TrafficCoverage {
-                        status,
-                        reason,
-                        unrecognized_records: 0,
-                    },
-                    counter_semantics: CounterSemantics::dpi(),
-                    total_applications: None,
-                    wan_hourly: None,
-                    top_applications: Some(Vec::new()),
-                });
-            }
+        let report = self
+            .legacy()
+            .dpi_by_application(self.legacy_site())
+            .await
+            .map_err(api_error)?;
+        let unavailable = match report.availability {
+            DpiAvailability::Unsupported => Some((
+                CoverageStatus::Unsupported,
+                "The legacy DPI endpoint is unavailable on this controller. This does not establish that DPI is disabled.",
+            )),
+            DpiAvailability::Unrecognized => Some((
+                CoverageStatus::Unrecognized,
+                "The controller response could not be interpreted as a DPI report.",
+            )),
+            DpiAvailability::Reported => None,
         };
+        if let Some((status, reason)) = unavailable {
+            return structured(StatsQueryOutput {
+                report: "dpiApplications",
+                coverage: TrafficCoverage {
+                    status,
+                    reason,
+                    unrecognized_records: 0,
+                },
+                counter_semantics: CounterSemantics::dpi(),
+                total_applications: None,
+                wan_hourly: None,
+                top_applications: Some(Vec::new()),
+            });
+        }
         let status = match (
             report.applications.is_empty(),
             report.unrecognized_records > 0,

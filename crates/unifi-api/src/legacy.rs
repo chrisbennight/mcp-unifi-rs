@@ -26,8 +26,8 @@ mod system_log;
 use crate::{
     ApiError, BoundedMessage, TlsMode, http,
     models::{
-        ActiveClient, DpiReport, HealthSubsystem, NetworkConf, PortForward, PortForwardPatch,
-        RogueAp, SiteWanSample, TrafficRoute, TrafficRule, WlanConf, WlanPatch,
+        ActiveClient, DpiAvailability, DpiReport, HealthSubsystem, NetworkConf, PortForward,
+        PortForwardPatch, RogueAp, SiteWanSample, TrafficRoute, TrafficRule, WlanConf, WlanPatch,
     },
     protect::{
         ProtectBootstrap, ProtectEvent, ProtectEventContinuation, ProtectEventPage,
@@ -692,21 +692,54 @@ impl LegacyClient {
     }
 
     /// Site-wide deep-packet-inspection counters grouped by application.
+    /// Endpoint absence and unrecognized responses are carried in the report's
+    /// availability; session failures remain errors even with the same status.
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] when the session, request, or decoding fails.
+    /// Returns an [`ApiError`] when the session or request fails.
     pub async fn dpi_by_application(&self, site: &str) -> Result<DpiReport, ApiError> {
+        // Session failures must not be classified as endpoint capabilities.
+        let generation = self.ensure_session().await?;
+        match self.execute_dpi(site).await {
+            Err(error) if is_login_required(&error) => {
+                self.refresh_session(generation).await?;
+                self.execute_dpi(site).await
+            }
+            Err(ApiError::RateLimited {
+                retry_after: Some(delay),
+            }) if delay <= MAXIMUM_RETRY_AFTER => {
+                tokio::time::sleep(delay).await;
+                self.execute_dpi(site).await
+            }
+            other => other,
+        }
+    }
+
+    async fn execute_dpi(&self, site: &str) -> Result<DpiReport, ApiError> {
         let body = serde_json::json!({ "type": "by_app" });
-        self.request_with_reauth(
-            RequestClass::IdempotentRead,
-            Method::POST,
-            site,
-            &["stat", "sitedpi"],
-            Some(body),
-        )
-        .await
-        .map(DpiReport::from_records)
+        let result = self
+            .execute(
+                RequestClass::IdempotentRead,
+                Method::POST,
+                site,
+                &["stat", "sitedpi"],
+                Some(&body),
+                &[],
+            )
+            .await;
+        let availability = match result {
+            Ok(records) => return Ok(DpiReport::from_records(records)),
+            Err(ApiError::Status {
+                status: 404 | 405, ..
+            }) => DpiAvailability::Unsupported,
+            Err(ApiError::Decode(_)) => DpiAvailability::Unrecognized,
+            Err(error) => return Err(error),
+        };
+        Ok(DpiReport {
+            availability,
+            ..DpiReport::default()
+        })
     }
 
     /// Neighboring access points observed by the site's radios.
