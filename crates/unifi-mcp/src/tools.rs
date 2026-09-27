@@ -35,6 +35,7 @@ use crate::{
     registry::{ToolBehavior, ToolKind, ToolSpec},
 };
 
+mod activity;
 mod system_log;
 mod traffic;
 use system_log::{event_row, log_window};
@@ -1612,7 +1613,7 @@ struct EventsSearchOutput {
 enum StatsReport {
     WanHourly,
     DpiApplications,
-    /// Explicit availability of historical WAN-only usage attributed to clients.
+    /// Historical Internet activity attributed to clients by the controller.
     ClientWanHistory,
 }
 
@@ -1621,11 +1622,19 @@ enum StatsReport {
 struct StatsQueryInput {
     /// Which bounded report to run.
     report: StatsReport,
-    /// Window in hours ending now for WAN reports, 1-168. Defaults
-    /// to 24.
+    /// Window in hours, 1-168; defaults to 24. Activity reports end at the
+    /// latest completed UTC hour; wanHourly retains its window ending now.
     hours: Option<u32>,
     /// Number of top applications for the DPI report, 1-50. Defaults to 10.
     top: Option<u16>,
+    /// Fixed interval boundaries in epoch milliseconds. Supply both, on UTC
+    /// hour boundaries, instead of hours; at most seven days, ending in the past.
+    start_ms: Option<u64>,
+    end_ms: Option<u64>,
+    /// Client-history page size, 1-200; defaults to 50.
+    limit: Option<u16>,
+    /// Client-history row offset. Reuse fixed timestamps across pages.
+    offset: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
@@ -1646,6 +1655,10 @@ struct TopApplicationRow {
     category_id: u32,
     tx_bytes: u64,
     rx_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
@@ -1662,6 +1675,9 @@ struct StatsQueryOutput {
     wan_hourly: Option<Vec<WanSampleRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_applications: Option<Vec<TopApplicationRow>>,
+    /// Internet activity totals, temporal evidence, and WAN reconciliation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity: Option<activity::ActivityDetails>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3876,99 +3892,55 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<StatsQueryInput>(params)?;
-        match input.report {
-            StatsReport::WanHourly | StatsReport::ClientWanHistory => {
-                if input.top.is_some() {
-                    return Err(McpError::invalid_params(
-                        "top applies only to the dpiApplications report",
-                        None,
-                    ));
-                }
-                let hours = input.hours.unwrap_or(DEFAULT_WAN_REPORT_HOURS);
-                if !(1..=MAXIMUM_WAN_REPORT_HOURS).contains(&hours) {
-                    return Err(McpError::invalid_params(
-                        format!("hours must be between 1 and {MAXIMUM_WAN_REPORT_HOURS}"),
-                        None,
-                    ));
-                }
-                let now_ms = u64::try_from(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_err(|_| McpError::internal_error("system clock before epoch", None))?
-                        .as_millis(),
-                )
-                .map_err(|_| McpError::internal_error("system clock out of range", None))?;
-                let start_ms = now_ms.saturating_sub(u64::from(hours) * 3_600_000);
-                if input.report == StatsReport::ClientWanHistory {
-                    return structured(StatsQueryOutput {
-                        report: "clientWanHistory",
-                        coverage: TrafficCoverage {
-                            status: CoverageStatus::Unavailable,
-                            reason: "This server has no verified per-client WAN history source. Controller support is unknown; current connection and site application counters cannot substitute for it.",
-                            unrecognized_records: 0,
-                        },
-                        counter_semantics: CounterSemantics::unavailable_client_wan(
-                            start_ms, now_ms,
-                        ),
-                        total_applications: None,
-                        wan_hourly: None,
-                        top_applications: None,
-                    });
-                }
-                let samples: Vec<_> = self
-                    .legacy()
-                    .hourly_wan_report(self.legacy_site(), start_ms, now_ms)
-                    .await
-                    .map_err(api_error)?
-                    .into_iter()
-                    .map(|sample| WanSampleRow {
-                        time: sample.time,
-                        tx_bytes: sample.wan_tx_bytes,
-                        rx_bytes: sample.wan_rx_bytes,
-                    })
-                    .collect();
-                let missing = samples
-                    .iter()
-                    .filter(|row| {
-                        row.time.is_none() || row.rx_bytes.is_none() || row.tx_bytes.is_none()
-                    })
-                    .count();
-                structured(StatsQueryOutput {
-                    report: "wanHourly",
-                    coverage: TrafficCoverage {
-                        status: if samples.is_empty() {
-                            CoverageStatus::Empty
-                        } else if missing > 0 {
-                            CoverageStatus::Partial
-                        } else {
-                            CoverageStatus::Reported
-                        },
-                        reason: "Coverage describes returned buckets only; absent buckets or counters are unknown, not zero.",
-                        unrecognized_records: 0,
-                    },
-                    counter_semantics: CounterSemantics::wan(start_ms, now_ms),
-                    total_applications: None,
-                    wan_hourly: Some(samples),
-                    top_applications: None,
-                })
-            }
-            StatsReport::DpiApplications => {
-                if input.hours.is_some() {
-                    return Err(McpError::invalid_params(
-                        "hours applies only to WAN reports",
-                        None,
-                    ));
-                }
-                let top = input.top.unwrap_or(DEFAULT_TOP_APPLICATIONS);
-                if !(1..=MAXIMUM_TOP_APPLICATIONS).contains(&top) {
-                    return Err(McpError::invalid_params(
-                        format!("top must be between 1 and {MAXIMUM_TOP_APPLICATIONS}"),
-                        None,
-                    ));
-                }
-                self.dpi_stats(top).await
-            }
+        if input.report != StatsReport::WanHourly {
+            return self.activity_stats(input).await;
         }
+        if input.top.is_some() || input.limit.is_some() || input.offset.is_some() {
+            return Err(McpError::invalid_params(
+                "top and client pagination do not apply to wanHourly",
+                None,
+            ));
+        }
+        let window = activity::report_window(&input)?;
+        let samples: Vec<_> = self
+            .legacy()
+            .hourly_wan_report(self.legacy_site(), window.start, window.end)
+            .await
+            .map_err(api_error)?
+            .into_iter()
+            .filter(|sample| {
+                sample
+                    .time
+                    .is_none_or(|time| time >= window.start && time < window.end)
+            })
+            .map(|sample| WanSampleRow {
+                time: sample.time,
+                tx_bytes: sample.wan_tx_bytes,
+                rx_bytes: sample.wan_rx_bytes,
+            })
+            .collect();
+        let missing = samples
+            .iter()
+            .any(|row| row.time.is_none() || row.rx_bytes.is_none() || row.tx_bytes.is_none());
+        structured(StatsQueryOutput {
+            report: "wanHourly",
+            coverage: TrafficCoverage {
+                status: if samples.is_empty() {
+                    CoverageStatus::Empty
+                } else if missing {
+                    CoverageStatus::Partial
+                } else {
+                    CoverageStatus::Reported
+                },
+                reason: "Coverage describes returned buckets only; absent buckets or counters are unknown, not zero.",
+                unrecognized_records: 0,
+            },
+            counter_semantics: CounterSemantics::wan(window.start, window.end),
+            total_applications: None,
+            wan_hourly: Some(samples),
+            top_applications: None,
+            activity: None,
+        })
     }
 
     async fn dpi_stats(&self, top: u16) -> Result<CallToolResult, McpError> {
@@ -4000,6 +3972,7 @@ impl UnifiMcp {
                 total_applications: None,
                 wan_hourly: None,
                 top_applications: Some(Vec::new()),
+                activity: None,
             });
         }
         let status = match (
@@ -4017,6 +3990,8 @@ impl UnifiMcp {
             .map(|row| TopApplicationRow {
                 application_id: row.app,
                 category_id: row.cat,
+                application_name: None,
+                category_name: None,
                 tx_bytes: row.tx_bytes,
                 rx_bytes: row.rx_bytes,
             })
@@ -4037,6 +4012,7 @@ impl UnifiMcp {
             total_applications: Some(total_applications),
             wan_hourly: None,
             top_applications: Some(applications),
+            activity: None,
         })
     }
 

@@ -125,33 +125,46 @@ limited to 256 characters with a visible ellipsis when shortened.
 
 ### `stats.query`
 
-`report`, `hours`, `top`.
+`report`, `hours`, `startMs`, `endMs`, `top`, `limit`, `offset`.
 
-Traffic reports with explicit `coverage` and `counterSemantics`:
+- `clientWanHistory` returns the controller Activity view's historical Internet
+  download/upload totals per client, sorted by combined bytes, with MAC address
+  and display name. `limit` (1-200, default 50) and `offset` page the returned
+  client inventory. `clientTotals` covers all returned clients, not just the page.
+- `dpiApplications` ranks the same interval's application counters. `top`
+  (1-50, default 10) bounds the ranking; `totalApplications` reports the number
+  before selection. Numeric category/application IDs remain available when
+  official catalog names are missing. `namesStatus` identifies lookup failures.
+- `wanHourly` returns site WAN counters without client attribution. Missing
+  counters remain unknown. Returned timestamps are restricted to the requested
+  window; the bucket at `endMs` is excluded.
 
-- `wanHourly`: hourly site WAN byte counters over a window up to seven days.
-  Requested boundaries are included in epoch milliseconds. Edge buckets may be
-  partial; absent hours or counters do not mean zero. No client attribution is
-  implied.
-- `dpiApplications`: top applications by combined received and transmitted
-  bytes, with numeric category and application identifiers. Both flat legacy
-  rows and `by_app` tables are accepted. Only records with both identifiers and
-  both byte counters enter the ranking; valid zero values are preserved.
-  `totalApplications` counts usable records before the requested top-N bound.
-  Coverage is `reported`, `partial`, `empty`, or `unrecognized`, with an explicit
-  count of unrecognized records. Missing legacy endpoints return `unsupported`;
-  authentication and other upstream failures remain tool errors. These states
-  describe the source response, not whether traffic identification is enabled.
-- `clientWanHistory`: accepts the bounded `hours` window and explicitly returns
-  `unavailable`. This server has no verified source for historical WAN-only
-  traffic attributed to clients; controller support remains unknown. No
-  upstream query runs and no current client or site counters are substituted.
+Use both `startMs` and `endMs` for a fixed interval of whole UTC hours, at most
+seven days, ending in the past. Alternatively, `hours` (1-168, default 24)
+selects a relative window. Activity reports end at the latest completed hour;
+`wanHourly` retains its relative window ending now. Reuse the returned fixed
+boundaries for subsequent pages and comparisons; these reads are not atomic
+snapshots of controller history.
 
-The `hours` argument applies to WAN reports; `top` applies only to applications.
-DPI counter windows, reset behavior, direction relative to client upload or
-download, and WAN-only scope are not established by the legacy response. Client
-uptime also does not establish a common counter start. Do not interpret these
-values as monthly Internet usage. See [traffic compatibility](compatibility.md#traffic-counter-evidence).
+Activity responses include site graph sample timestamps as `temporalEvidence`.
+Those samples do not establish per-client collection boundaries. Reconciliation
+compares all returned client totals with complete site WAN hours over the same
+requested boundaries. Signed differences are site minus clients, separately
+by direction; missing WAN hours suppress the comparison instead of counting as
+zero. Differences do not establish their cause. Collection and classification
+completeness remain unknown, so nonempty activity has `partial` coverage.
+An empty report is not proof of zero traffic.
+
+Unsupported Activity sources return an explicit status. For application reports
+only, an absent Activity endpoint permits the original legacy DPI fallback
+when no explicit time window was requested;
+its `counterSemantics` explicitly retain the unverified interval, direction,
+and scope. Authentication failures never trigger that fallback. An unrecognized
+Activity response is reported as such. Record/string/body bounds fail loudly;
+there is no silent scan truncation. Display text uses visible truncation markers.
+
+See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
+[traffic source evidence](traffic-history.md) for source limitations and examples.
 
 ### `cameras.search`, `cameras.status`, `protect.overview`, `protect.events`
 

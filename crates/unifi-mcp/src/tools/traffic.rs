@@ -79,17 +79,6 @@ impl CounterSemantics {
             requested_end_ms: Some(end),
         }
     }
-
-    pub(super) fn unavailable_client_wan(start: u64, end: u64) -> Self {
-        Self {
-            source: "none",
-            scope: "Requested per-client WAN-only history; no measurements available.",
-            direction: "No per-client WAN counters available.",
-            window: "Requested window only; no measurement window is established.",
-            reset: "Unknown; no verified source.",
-            ..Self::wan(start, end)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
