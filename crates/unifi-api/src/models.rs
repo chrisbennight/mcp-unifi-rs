@@ -399,6 +399,10 @@ pub struct ActiveClient {
     pub rssi: Option<i32>,
     pub tx_bytes: Option<u64>,
     pub rx_bytes: Option<u64>,
+    #[serde(rename = "wired-tx_bytes")]
+    pub wired_tx_bytes: Option<u64>,
+    #[serde(rename = "wired-rx_bytes")]
+    pub wired_rx_bytes: Option<u64>,
     /// Seconds since association.
     pub uptime: Option<u64>,
     /// Epoch seconds.
@@ -522,10 +526,57 @@ impl WlanPatch {
 /// Per-application deep-packet-inspection counters from `stat/sitedpi`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DpiApplication {
-    pub app: Option<u32>,
-    pub cat: Option<u32>,
-    pub rx_bytes: Option<u64>,
-    pub tx_bytes: Option<u64>,
+    pub app: u32,
+    pub cat: u32,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+/// A recognized application or an explicitly counted unusable record.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum DpiApplicationRecord {
+    Application(DpiApplication),
+    Unrecognized(serde::de::IgnoredAny),
+}
+
+/// Legacy controllers return either a table with `by_app` or flat rows.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum DpiRecord {
+    Table { by_app: Vec<DpiApplicationRecord> },
+    Flat(DpiApplicationRecord),
+}
+
+/// Usable counters and the number of records that could not be interpreted.
+#[derive(Debug, Default)]
+pub struct DpiReport {
+    pub applications: Vec<DpiApplication>,
+    pub unrecognized_records: usize,
+}
+
+impl DpiReport {
+    pub(crate) fn from_records(records: Vec<DpiRecord>) -> Self {
+        let mut report = Self::default();
+        for record in records {
+            match record {
+                DpiRecord::Table { by_app } => {
+                    for application in by_app {
+                        report.add(application);
+                    }
+                }
+                DpiRecord::Flat(application) => report.add(application),
+            }
+        }
+        report
+    }
+
+    fn add(&mut self, record: DpiApplicationRecord) {
+        match record {
+            DpiApplicationRecord::Application(application) => self.applications.push(application),
+            DpiApplicationRecord::Unrecognized(_) => self.unrecognized_records += 1,
+        }
+    }
 }
 
 /// Neighboring access point from the legacy `stat/rogueap` read.

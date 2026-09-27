@@ -651,7 +651,8 @@ async fn resource_reads_decode_their_allowlisted_projections() {
     let rogues = client.rogue_aps("default").await.expect("rogues");
     assert_eq!(rogues[0].rssi, Some(-70));
     let dpi = client.dpi_by_application("default").await.expect("dpi");
-    assert_eq!(dpi[0].rx_bytes, Some(1000));
+    assert_eq!(dpi.applications[0].rx_bytes, 1000);
+    assert_eq!(dpi.unrecognized_records, 0);
 }
 
 #[tokio::test]
@@ -835,7 +836,7 @@ async fn rate_limited_post_bodied_reads_retry_once_like_any_idempotent_read() {
     Mock::given(method("POST"))
         .and(path(format!("{prefix}/stat/sitedpi")))
         .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
-            &serde_json::json!([{"app": 5, "cat": 4, "tx_bytes": 100}]),
+            &serde_json::json!([{"app": 5, "cat": 4, "tx_bytes": 100, "rx_bytes": 0}]),
         )))
         .expect(1)
         .mount(&server)
@@ -845,7 +846,7 @@ async fn rate_limited_post_bodied_reads_retry_once_like_any_idempotent_read() {
         .dpi_by_application("default")
         .await
         .expect("retried idempotent read");
-    assert_eq!(applications[0].app, Some(5));
+    assert_eq!(applications.applications[0].app, 5);
 }
 
 #[tokio::test]

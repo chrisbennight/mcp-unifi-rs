@@ -446,6 +446,18 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
     let output = result.structured_content.expect("structured");
     assert_eq!(output["report"], "wanHourly");
     assert_eq!(output["wanHourly"][0]["rxBytes"], 4096.0);
+    assert_eq!(output["coverage"]["status"], "reported");
+    assert_eq!(
+        output["counterSemantics"]["source"],
+        "stat/report/hourly.site"
+    );
+    assert_eq!(output["counterSemantics"]["unit"], "bytes");
+    let semantics = &output["counterSemantics"];
+    assert_eq!(
+        semantics["requestedEndMs"].as_u64().expect("end")
+            - semantics["requestedStartMs"].as_u64().expect("start"),
+        24 * 3_600_000
+    );
     assert!(output.get("topApplications").is_none());
 
     // Top talkers rank by combined volume.
@@ -464,6 +476,7 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
     let apps = output["topApplications"].as_array().expect("apps");
     assert_eq!(apps.len(), 1);
     assert_eq!(apps[0]["applicationId"], 9);
+    assert_eq!(output["totalApplications"], 2);
 
     // Cross-report parameters are caller errors.
     let error = handler
@@ -477,4 +490,260 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
         .await
         .expect_err("cross parameter");
     assert!(error.message.contains("dpiApplications"));
+}
+
+#[tokio::test]
+async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
+    let cases = [
+        (
+            serde_json::json!([{"by_app":[{"app":5,"cat":4,"rx_bytes":0,"tx_bytes":0}],"by_cat":[],"secret":"do-not-return"}]),
+            "reported",
+            1,
+            0,
+        ),
+        (serde_json::json!([{"by_app":[]}]), "empty", 0, 0),
+        (serde_json::json!([]), "empty", 0, 0),
+        (serde_json::json!([{}]), "unrecognized", 0, 1),
+        (serde_json::json!([{"by_app":null}]), "unrecognized", 0, 1),
+        (
+            serde_json::json!([{"app":5,"cat":4,"rx_bytes":0}]),
+            "unrecognized",
+            0,
+            1,
+        ),
+        (
+            serde_json::json!([{"by_app":[{"app":5,"cat":4,"rx_bytes":3,"tx_bytes":7},{"app":6,"cat":4,"rx_bytes":-1,"tx_bytes":2}]}]),
+            "partial",
+            1,
+            1,
+        ),
+        (
+            serde_json::json!([{"app":5,"cat":4,"rx_bytes":3,"tx_bytes":7},null]),
+            "partial",
+            1,
+            1,
+        ),
+    ];
+    for (data, status, count, unrecognized) in cases {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        Mock::given(method("POST"))
+            .and(path(format!("{LEGACY}/stat/sitedpi")))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"type":"by_app"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&data)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call(
+                    "stats.query",
+                    &serde_json::json!({"report":"dpiApplications"}),
+                ),
+                None,
+            )
+            .await
+            .expect("DPI report")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["coverage"]["status"], status, "{data}");
+        assert_eq!(output["coverage"]["unrecognizedRecords"], unrecognized);
+        assert_eq!(output["totalApplications"], count);
+        assert_eq!(
+            output["topApplications"].as_array().expect("rows").len(),
+            count
+        );
+        assert_eq!(output["counterSemantics"]["source"], "stat/sitedpi");
+        assert!(
+            output["counterSemantics"]["window"]
+                .as_str()
+                .expect("window")
+                .contains("Not supplied")
+        );
+        assert!(!output.to_string().contains("do-not-return"));
+        if status == "reported" {
+            assert_eq!(output["topApplications"][0]["rxBytes"], 0);
+            assert_eq!(output["topApplications"][0]["txBytes"], 0);
+        }
+    }
+}
+
+#[tokio::test]
+async fn dpi_missing_endpoint_and_bad_envelope_have_explicit_coverage() {
+    for (response, expected) in [
+        (ResponseTemplate::new(404), "unsupported"),
+        (ResponseTemplate::new(405), "unsupported"),
+        (
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"meta":{"rc":"ok"},"data":{"unexpected":true}})),
+            "unrecognized",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        Mock::given(method("POST"))
+            .and(path(format!("{LEGACY}/stat/sitedpi")))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call(
+                    "stats.query",
+                    &serde_json::json!({"report":"dpiApplications"}),
+                ),
+                None,
+            )
+            .await
+            .expect("coverage")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["coverage"]["status"], expected);
+        assert_eq!(output["topApplications"], serde_json::json!([]));
+        assert!(output.get("totalApplications").is_none());
+    }
+}
+
+#[tokio::test]
+async fn dpi_permission_errors_remain_errors_and_are_not_reported_as_disabled() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/stat/sitedpi")))
+        .respond_with(ResponseTemplate::new(403).set_body_string("private upstream detail"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "stats.query",
+                &serde_json::json!({"report":"dpiApplications"}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("permission error");
+    assert!(error.message.contains("403"));
+    assert!(!error.message.contains("private upstream"));
+}
+
+#[tokio::test]
+async fn client_wan_history_is_explicitly_unavailable_without_substituting_counters() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let output = handler
+        .call(
+            &call(
+                "stats.query",
+                &serde_json::json!({"report":"clientWanHistory","hours":168}),
+            ),
+            None,
+        )
+        .await
+        .expect("availability")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["coverage"]["status"], "unavailable");
+    assert!(
+        output["coverage"]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("Controller support is unknown")
+    );
+    assert_eq!(output["counterSemantics"]["source"], "none");
+    let semantics = &output["counterSemantics"];
+    assert_eq!(
+        semantics["requestedEndMs"].as_u64().expect("end")
+            - semantics["requestedStartMs"].as_u64().expect("start"),
+        168 * 3_600_000
+    );
+    assert!(output.get("wanHourly").is_none());
+    assert!(output.get("topApplications").is_none());
+    for arguments in [
+        serde_json::json!({"report":"clientWanHistory","hours":0}),
+        serde_json::json!({"report":"clientWanHistory","hours":169}),
+        serde_json::json!({"report":"clientWanHistory","top":1}),
+    ] {
+        assert!(
+            handler
+                .call(&call("stats.query", &arguments), None)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn dpi_top_selection_ranks_large_counters_without_saturating_the_sum() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/stat/sitedpi")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"app":1,"cat":4,"rx_bytes":u64::MAX,"tx_bytes":1},
+                {"app":2,"cat":4,"rx_bytes":u64::MAX,"tx_bytes":u64::MAX}
+            ]))),
+        )
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "stats.query",
+                &serde_json::json!({"report":"dpiApplications","top":1}),
+            ),
+            None,
+        )
+        .await
+        .expect("ranking")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["topApplications"][0]["applicationId"], 2);
+    assert_eq!(output["topApplications"].as_array().expect("rows").len(), 1);
+    assert_eq!(output["totalApplications"], 2);
+}
+
+#[tokio::test]
+async fn wan_coverage_preserves_missing_counters_and_empty_reports() {
+    for (data, status) in [
+        (serde_json::json!([]), "empty"),
+        (
+            serde_json::json!([{"time":1_755_300_000_000_u64,"wan-rx_bytes":0}]),
+            "partial",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        Mock::given(method("POST"))
+            .and(path(format!("{LEGACY}/stat/report/hourly.site")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&data)))
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call("stats.query", &serde_json::json!({"report":"wanHourly"})),
+                None,
+            )
+            .await
+            .expect("WAN report")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["coverage"]["status"], status);
+        if status == "partial" {
+            assert_eq!(output["wanHourly"][0]["rxBytes"], 0.0);
+            assert!(output["wanHourly"][0]["txBytes"].is_null());
+        }
+    }
 }

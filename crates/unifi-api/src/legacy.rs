@@ -26,7 +26,7 @@ mod system_log;
 use crate::{
     ApiError, BoundedMessage, TlsMode, http,
     models::{
-        ActiveClient, DpiApplication, HealthSubsystem, NetworkConf, PortForward, PortForwardPatch,
+        ActiveClient, DpiReport, HealthSubsystem, NetworkConf, PortForward, PortForwardPatch,
         RogueAp, SiteWanSample, TrafficRoute, TrafficRule, WlanConf, WlanPatch,
     },
     protect::{
@@ -696,7 +696,7 @@ impl LegacyClient {
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session, request, or decoding fails.
-    pub async fn dpi_by_application(&self, site: &str) -> Result<Vec<DpiApplication>, ApiError> {
+    pub async fn dpi_by_application(&self, site: &str) -> Result<DpiReport, ApiError> {
         let body = serde_json::json!({ "type": "by_app" });
         self.request_with_reauth(
             RequestClass::IdempotentRead,
@@ -706,6 +706,7 @@ impl LegacyClient {
             Some(body),
         )
         .await
+        .map(DpiReport::from_records)
     }
 
     /// Neighboring access points observed by the site's radios.

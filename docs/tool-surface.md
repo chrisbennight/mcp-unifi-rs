@@ -39,6 +39,14 @@ wired versus wireless. Paged, name-sorted, with `totalMatches` and `nextOffset`.
 `detail` chooses concise identity-and-connection rows or full association
 detail.
 
+Full detail includes `counterCoverage` per client and shared `counterSemantics`.
+Known wired clients prefer the `wired-tx_bytes` / `wired-rx_bytes` pair when
+either field is present; otherwise the generic pair is used. Missing members
+stay missing: fields from different counter families are never combined.
+`reported` means both counters were supplied, `partial` means one was supplied,
+and `unavailable` means neither was supplied. These are connection counters,
+not verified WAN-only usage, rates, or totals over a shared time window.
+
 ### `clients.context`
 
 `client` — MAC, exact name, or exact hostname.
@@ -47,6 +55,9 @@ One client end to end: identity, connection and access point, signal,
 addressing including any fixed IP, usage, and its recent controller events. The
 tool to reach for when the question is about one device rather than a
 population.
+
+The counter selection and coverage match full client search. `counterSemantics`
+states source, byte units, scope, direction, window, and reset limitations.
 
 Recent events cover the last 24 hours: scan up to 200 site-wide system logs,
 then return up to 20 matching client events. `recentEventsTruncated` signals
@@ -116,8 +127,31 @@ limited to 256 characters with a visible ellipsis when shortened.
 
 `report`, `hours`, `top`.
 
-Bounded historical statistics: hourly WAN throughput over a window up to seven
-days, or top applications by deep packet inspection volume.
+Traffic reports with explicit `coverage` and `counterSemantics`:
+
+- `wanHourly`: hourly site WAN byte counters over a window up to seven days.
+  Requested boundaries are included in epoch milliseconds. Edge buckets may be
+  partial; absent hours or counters do not mean zero. No client attribution is
+  implied.
+- `dpiApplications`: top applications by combined received and transmitted
+  bytes, with numeric category and application identifiers. Both flat legacy
+  rows and `by_app` tables are accepted. Only records with both identifiers and
+  both byte counters enter the ranking; valid zero values are preserved.
+  `totalApplications` counts usable records before the requested top-N bound.
+  Coverage is `reported`, `partial`, `empty`, or `unrecognized`, with an explicit
+  count of unrecognized records. Missing legacy endpoints return `unsupported`;
+  authentication and other upstream failures remain tool errors. These states
+  describe the source response, not whether traffic identification is enabled.
+- `clientWanHistory`: accepts the bounded `hours` window and explicitly returns
+  `unavailable`. This server has no verified source for historical WAN-only
+  traffic attributed to clients; controller support remains unknown. No
+  upstream query runs and no current client or site counters are substituted.
+
+The `hours` argument applies to WAN reports; `top` applies only to applications.
+DPI counter windows, reset behavior, direction relative to client upload or
+download, and WAN-only scope are not established by the legacy response. Client
+uptime also does not establish a common counter start. Do not interpret these
+values as monthly Internet usage. See [traffic compatibility](compatibility.md#traffic-counter-evidence).
 
 ### `cameras.search`, `cameras.status`, `protect.overview`, `protect.events`
 
