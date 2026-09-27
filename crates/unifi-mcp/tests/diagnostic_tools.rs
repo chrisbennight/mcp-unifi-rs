@@ -494,6 +494,9 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
 
 #[tokio::test]
 async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
+    let observed: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/network_10_6_106_traffic.json"))
+            .expect("sanitized controller fixture");
     let cases = [
         (
             serde_json::json!([{"by_app":[{"app":5,"cat":4,"rx_bytes":0,"tx_bytes":0}],"by_cat":[],"secret":"do-not-return"}]),
@@ -503,7 +506,7 @@ async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
         ),
         (serde_json::json!([{"by_app":[]}]), "empty", 0, 0),
         (serde_json::json!([]), "empty", 0, 0),
-        (serde_json::json!([{}]), "unrecognized", 0, 1),
+        (observed["dpi"]["data"].clone(), "unrecognized", 0, 1),
         (serde_json::json!([{"by_app":null}]), "unrecognized", 0, 1),
         (
             serde_json::json!([{"app":5,"cat":4,"rx_bytes":0}]),
