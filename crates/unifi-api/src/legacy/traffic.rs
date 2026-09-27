@@ -60,7 +60,7 @@ impl LegacyClient {
         }
     }
 
-    async fn activity_read<T: DeserializeOwned>(
+    pub(super) async fn activity_read<T: DeserializeOwned>(
         &self,
         site: &str,
         window: ActivityWindow,

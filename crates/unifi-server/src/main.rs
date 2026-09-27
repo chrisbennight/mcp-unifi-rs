@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use unifi_server::{
+    collector::{self, CollectionSettings},
     config::Settings,
     gateway_manifest,
     portable::{DirectHttpSettings, PortableSettings, build_direct_router, serve_stdio},
@@ -19,6 +20,8 @@ enum Transport {
     Gateway,
     Stdio,
     Http,
+    /// Run only the optional traffic collector, without an MCP listener.
+    Collect,
 }
 
 #[derive(Debug, Parser)]
@@ -47,6 +50,27 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let collection = CollectionSettings::from_env()?;
+    anyhow::ensure!(
+        args.transport != Transport::Stdio || collection.is_none(),
+        "continuous collection requires HTTP, gateway, or collect transport"
+    );
+    if args.transport == Transport::Collect {
+        anyhow::ensure!(
+            collection.is_some(),
+            "collect transport requires collection enabled"
+        );
+        init_logging("info")?;
+        let runtime = Settings::runtime_from_env()?;
+        let cancellation = CancellationToken::new();
+        let task = collector::start(collection, &runtime, &cancellation)?;
+        shutdown(cancellation).await;
+        if let Some(task) = task {
+            task.await?;
+        }
+        return Ok(());
+    }
+
     if args.transport != Transport::Gateway {
         let settings = PortableSettings::from_env()?;
         init_logging(&settings.log_level)?;
@@ -66,16 +90,22 @@ async fn main() -> Result<()> {
             )
             .await;
         }
+        let task = collector::start(collection, &runtime, &cancellation)?;
         let http = DirectHttpSettings::from_env()?;
         let router = build_direct_router(&settings, &http, handler, &cancellation);
         let listener = TcpListener::bind((http.host.as_str(), http.port))
             .await
             .context("bind listener")?;
         info!(address = %listener.local_addr()?, "UniFi MCP listening");
-        return axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown(cancellation))
+        let result = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown(cancellation.clone()))
             .await
             .context("serve HTTP");
+        cancellation.cancel();
+        if let Some(task) = task {
+            task.await?;
+        }
+        return result;
     }
 
     let settings = Settings::from_env().context("invalid server configuration")?;
@@ -83,19 +113,35 @@ async fn main() -> Result<()> {
 
     let handler = build_handler(&settings.runtime).context("build console clients")?;
     let cancellation = CancellationToken::new();
+    let task = collector::start(collection, &settings.runtime, &cancellation)?;
     let router = build_router(&settings, handler, &cancellation).context("compose HTTP router")?;
     let listener = TcpListener::bind((settings.host.as_str(), settings.port))
         .await
         .context("bind listener")?;
     let address = listener.local_addr().context("read bound address")?;
     info!(%address, "UniFi MCP listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown(cancellation))
+    let result = axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown(cancellation.clone()))
         .await
-        .context("serve HTTP")
+        .context("serve HTTP");
+    cancellation.cancel();
+    if let Some(task) = task {
+        task.await?;
+    }
+    result
 }
 
 async fn shutdown(cancellation: CancellationToken) {
+    #[cfg(unix)]
+    {
+        let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = signal::ctrl_c() => (),
+            _ = terminate.recv() => (),
+        }
+    }
+    #[cfg(not(unix))]
     let _ = signal::ctrl_c().await;
     // Ending in-flight MCP streams lets graceful shutdown finish promptly.
     cancellation.cancel();

@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 use url::Url;
 use zeroize::Zeroizing;
 
+mod collection;
 mod system_log;
 mod traffic;
 
@@ -1090,6 +1091,44 @@ impl LegacyClient {
         body: Option<&serde_json::Value>,
         secrets: &[&str],
     ) -> Result<Vec<T>, ApiError> {
+        let bytes = self
+            .execute_bytes(class, method, site, tail, body, secrets)
+            .await?;
+        let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
+            .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
+        if envelope.meta.rc == "ok" {
+            Ok(envelope.data)
+        } else {
+            let raw = envelope.meta.msg.as_deref();
+            // Session expiry read out of the controller's message text is
+            // trusted only for reads. The text can echo a value the caller
+            // submitted, so for a mutation it could be made to look like
+            // expiry and earn a resend; a mutation therefore learns about
+            // expiry only from the 401 status, which reflected content
+            // cannot forge. Classification precedes the scrub so a secret
+            // that merely resembles the token cannot disguise a real expiry
+            // on the read path.
+            if class == RequestClass::IdempotentRead && raw == Some(LOGIN_REQUIRED_CODE) {
+                return Err(login_required_error());
+            }
+            // The decoded msg carries a reflected credential literally, so
+            // the scrub applies here exactly as on the failure path, over the
+            // login password and anything secret this request just sent.
+            let secrets = self.request_secrets(secrets);
+            let scrubbed = raw.map(|msg| scrub(msg, &secrets));
+            Err(rejection(scrubbed.as_deref()))
+        }
+    }
+
+    async fn execute_bytes(
+        &self,
+        class: RequestClass,
+        method: Method,
+        site: &str,
+        tail: &[&str],
+        body: Option<&serde_json::Value>,
+        secrets: &[&str],
+    ) -> Result<Vec<u8>, ApiError> {
         let (kind, csrf) = {
             let session = self.session.lock().await;
             let kind = session.kind.ok_or_else(|| {
@@ -1139,30 +1178,7 @@ impl LegacyClient {
                 class,
             ));
         }
-        let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
-            .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
-        if envelope.meta.rc == "ok" {
-            Ok(envelope.data)
-        } else {
-            let raw = envelope.meta.msg.as_deref();
-            // Session expiry read out of the controller's message text is
-            // trusted only for reads. The text can echo a value the caller
-            // submitted, so for a mutation it could be made to look like
-            // expiry and earn a resend; a mutation therefore learns about
-            // expiry only from the 401 status, which reflected content
-            // cannot forge. Classification precedes the scrub so a secret
-            // that merely resembles the token cannot disguise a real expiry
-            // on the read path.
-            if class == RequestClass::IdempotentRead && raw == Some(LOGIN_REQUIRED_CODE) {
-                return Err(login_required_error());
-            }
-            // The decoded msg carries a reflected credential literally, so
-            // the scrub applies here exactly as on the failure path, over the
-            // login password and anything secret this request just sent.
-            let secrets = self.request_secrets(secrets);
-            let scrubbed = raw.map(|msg| scrub(msg, &secrets));
-            Err(rejection(scrubbed.as_deref()))
-        }
+        Ok(bytes)
     }
 
     /// Ensure an authenticated session exists and return its generation. A

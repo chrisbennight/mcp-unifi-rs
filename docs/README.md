@@ -19,3 +19,5 @@ client and make a read-only inventory call. Choose the guide for your next task.
 
 [Get help](../SUPPORT.md) · [Report a vulnerability](../SECURITY.md) ·
 [License](../LICENSE)
+
+- [Retained traffic collection](traffic-collection.md): deterministic hourly exports and Grafana queries.

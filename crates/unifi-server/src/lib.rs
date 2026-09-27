@@ -5,6 +5,7 @@
 //! stateless Streamable HTTP MCP mount, and gateway manifest emission.
 
 pub mod auth;
+pub mod collector;
 pub mod config;
 pub mod portable;
 pub mod server;
