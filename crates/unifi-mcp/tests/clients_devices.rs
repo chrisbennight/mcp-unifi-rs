@@ -589,3 +589,93 @@ async fn search_pagination_bounds_are_enforced() {
         );
     }
 }
+
+#[tokio::test]
+async fn wired_counter_selection_preserves_missing_values_and_pagination() {
+    let server = console_fixture().await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/api/s/default/stat/sta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+            {"name":"a","mac":LAPTOP_MAC,"is_wired":true,"wired-rx_bytes":0,"wired-tx_bytes":20,"rx_bytes":99,"tx_bytes":99},
+            {"name":"b","is_wired":true,"wired-rx_bytes":30,"tx_bytes":99},
+            {"name":"c","is_wired":true,"rx_bytes":40,"tx_bytes":50},
+            {"name":"d","is_wired":true},
+            {"name":"e","is_wired":false,"rx_bytes":60,"tx_bytes":70,"wired-rx_bytes":99,"wired-tx_bytes":99}
+        ])))).with_priority(1).mount(&server).await;
+    let handler = handler_for(&server);
+    let output = handler
+        .call(
+            &call(
+                "clients.search",
+                &serde_json::json!({"detail":"full","limit":2}),
+            ),
+            None,
+        )
+        .await
+        .expect("first page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["totalMatches"], 5);
+    assert_eq!(output["nextOffset"], 2);
+    assert_eq!(output["clients"][0]["rxBytes"], 0);
+    assert_eq!(output["clients"][0]["txBytes"], 20);
+    assert_eq!(
+        output["clients"][0]["counterCoverage"]["status"],
+        "reported"
+    );
+    assert_eq!(output["clients"][1]["rxBytes"], 30);
+    assert!(output["clients"][1].get("txBytes").is_none());
+    assert_eq!(output["clients"][1]["counterCoverage"]["status"], "partial");
+    assert!(
+        output["counterSemantics"]["scope"]
+            .as_str()
+            .expect("scope")
+            .contains("LAN versus WAN is not distinguished")
+    );
+    let second = handler
+        .call(
+            &call(
+                "clients.search",
+                &serde_json::json!({"detail":"full","offset":2}),
+            ),
+            None,
+        )
+        .await
+        .expect("second page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(second["clients"][0]["rxBytes"], 40);
+    assert_eq!(second["clients"][0]["txBytes"], 50);
+    assert!(second["clients"][1].get("rxBytes").is_none());
+    assert_eq!(
+        second["clients"][1]["counterCoverage"]["status"],
+        "unavailable"
+    );
+    assert_eq!(second["clients"][2]["rxBytes"], 60);
+    assert_eq!(second["clients"][2]["txBytes"], 70);
+    let context = handler
+        .call(
+            &call("clients.context", &serde_json::json!({"client":LAPTOP_MAC})),
+            None,
+        )
+        .await
+        .expect("context")
+        .structured_content
+        .expect("structured");
+    assert_eq!(context["rxBytes"], 0);
+    assert_eq!(context["txBytes"], 20);
+    assert_eq!(
+        context["counterCoverage"],
+        output["clients"][0]["counterCoverage"]
+    );
+    assert_eq!(context["counterSemantics"], output["counterSemantics"]);
+    let compact = handler
+        .call(&call("clients.search", &serde_json::json!({})), None)
+        .await
+        .expect("compact")
+        .structured_content
+        .expect("structured");
+    assert!(compact.get("counterSemantics").is_none());
+    assert!(compact["clients"][0].get("counterCoverage").is_none());
+    assert!(compact["clients"][0].get("rxBytes").is_none());
+}

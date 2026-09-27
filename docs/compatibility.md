@@ -55,6 +55,30 @@ inventory are different outcomes; failures are not converted into an empty
 list. File a compatibility issue with the application version, tool, and
 redacted error if the documented setup does not work.
 
+## Traffic counter evidence
+
+Traffic normalization has isolated fixtures for flat DPI application records,
+legacy `by_app` tables, and wired and wireless client counters. Field contracts
+are corroborated by [Unpoller's DPI models](https://github.com/unpoller/unifi/blob/master/dpi.go)
+and [aiounifi's client model](https://github.com/Kane610/aiounifi/blob/master/aiounifi/models/client.py).
+The fixtures use synthetic numeric values and identifiers; they are not captures
+from Network 10.6.106. Live validation of these traffic shapes remains pending.
+
+The legacy DPI source supplies no verified common measurement window, counter
+reset interval, or WAN-only classification coverage. Empty or malformed data
+cannot establish whether traffic identification is enabled. Missing fields are
+never converted into measured zero traffic. The tool returns explicit coverage,
+including excluded records, alongside the bounded ranking.
+
+[Art of WiFi's client](https://github.com/Art-of-WiFi/UniFi-API-client/blob/master/src/Client.php)
+exposes `stat_hourly_user` through `stat/report/hourly.user` with `rx_bytes` and
+`tx_bytes`, conditional on historical retention settings. That contract does
+not establish WAN-only scope. The server therefore does not substitute this
+report or current connection counters for historical per-client WAN usage.
+`stats.query` with `report: "clientWanHistory"` reports server-side unavailability
+and leaves controller support unknown. A verified WAN-only source and sanitized
+controller fixtures are needed before measurements can be returned.
+
 ## Backend used by each capability
 
 | Capability | Backend used here |

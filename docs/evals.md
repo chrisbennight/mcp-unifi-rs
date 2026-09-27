@@ -150,12 +150,15 @@ appear to answer the question actually asked.
 
 **"Which client is using the most bandwidth?"**
 Expected: a client search at full detail, ranked on the per-client byte
-counters, **and said as what it is** — those counters are cumulative since the
-client associated, next to an uptime, with no rate and no shared window. So
+counters, **and said as what it is** — those counters have no verified common
+start or reset interval, no rate, and no proven WAN-only scope. Uptime does not
+establish a counter's start. Read `counterCoverage` and `counterSemantics`, and
+never treat a missing counter as zero. So
 they rank how much a client has moved, not how fast it is moving now. A laptop
 connected all week can out-total the one saturating the link this minute. The
 stats reports cannot close the gap either: they cover the site's WAN totals and
-its top applications, and neither names a client.
+its top applications, and neither names a client. `clientWanHistory` explicitly
+reports that this server has no verified per-client WAN history source.
 Watches for: two ways to be confidently wrong. Whether the agent qualifies a
 cumulative total as the volume it is instead of reporting it as current
 bandwidth; and whether it notices that clients come back name-sorted and paged,
@@ -167,6 +170,9 @@ saying so is the correct answer, not a dead end.
 
 **"What's using the most bandwidth on the network?"**
 Expected: the top-applications report, read as the top-N contract it is.
+Read `coverage` before interpreting the ranking: empty, unsupported, or
+unrecognized DPI data must not be described as zero traffic or disabled DPI.
+The report's measurement window and WAN-only scope are not established.
 Watches for: whether the agent can tell a bounded top-N from a complete
 census, and whether it carries that distinction into what it tells the
 operator. The surface says which it returned; the transcript shows whether
