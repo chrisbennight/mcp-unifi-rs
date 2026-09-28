@@ -128,7 +128,15 @@ async fn a_confirmed_block_sends_the_command_and_reports_the_client_gone() {
     logged_in(&server).await;
     // A blocked client leaves the connected list, which is the observable.
     mount_client_list(&server, &connected_row(), &serde_json::json!([])).await;
-    expect_command(&server, "block-sta").await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/cmd/stamgr")))
+        .and(body_json(serde_json::json!({"cmd":"block-sta","mac":MAC})))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],"controllerExtension":"block accepted"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let output = handler_for(&server)
         .call(
@@ -144,8 +152,107 @@ async fn a_confirmed_block_sends_the_command_and_reports_the_client_gone() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 201);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(output["responseBody"].as_str().expect("body"))
+            .expect("legacy envelope")["controllerExtension"],
+        "block accepted"
+    );
     assert_eq!(output["connectedBefore"], true);
     assert_eq!(output["connectedAfter"], false);
+}
+
+#[tokio::test]
+async fn accepted_client_command_and_failed_readback_keep_both_controller_responses() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let route = format!("{LEGACY}/stat/sta");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&connected_row())))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let failure = format!("{}client-readback-tail", "x".repeat(50_000));
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let accepted = serde_json::json!({
+        "meta":{"rc":"ok"},"data":[],
+        "controllerExtension":format!("{}accepted-tail", "y".repeat(50_000))
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/cmd/stamgr")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &control(&serde_json::json!({"client":MAC,"action":"block","confirm":true})),
+            None,
+        )
+        .await
+        .expect("accepted command remains available");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(content.to_string().contains("accepted-tail"));
+    assert!(content.to_string().contains(&failure));
+}
+
+#[tokio::test]
+async fn accepted_client_command_returns_before_a_stalled_readback() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let route = format!("{LEGACY}/stat/sta");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&connected_row())))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(6)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/cmd/stamgr")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],"controllerExtension":"accepted"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server).with_request_limits(1, Duration::from_secs(2));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &control(&serde_json::json!({"client":MAC,"action":"block","confirm":true})),
+            None,
+        ),
+    )
+    .await
+    .expect("returned before tool deadline")
+    .expect("accepted command remains available")
+    .structured_content
+    .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert!(
+        output["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("accepted")
+    );
+    assert_eq!(output["readbackError"], "client readback timed out");
 }
 
 #[tokio::test]

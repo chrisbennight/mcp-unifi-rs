@@ -613,7 +613,7 @@ it.
 | Tool | Idempotent | Sensitive input | Sensitive result |
 |---|---|---|---|
 | `wlans.update` | yes | yes | yes |
-| `clients.control` | no | no | no |
+| `clients.control` | no | no | yes |
 | `devices.control` | no | no | yes |
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
@@ -814,15 +814,18 @@ traffic usage for a connected client.
 absent from the connected list, so only the address identifies it in every state
 the tool handles. It reports whether the client was in the connected list before
 and after; a client that rejoins between the write and the check reads as
-connected, which is an observation and not a guarantee.
+connected, which is an observation and not a guarantee. Confirmed actions return
+the accepted HTTP status and complete legacy controller envelope. A failed or
+stalled readback is reported alongside that acceptance. Large controller bodies
+and readback errors move to labeled MCP content with structured markers.
 
 `devices.control` requires `port` for `portCycle` and rejects it for every other
 action, so a port can never be sent with an action that would ignore it. A
 restart takes longer than the read, so the state afterwards usually still shows
 the prior value — it records what the controller showed, not that the action
-finished. Confirmed actions retain the controller's complete response body;
-official Network actions also report its HTTP status. The legacy locate action
-returns the complete controller envelope. Readback failures are reported
+finished. Confirmed actions retain the controller's accepted HTTP status and
+complete response body, including the legacy locate command's envelope.
+Readback failures are reported
 alongside the accepted action, and long readbacks are bounded so they cannot
 erase it. Large bodies move to MCP content with explicit markers.
 
