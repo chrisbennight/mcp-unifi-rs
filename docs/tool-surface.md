@@ -17,8 +17,8 @@ these names, descriptions, and classifications; this page explains them.
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
 `firewall.read`, `networks.read`, `radius_profiles.list`,
-`devices.pending.list`, the Network inventory and switching detail reads,
-the official Wi-Fi broadcast reads, and Protect reads.
+`devices.pending.list`, the Network inventory, switching detail, and policy
+reads, the official Wi-Fi broadcast reads, and Protect reads.
 The gateway decides who can receive these controller values.
 
 ### `network.overview`
@@ -138,6 +138,18 @@ returns the complete controller response with a separate diagnostic.
 `switchStack`) and the official `id`, returning the complete controller
 record. A large record is carried in MCP content and marked by
 `recordInContent`.
+
+### `network.policy.list` and `network.policy.detail`
+
+These tools read [DNS policies and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
+from the official Network Integration API. Choose `kind` as `dnsPolicies` or
+`trafficMatchingLists`. The list accepts `offset`, `limit` (1-200, default 50),
+and the documented `filter` query. It returns complete controller rows, page
+counts, and `nextOffset`; large pages carry records in MCP content and set
+`recordsInContent`. Invalid page metadata returns the complete controller
+response with a separate diagnostic. The detail tool accepts `kind` and the
+official `id`, returning the complete record. A large record is carried in
+MCP content and marked by `recordInContent`.
 
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 

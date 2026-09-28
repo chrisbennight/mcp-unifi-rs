@@ -42,6 +42,8 @@ pub enum ToolKind {
     RadiusProfilesList,
     NetworkInventoryList,
     NetworkSwitchingDetail,
+    NetworkPolicyList,
+    NetworkPolicyDetail,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
     CamerasSearch,
@@ -135,6 +137,8 @@ impl ToolKind {
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
+            | Self::NetworkPolicyList
+            | Self::NetworkPolicyDetail
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
@@ -210,6 +214,8 @@ impl ToolKind {
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
+            | Self::NetworkPolicyList
+            | Self::NetworkPolicyDetail
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
@@ -673,6 +679,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Read one complete LAG, MC-LAG domain, or switch stack record by its official id.",
     ),
     sensitive_read_spec(
+        ToolKind::NetworkPolicyList,
+        "network.policy.list",
+        "Page through complete DNS policy or traffic matching list records using a typed family selector and the documented filter query.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworkPolicyDetail,
+        "network.policy.detail",
+        "Read one complete DNS policy or traffic matching list by its official id and typed family selector.",
+    ),
+    sensitive_read_spec(
         ToolKind::WifiBroadcastsList,
         "wifi.broadcasts.list",
         "Page through Wi-Fi broadcasts from the official Network API. Returns every controller field in each selected row with page metadata and a continuation offset.",
@@ -837,6 +853,8 @@ mod tests {
         ToolKind::RadiusProfilesList,
         ToolKind::NetworkInventoryList,
         ToolKind::NetworkSwitchingDetail,
+        ToolKind::NetworkPolicyList,
+        ToolKind::NetworkPolicyDetail,
         ToolKind::WifiBroadcastsList,
         ToolKind::WifiBroadcastsStatus,
         ToolKind::CamerasSearch,
@@ -958,6 +976,8 @@ mod tests {
                 | ToolKind::RadiusProfilesList
                 | ToolKind::NetworkInventoryList
                 | ToolKind::NetworkSwitchingDetail
+                | ToolKind::NetworkPolicyList
+                | ToolKind::NetworkPolicyDetail
                 | ToolKind::WifiBroadcastsList
                 | ToolKind::WifiBroadcastsStatus
                 | ToolKind::CamerasSearch
