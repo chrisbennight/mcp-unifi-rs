@@ -44,6 +44,7 @@ pub enum ToolKind {
     NetworkSwitchingDetail,
     NetworkPolicyList,
     NetworkPolicyDetail,
+    AclRulesConfigure,
     DnsPoliciesConfigure,
     TrafficListsConfigure,
     WifiBroadcastsList,
@@ -107,6 +108,7 @@ impl ToolKind {
             | Self::DevicesControl
             | Self::DevicesAdopt
             | Self::DevicesRemove
+            | Self::AclRulesConfigure
             | Self::DnsPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::GuestsAuthorize
@@ -220,6 +222,7 @@ impl ToolKind {
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
+            | Self::AclRulesConfigure
             | Self::DnsPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::WifiBroadcastsList
@@ -695,6 +698,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Read one complete ACL rule, DNS policy, or traffic matching list by its official id and typed family selector.",
     ),
     write_spec(
+        ToolKind::AclRulesConfigure,
+        "acl.rules.configure",
+        "Preview or create, replace, or delete a typed IPv4 or MAC access control rule. Returns the accepted controller record or status and body, with bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
         ToolKind::DnsPoliciesConfigure,
         "dns.policies.configure",
         "Preview or create, replace, or delete a DNS policy. Supports every documented A, AAAA, CNAME, MX, SRV, TXT, and forwarding variant. Returns the accepted controller record or status and body, with bounded readback.",
@@ -877,6 +888,7 @@ mod tests {
         ToolKind::NetworkSwitchingDetail,
         ToolKind::NetworkPolicyList,
         ToolKind::NetworkPolicyDetail,
+        ToolKind::AclRulesConfigure,
         ToolKind::DnsPoliciesConfigure,
         ToolKind::TrafficListsConfigure,
         ToolKind::WifiBroadcastsList,
@@ -1002,6 +1014,7 @@ mod tests {
                 | ToolKind::NetworkSwitchingDetail
                 | ToolKind::NetworkPolicyList
                 | ToolKind::NetworkPolicyDetail
+                | ToolKind::AclRulesConfigure
                 | ToolKind::DnsPoliciesConfigure
                 | ToolKind::TrafficListsConfigure
                 | ToolKind::WifiBroadcastsList

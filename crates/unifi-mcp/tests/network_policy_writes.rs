@@ -300,3 +300,154 @@ async fn large_accepted_record_remains_available_in_content() {
             .any(|item| format!("{item:?}").contains("controller-tail"))
     );
 }
+
+#[tokio::test]
+async fn acl_rule_previews_cover_ip_and_mac_filter_variants() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let rules = [
+        json!({"type":"IPV4","action":"ALLOW","enabled":true,"name":"networks","sourceFilter":{"type":"NETWORKS","networkIds":["network-1"],"portFilter":[443]},"destinationFilter":{"type":"PORTS","portFilter":[53]},"protocolFilter":["TCP","UDP"],"enforcingDeviceFilter":{"type":"DEVICES","deviceIds":["switch-1"]}}),
+        json!({"type":"IPV4","action":"BLOCK","enabled":false,"name":"subnets","sourceFilter":{"type":"IP_ADDRESSES_OR_SUBNETS","ipAddressesOrSubnets":["192.0.2.0/24"]}}),
+        json!({"type":"MAC","action":"BLOCK","enabled":true,"name":"macs","networkIdFilter":"network-1","sourceFilter":{"type":"MAC_ADDRESSES","macAddresses":["aa:bb:cc:dd:ee:ff"],"prefixLength":48}}),
+    ];
+    for rule in rules {
+        let result = handler
+            .call(
+                &call(
+                    "acl.rules.configure",
+                    json!({"operation":"create","rule":rule}),
+                ),
+                None,
+            )
+            .await
+            .expect("ACL preview")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["submitted"], false);
+        assert_eq!(result["requested"], rule);
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn acl_rule_create_update_and_delete_keep_controller_responses() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let rule = json!({"type":"IPV4","action":"ALLOW","enabled":true,"name":"office","sourceFilter":{"type":"NETWORKS","networkIds":["network-1"]}});
+    let accepted = json!({"id":POLICY_ID,"type":"IPV4","action":"ALLOW","enabled":true,"name":"office","sourceFilter":{"type":"NETWORKS","networkIds":["network-1"]},"controllerExtension":"retained"});
+    let collection = format!("{PREFIX}/sites/{SITE_ID}/acl-rules");
+    let detail = format!("{collection}/{POLICY_ID}");
+    Mock::given(method("POST"))
+        .and(path(&collection))
+        .and(body_json(rule.clone()))
+        .respond_with(ResponseTemplate::new(201).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(&detail))
+        .and(body_json(rule.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&detail))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(&detail))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ACL deletion accepted"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&detail))
+        .respond_with(ResponseTemplate::new(404).set_body_string("ACL rule absent"))
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    for (operation, id, status) in [("create", None, 201), ("update", Some(POLICY_ID), 200)] {
+        let output = handler
+            .call(
+                &call(
+                    "acl.rules.configure",
+                    json!({"operation":operation,"id":id,"rule":rule,"confirm":true}),
+                ),
+                None,
+            )
+            .await
+            .expect("ACL write")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["responseStatus"], status);
+        assert_eq!(output["accepted"], accepted);
+        assert_eq!(output["after"], accepted);
+        assert_eq!(output["verified"], true);
+    }
+    let deleted = handler
+        .call(
+            &call(
+                "acl.rules.configure",
+                json!({"operation":"delete","id":POLICY_ID,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("ACL delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(deleted["responseStatus"], 200);
+    assert_eq!(deleted["responseBody"], "ACL deletion accepted");
+    assert_eq!(deleted["verifiedAbsent"], true);
+    assert!(
+        deleted["readbackError"]
+            .as_str()
+            .expect("body")
+            .contains("ACL rule absent")
+    );
+}
+
+#[tokio::test]
+async fn invalid_acl_filter_fails_before_contacting_the_controller() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for (rule, expected) in [
+        (
+            json!({"type":"IPV4","action":"BLOCK","enabled":true,"name":"invalid","sourceFilter":{"type":"PORTS","portFilter":[0]}}),
+            "1-65535",
+        ),
+        (
+            json!({"type":"IPV4","action":"BLOCK","enabled":true,"name":"invalid","futureField":"must not disappear"}),
+            "unknown field `futureField`",
+        ),
+    ] {
+        let error = handler
+            .call(
+                &call(
+                    "acl.rules.configure",
+                    json!({"operation":"create","rule":rule,"confirm":true}),
+                ),
+                None,
+            )
+            .await
+            .expect_err("invalid ACL request");
+        assert!(error.message.contains(expected));
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
