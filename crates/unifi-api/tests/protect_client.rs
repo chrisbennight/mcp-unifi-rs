@@ -539,15 +539,19 @@ async fn an_oversized_response_has_its_own_error_category() {
 #[tokio::test]
 async fn a_console_without_the_integration_api_is_reported_as_unsupported() {
     let server = MockServer::start().await;
+    let body = format!("protect route missing: {}controller-tail", "x".repeat(700));
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/meta/info")))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(404).set_body_string(body.clone()))
         .mount(&server)
         .await;
 
     assert_eq!(
         client_for(&server).availability().await.expect("probe"),
-        ProtectAvailability::Unsupported
+        ProtectAvailability::Unsupported {
+            status: 404,
+            response: unifi_api::BoundedMessage::new(&body),
+        }
     );
 }
 
