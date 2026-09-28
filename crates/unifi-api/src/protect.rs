@@ -805,7 +805,7 @@ impl ProtectClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    /// Returns an [`ApiError`] for transport, status, or JSON decoding failures.
     pub async fn viewer_settings_patch(
         &self,
         viewer_id: &str,
@@ -815,12 +815,7 @@ impl ProtectClient {
         let request = self
             .request(Method::PATCH, &["viewers", viewer_id])?
             .json(changes);
-        let (viewer, bytes): (Value, Vec<u8>) = self
-            .send_json_once_with_response(request, "protect.viewers.patch")
-            .await?;
-        validate_resource_record("protect.viewers.patch", &viewer, Some(viewer_id))
-            .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(viewer)
+        self.send_json_once(request, "protect.viewers.patch").await
     }
 
     /// Read complete Protect live-view configuration records.
@@ -869,7 +864,7 @@ impl ProtectClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    /// Returns an [`ApiError`] for transport, status, or JSON decoding failures.
     pub async fn liveview_patch(
         &self,
         liveview_id: &str,
@@ -879,12 +874,8 @@ impl ProtectClient {
         let request = self
             .request(Method::PATCH, &["liveviews", liveview_id])?
             .json(changes);
-        let (liveview, bytes): (Value, Vec<u8>) = self
-            .send_json_once_with_response(request, "protect.liveviews.patch")
-            .await?;
-        validate_resource_record("protect.liveviews.patch", &liveview, Some(liveview_id))
-            .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(liveview)
+        self.send_json_once(request, "protect.liveviews.patch")
+            .await
     }
 
     /// Patch one camera's documented settings once. The caller reads back

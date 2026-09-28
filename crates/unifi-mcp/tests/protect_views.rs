@@ -280,14 +280,22 @@ async fn viewer_settings_patch_returns_complete_response_and_readback() {
 }
 
 #[tokio::test]
-async fn wrong_viewer_patch_identity_keeps_the_accepted_body() {
+async fn viewer_patch_with_a_different_response_id_remains_applied() {
     let server = MockServer::start().await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/viewers/viewer-1")))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"viewer-1"})),
-        )
-        .expect(1)
+        .respond_with(move |_: &wiremock::Request| {
+            let name = if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                "Old"
+            } else {
+                "New"
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id":"viewer-1","name":name}))
+        })
+        .expect(2)
         .mount(&server)
         .await;
     let response = serde_json::json!({"id":"different","controllerSpecific":"upstream-patch-tail".repeat(100)});
@@ -297,7 +305,7 @@ async fn wrong_viewer_patch_identity_keeps_the_accepted_body() {
         .expect(1)
         .mount(&server)
         .await;
-    let error = handler_for(&server)
+    let result = handler_for(&server)
         .call(
             &call(
                 "protect.viewers.settings.update",
@@ -308,8 +316,13 @@ async fn wrong_viewer_patch_identity_keeps_the_accepted_body() {
             None,
         )
         .await
-        .expect_err("wrong patch identity");
-    assert!(error.message.contains(&response.to_string()));
+        .expect("accepted patch remains applied")
+        .structured_content
+        .expect("structured result");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["response"], response);
+    assert_eq!(result["after"]["id"], "viewer-1");
     server.verify().await;
 }
 
@@ -539,6 +552,47 @@ async fn liveview_update_patches_only_named_fields_and_reads_back() {
     assert_eq!(result["before"], before);
     assert_eq!(result["response"], response);
     assert_eq!(result["after"], after);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn liveview_patch_without_an_id_returns_the_accepted_response_and_readback() {
+    let server = MockServer::start().await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .respond_with(move |_: &wiremock::Request| {
+            let name = if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                "Old"
+            } else {
+                "New"
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"view-1","name":name}))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let response = serde_json::json!({"name":"New","controllerSpecific":"accepted-without-id"});
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .and(body_json(serde_json::json!({"name":"New"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(&call("protect.liveviews.configure", &serde_json::json!({
+            "operation":"update", "liveviewId":"view-1", "changes":{"name":"New"}, "confirm":true
+        })), None)
+        .await
+        .expect("accepted patch")
+        .structured_content
+        .expect("structured result");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["response"], response);
+    assert_eq!(result["after"]["id"], "view-1");
     server.verify().await;
 }
 

@@ -9523,7 +9523,7 @@ fn liveview_configuration_request(changes: &LiveviewChanges) -> Result<Value, Mc
 
 fn requested_json_matches(requested: &Value, observed: &Value) -> bool {
     match (requested, observed) {
-        (Value::Number(wanted), Value::Number(actual)) => wanted.as_f64() == actual.as_f64(),
+        (Value::Number(wanted), Value::Number(actual)) => numbers_equivalent(wanted, actual),
         (Value::Array(wanted), Value::Array(actual)) => {
             wanted.len() == actual.len()
                 && wanted
@@ -9538,6 +9538,21 @@ fn requested_json_matches(requested: &Value, observed: &Value) -> bool {
         }),
         _ => requested == observed,
     }
+}
+
+fn numbers_equivalent(wanted: &Number, actual: &Number) -> bool {
+    if wanted == actual {
+        return true;
+    }
+    if wanted.is_f64() == actual.is_f64() {
+        return false;
+    }
+    let integer = if wanted.is_f64() { actual } else { wanted };
+    let exactly_representable = integer
+        .as_i64()
+        .is_some_and(|value| value.unsigned_abs() <= (1_u64 << 53))
+        || integer.as_u64().is_some_and(|value| value <= (1_u64 << 53));
+    exactly_representable && wanted.as_f64() == actual.as_f64()
 }
 
 fn liveview_configure_result(
@@ -9821,6 +9836,22 @@ mod tests {
         assert!(!validates(
             &schema,
             &json!({"viewerId":"viewer-1","changes":{"liveview":42}})
+        ));
+    }
+
+    #[test]
+    fn liveview_readback_compares_large_integers_exactly() {
+        assert!(super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":10}]}),
+            &json!({"slots":[{"cycleInterval":10.0,"futureField":true}]})
+        ));
+        assert!(!super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_993_u64}]}),
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_992_u64}]})
+        ));
+        assert!(!super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_993_u64}]}),
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_992.0}]})
         ));
     }
 

@@ -344,10 +344,10 @@ typed change to its `name` or assigned `liveview`. An explicit `null` clears
 the live-view assignment. With `confirm: true`, it sends one PATCH, returns
 the complete accepted response, and reads the viewer back. `verified` is true
 only when the requested fields appear in that read-back. Controller errors
-and invalid accepted records retain the complete upstream body. Large records
-move to labeled content blocks so a successful PATCH can still return its
-response; the corresponding `InContent` flags identify those fields. The
-gateway decides who may use the action and see its records.
+retain their complete upstream body. A successful PATCH response remains in
+the applied result even if it omits or changes the viewer id. Large records
+move to labeled content blocks; the corresponding `InContent` flags identify
+those fields. The gateway decides who may use the action and see its records.
 
 `protect.liveviews.configure` accepts `operation: "create"` or `"update"`.
 Its typed `changes` cover the documented name, default and global scope,
@@ -356,11 +356,12 @@ documents `id` and `modelKey` in the live-view object; callers can supply
 these fields in `changes` when needed. An update uses an exact `liveviewId`.
 The default preview returns the requested configuration and, for updates, the
 complete current record. Confirmation sends one POST or PATCH and returns the
-complete accepted result. When the result supplies an id, a separate GET
-checks whether the requested fields appear in the stored view. A missing id,
-failed read-back, or timed-out read-back is reported without claiming
-verification. Controller failures retain their full bodies, and large
-accepted records move to labeled content blocks with corresponding flags.
+complete accepted result. An update reads back by its requested id even if
+the PATCH response omits an id; a create reads back by the returned id. A
+created result without an id, failed read-back, or timed-out read-back is
+reported without claiming verification. Controller failures retain their full
+bodies, and large accepted records move to labeled content blocks with
+corresponding flags.
 
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
