@@ -1290,6 +1290,31 @@ struct NetworksReadInput {
     section: Option<NetworksSection>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RadiusProfilesListInput {
+    /// Zero-based offset into the controller's profile list.
+    #[serde(default)]
+    offset: u64,
+    /// Profiles per page, 1-200.
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct RadiusProfilesListOutput {
+    /// Complete fields for the profiles returned on this page.
+    profiles: Vec<Map<String, Value>>,
+    offset: u64,
+    limit: u64,
+    count: u64,
+    total_count: u64,
+    /// Continue at this offset until absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum NetworksSection {
@@ -2310,6 +2335,9 @@ impl ToolSpec {
             ToolKind::DevicesStatus => tool::<DeviceSelectorInput, DeviceStatusOutput>(self),
             ToolKind::FirewallRead => tool::<FirewallReadInput, FirewallReadOutput>(self),
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
+            ToolKind::RadiusProfilesList => {
+                tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
+            }
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraStatusInput, CameraView>(self),
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
@@ -2569,6 +2597,7 @@ impl UnifiMcp {
             ToolKind::DevicesStatus => self.devices_status(params).await,
             ToolKind::FirewallRead => self.firewall_read(params).await,
             ToolKind::NetworksRead => self.networks_read(params).await,
+            ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
@@ -4032,6 +4061,52 @@ impl UnifiMcp {
         structured(NetworksReadOutput {
             networks: network_views,
             wlans: wlan_views,
+        })
+    }
+
+    async fn radius_profiles_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<RadiusProfilesListInput>(params)?;
+        if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let site_id = self.site_id().await?;
+        let page = self
+            .integration()
+            .radius_profiles(
+                &site_id,
+                PageRequest {
+                    offset: input.offset,
+                    limit: u32::from(input.limit),
+                },
+            )
+            .await
+            .map_err(api_error)?;
+        if page.offset != input.offset || page.data.len() > usize::from(input.limit) {
+            return Err(McpError::internal_error(
+                "RADIUS profile page does not match the requested bounds",
+                None,
+            ));
+        }
+        let next = input
+            .offset
+            .checked_add(page.data.len() as u64)
+            .ok_or_else(|| McpError::internal_error("RADIUS profile offset overflow", None))?;
+        if next < page.total_count && page.data.is_empty() {
+            return Err(McpError::internal_error(
+                "RADIUS profile page is empty before the reported total",
+                None,
+            ));
+        }
+        structured(RadiusProfilesListOutput {
+            profiles: page.data,
+            offset: page.offset,
+            limit: page.limit,
+            count: page.count,
+            total_count: page.total_count,
+            next_offset: (next < page.total_count).then_some(next),
         })
     }
 

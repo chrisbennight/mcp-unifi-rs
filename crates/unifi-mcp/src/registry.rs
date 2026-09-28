@@ -36,6 +36,7 @@ pub enum ToolKind {
     DevicesStatus,
     FirewallRead,
     NetworksRead,
+    RadiusProfilesList,
     CamerasSearch,
     CamerasStatus,
     CamerasSettingsRead,
@@ -93,6 +94,7 @@ impl ToolKind {
             | Self::GuestsStatus
             | Self::FirewallRead
             | Self::NetworksRead
+            | Self::RadiusProfilesList
             | Self::CamerasSearch
             | Self::CamerasStatus
             | Self::CamerasSettingsRead
@@ -131,6 +133,7 @@ impl ToolKind {
             | Self::DevicesStatus
             | Self::FirewallRead
             | Self::NetworksRead
+            | Self::RadiusProfilesList
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
@@ -451,6 +454,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          scopes, SSIDs, security modes, RADIUS profile ids, and controller-reported passphrases. \
          The result is sensitive and the gateway decides who can read it.",
     ),
+    sensitive_read_spec(
+        ToolKind::RadiusProfilesList,
+        "radius_profiles.list",
+        "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
+    ),
     write_spec(
         ToolKind::WlansUpdate,
         "wlans.update",
@@ -586,6 +594,7 @@ mod tests {
         ToolKind::DevicesStatus,
         ToolKind::FirewallRead,
         ToolKind::NetworksRead,
+        ToolKind::RadiusProfilesList,
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
         ToolKind::CamerasSettingsRead,
@@ -629,6 +638,7 @@ mod tests {
                 | ToolKind::DevicesStatus
                 | ToolKind::FirewallRead
                 | ToolKind::NetworksRead
+                | ToolKind::RadiusProfilesList
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
                 | ToolKind::CamerasSettingsRead

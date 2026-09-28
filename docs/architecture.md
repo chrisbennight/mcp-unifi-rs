@@ -45,7 +45,7 @@ The local account is required for Network and optional for Protect enrichment.
 
 Reads: `network.overview`, `clients.search`, `clients.context`,
 `devices.search`, `devices.status`, `wifi.diagnose`, `firewall.read`,
-`networks.read`, `events.search`, `stats.query`, `cameras.search`,
+`networks.read`, `radius_profiles.list`, `events.search`, `stats.query`, `cameras.search`,
 `cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
 `protect.overview`, `protect.events`, `protect.event.thumbnail`.
 
@@ -53,7 +53,7 @@ Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
 `devices.control` (restart, locate, port cycle), `guests.authorize`,
-`port_forwards.update` (enable, disable, rename), `firewall.policies.update`
+`port_forwards.update` (name, state, source, target, ports, protocol), `firewall.policies.update`
 (enable, disable; zone-based consoles), `firewall.policies.delete`,
 `vouchers.create` (mint hotspot
 vouchers).
@@ -62,11 +62,9 @@ The device actions are one tool for the reason the client actions are: they
 are one decision at one risk level about one device, and a curated surface
 prefers a narrow typed action over three tools differing by a verb.
 
-`port_forwards.update` changes whether a rule forwards and what it is called,
-not where it points. Repointing a forward is a different rule with a different
-blast radius, and the fields that express it — source, destination port,
-internal host — only make sense validated together against the console's
-address plan, which this server does not model.
+`port_forwards.update` sends only the fields the caller names. A preview names
+the requested changes, and a confirmed update reads the rule back to show
+which values the controller kept.
 
 ### Why the firewall write resends the whole policy
 
