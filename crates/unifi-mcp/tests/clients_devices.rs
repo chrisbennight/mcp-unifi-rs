@@ -307,6 +307,10 @@ async fn clients_context_returns_one_client_with_its_events() {
 #[tokio::test]
 async fn devices_search_and_status_summarize_the_inventory() {
     let server = console_fixture().await;
+    let statistics_failure = format!(
+        "statistics read unavailable: {}controller-stats-detail",
+        "x".repeat(700)
+    );
     Mock::given(method("GET"))
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/devices/device-switch"
@@ -334,7 +338,7 @@ async fn devices_search_and_status_summarize_the_inventory() {
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/devices/device-switch/statistics/latest"
         )))
-        .respond_with(ResponseTemplate::new(503))
+        .respond_with(ResponseTemplate::new(503).set_body_string(statistics_failure.clone()))
         .mount(&server)
         .await;
     let handler = handler_for(&server);
@@ -366,6 +370,10 @@ async fn devices_search_and_status_summarize_the_inventory() {
     assert_eq!(output["ports"].as_array().expect("ports").len(), 2);
     assert_eq!(output["ports"][0]["speedMbps"], 1000);
     assert!(output.get("statistics").is_none());
+    assert_eq!(
+        output["statisticsError"],
+        format!("controller returned HTTP 503: {statistics_failure}")
+    );
 }
 
 #[tokio::test]

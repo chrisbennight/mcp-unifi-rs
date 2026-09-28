@@ -2006,6 +2006,20 @@ async fn camera_name_selection_refuses_an_extra_local_camera_namespace() {
 async fn protect_events_refuses_name_selection_when_local_inventory_is_unavailable() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=protect-session; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/bootstrap"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("local inventory failed"))
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/proxy/protect/api/events"))
         .respond_with(ResponseTemplate::new(500))
@@ -2023,12 +2037,9 @@ async fn protect_events_refuses_name_selection_when_local_inventory_is_unavailab
         )
         .await
         .expect_err("unavailable name inventory must fail before event lookup");
-    assert!(
-        error
-            .message
-            .contains("camera name selection requires complete local Protect inventory"),
-        "{}",
-        error.message
+    assert_eq!(
+        error.message,
+        "controller returned HTTP 503: local inventory failed"
     );
 }
 
@@ -2116,7 +2127,25 @@ async fn protect_events_names_missing_local_session_credentials() {
 #[tokio::test]
 async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_read() {
     let server = MockServer::start().await;
+    let bootstrap_failure = format!(
+        "bootstrap unavailable: {}controller-local-detail",
+        "x".repeat(700)
+    );
     console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=protect-session; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/bootstrap"))
+        .respond_with(ResponseTemplate::new(503).set_body_string(bootstrap_failure.clone()))
+        .mount(&server)
+        .await;
     let handler = handler_with_events(&server);
 
     let output = handler
@@ -2127,6 +2156,65 @@ async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_r
         .expect("structured");
     assert_eq!(output["capabilities"]["localEnrichment"], "unavailable");
     assert_eq!(output["cameras"][0]["localEnrichment"], "unavailable");
+    assert_eq!(
+        output["capabilities"]["localUnavailableReason"],
+        format!("controller returned HTTP 503: {bootstrap_failure}")
+    );
+
+    let status = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("public camera status")
+        .structured_content
+        .expect("structured");
+    assert_eq!(status["id"], "cam-front");
+    assert_eq!(
+        status["localError"],
+        format!("controller returned HTTP 503: {bootstrap_failure}")
+    );
+
+    let details_error = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({"camera": "cam-front", "includeDetails": true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("requested local details");
+    assert!(details_error.message.contains("controller-local-detail"));
+
+    let filter_error = handler
+        .call(
+            &call("cameras.search", &serde_json::json!({"model": "G5"})),
+            None,
+        )
+        .await
+        .expect_err("requested local filter");
+    assert!(filter_error.message.contains("controller-local-detail"));
+
+    let event_error = handler
+        .call(
+            &call(
+                "protect.events",
+                &serde_json::json!({
+                    "camera": "Front Door",
+                    "start": 1000,
+                    "end": 2000
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect_err("requested camera name needs local inventory");
+    assert!(event_error.message.contains("controller-local-detail"));
 }
 
 #[tokio::test]
