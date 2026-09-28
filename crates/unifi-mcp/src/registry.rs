@@ -47,6 +47,7 @@ pub enum ToolKind {
     CamerasTalkbackStart,
     ProtectOverview,
     ProtectEvents,
+    ProtectEventThumbnail,
     WifiDiagnose,
     EventsSearch,
     StatsQuery,
@@ -99,6 +100,7 @@ impl ToolKind {
             | Self::CamerasStreamsList
             | Self::ProtectOverview
             | Self::ProtectEvents
+            | Self::ProtectEventThumbnail
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
@@ -120,7 +122,8 @@ impl ToolKind {
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
             | Self::ProtectOverview
-            | Self::ProtectEvents => ToolSurface::Protect,
+            | Self::ProtectEvents
+            | Self::ProtectEventThumbnail => ToolSurface::Protect,
             Self::NetworkOverview
             | Self::ClientsSearch
             | Self::ClientsContext
@@ -408,8 +411,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.events",
         "Search historical Protect detections in a bounded window, filtered \
          by camera or detection kind, newest first with pagination. Returns \
-         typed event metadata only: never thumbnails, snapshots, or raw \
-         detection payloads.",
+         typed event metadata. Use protect.event.thumbnail to fetch an event image.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectEventThumbnail,
+        "protect.event.thumbnail",
+        "Fetch the bounded JPEG thumbnail for one historical Protect event by its id from protect.events. Returns MCP image content and concise event metadata.",
     ),
     read_spec(
         ToolKind::WifiDiagnose,
@@ -587,6 +594,7 @@ mod tests {
         ToolKind::CamerasTalkbackStart,
         ToolKind::ProtectOverview,
         ToolKind::ProtectEvents,
+        ToolKind::ProtectEventThumbnail,
         ToolKind::WifiDiagnose,
         ToolKind::EventsSearch,
         ToolKind::StatsQuery,
@@ -629,6 +637,7 @@ mod tests {
                 | ToolKind::CamerasTalkbackStart
                 | ToolKind::ProtectOverview
                 | ToolKind::ProtectEvents
+                | ToolKind::ProtectEventThumbnail
                 | ToolKind::WifiDiagnose
                 | ToolKind::EventsSearch
                 | ToolKind::StatsQuery
@@ -684,7 +693,8 @@ mod tests {
                 "cameras.streams.update",
                 "cameras.talkback.start",
                 "protect.overview",
-                "protect.events"
+                "protect.events",
+                "protect.event.thumbnail"
             ]
         );
     }

@@ -81,7 +81,8 @@ to Protect. Its TLS settings are configured separately.
 
 The key alone supports basic camera and recorder inventory. A local account
 adds hardware, firmware, recording, connection, recorder health and storage
-facts where available, and enables `protect.events`. Without that session,
+facts where available, and enables `protect.events` and
+`protect.event.thumbnail`. Without that session,
 unsupported enrichment filters fail explicitly instead of returning a partial
 match. See the [tool reference](tool-surface.md).
 

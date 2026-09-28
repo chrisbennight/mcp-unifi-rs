@@ -1084,6 +1084,52 @@ async fn camera_snapshot_returns_image_content_and_small_metadata() {
 }
 
 #[tokio::test]
+async fn protect_event_thumbnail_returns_image_content_for_the_event_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=protect-session; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    let jpeg = jpeg_fixture();
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/events/event-1/thumbnail"))
+        .and(header("cookie", "TOKEN=protect-session"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg.clone(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = handler_with_events(&server)
+        .call(
+            &call(
+                "protect.event.thumbnail",
+                &serde_json::json!({"event": "event-1"}),
+            ),
+            None,
+        )
+        .await
+        .expect("event thumbnail");
+    let metadata = result.structured_content.expect("metadata");
+    assert_eq!(metadata["eventId"], "event-1");
+    assert_eq!(metadata["byteSize"], jpeg.len());
+    let image = result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            ContentBlock::Image(image) => Some(image),
+            _ => None,
+        })
+        .expect("MCP image content");
+    assert_eq!(image.mime_type, "image/jpeg");
+    assert_eq!(STANDARD.decode(&image.data).expect("base64"), jpeg);
+}
+
+#[tokio::test]
 async fn camera_snapshot_accepts_a_display_name_from_local_inventory() {
     let server = MockServer::start().await;
     console_with(
@@ -1947,23 +1993,30 @@ async fn protect_events_equal_timestamp_boundary_names_the_recovery_path() {
 async fn protect_events_names_missing_local_session_credentials() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
-    let error = handler_for(&server)
-        .call(
-            &call(
-                "protect.events",
-                &serde_json::json!({"start": 1000, "end": 2000}),
-            ),
-            None,
-        )
-        .await
-        .expect_err("missing local Protect session");
-    assert!(
-        error
-            .message
-            .contains("no local Protect session is configured"),
-        "{}",
-        error.message
-    );
+    let handler = handler_for(&server);
+    for (tool, arguments) in [
+        (
+            "protect.events",
+            serde_json::json!({"start": 1000, "end": 2000}),
+        ),
+        (
+            "protect.event.thumbnail",
+            serde_json::json!({"event": "event-1"}),
+        ),
+    ] {
+        let error = handler
+            .call(&call(tool, &arguments), None)
+            .await
+            .expect_err("missing local Protect session");
+        assert!(
+            error
+                .message
+                .contains("no local Protect session is configured"),
+            "{}: {}",
+            tool,
+            error.message
+        );
+    }
 }
 
 #[tokio::test]
@@ -2036,6 +2089,10 @@ async fn a_network_runtime_rejects_every_protect_tool_as_outside_its_catalog() {
         (
             "protect.events",
             serde_json::json!({"start": 1000, "end": 2000}),
+        ),
+        (
+            "protect.event.thumbnail",
+            serde_json::json!({"event": "event-1"}),
         ),
     ] {
         let error = handler
