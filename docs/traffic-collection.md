@@ -96,8 +96,9 @@ The collector bypasses MCP display pagination and top-N truncation. An
 unrecognized JSON report is retained with an unrecognized status. A failed
 source retains the controller's status and response body in its archived
 `error` field, including a malformed WAN report's original body and decode
-diagnostic. Successfully retrieved sources are retained even when another
-source fails.
+diagnostic. An Activity or graph HTTP 404/405 remains classified as
+`unsupported` and retains that response in `error`. Successfully retrieved
+sources are retained even when another source fails.
 
 All measurements use `collector` as the stable controller/site identity and the
 requested hour's start as their timestamp, with millisecond write precision.

@@ -4,9 +4,11 @@ use super::{
     CallToolResult, CounterSemantics, CoverageStatus, DEFAULT_TOP_APPLICATIONS,
     DEFAULT_WAN_REPORT_HOURS, JsonSchema, MAXIMUM_SEARCH_LIMIT, MAXIMUM_TOP_APPLICATIONS,
     MAXIMUM_WAN_REPORT_HOURS, McpError, Serialize, StatsQueryInput, StatsQueryOutput, StatsReport,
-    TopApplicationRow, TrafficCoverage, UnifiMcp, api_error, bounded_text, structured,
+    StatsSourceError, TopApplicationRow, TrafficCoverage, UnifiMcp, api_error, bounded_text,
+    structured_stats,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use unifi_api::ApiError;
 use unifi_api::traffic::{
     ActivityBucket, ActivityRead, ActivityReport, ActivityWindow, ApplicationActivity,
 };
@@ -128,18 +130,18 @@ impl UnifiMcp {
             .map_err(api_error)?;
         let report = match read {
             ActivityRead::Reported(report) => report,
-            ActivityRead::Unsupported
+            ActivityRead::Unsupported { response }
                 if input.report == StatsReport::DpiApplications
                     && input.hours.is_none()
                     && input.start_ms.is_none() =>
             {
-                return self.dpi_stats(top).await;
+                return self.dpi_stats(top, response).await;
             }
-            ActivityRead::Unsupported => {
-                return unavailable(input.report, window, CoverageStatus::Unsupported);
+            ActivityRead::Unsupported { response } => {
+                return unavailable(input.report, window, CoverageStatus::Unsupported, response);
             }
             ActivityRead::Unrecognized => {
-                return unavailable(input.report, window, CoverageStatus::Unrecognized);
+                return unavailable(input.report, window, CoverageStatus::Unrecognized, None);
             }
         };
         let (mut clients, client_totals, application_totals) = totals(&report)?;
@@ -166,7 +168,7 @@ impl UnifiMcp {
             .activity_buckets(self.legacy_site(), window)
             .await
             .map_err(api_error)?;
-        let temporal_evidence = temporal(graph, window);
+        let (temporal_evidence, graph_error) = temporal(graph, window);
         let reconciliation = self.reconcile_activity(window, &client_totals).await?;
         let total_applications = report.total_usage_by_app.len();
         let mut applications = report.total_usage_by_app;
@@ -180,7 +182,7 @@ impl UnifiMcp {
         } else {
             (None, "notRequested")
         };
-        structured(StatsQueryOutput {
+        structured_stats(StatsQueryOutput {
             report: report_name(input.report),
             coverage: TrafficCoverage {
                 status: if total_clients == 0 && total_applications == 0 {
@@ -210,6 +212,15 @@ impl UnifiMcp {
                 names_status,
                 limitations: "The Activity view reports Internet usage, not LAN association counters. Its aggregate response has no per-client observed timestamps, reset markers, or collection-completeness proof. Site graph gaps are unknown, not zero. IPv6, UDP/QUIC, VPN encapsulation, gateway-originated traffic, proxy attribution, and interface accounting may contribute to differences; this source does not identify their contributions. Application names describe classifier labels, not a verified service or process. Pages re-read a mutable source; reuse fixed timestamps. This read creates no retained history.",
             }),
+            source_errors: graph_error
+                .into_iter()
+                .map(|error| StatsSourceError {
+                    source: "graph",
+                    error: error.to_string(),
+                })
+                .collect(),
+            source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
@@ -372,7 +383,10 @@ fn totals(report: &ActivityReport) -> Result<(Vec<ClientRow>, Bytes, Bytes), Mcp
     ))
 }
 
-fn temporal(read: ActivityRead<Vec<ActivityBucket>>, window: ActivityWindow) -> TemporalEvidence {
+fn temporal(
+    read: ActivityRead<Vec<ActivityBucket>>,
+    window: ActivityWindow,
+) -> (TemporalEvidence, Option<ApiError>) {
     let mut result = TemporalEvidence {
         status: "unavailable",
         source: "v2/app-traffic-rate",
@@ -384,10 +398,10 @@ fn temporal(read: ActivityRead<Vec<ActivityBucket>>, window: ActivityWindow) -> 
     };
     let rows = match read {
         ActivityRead::Reported(rows) => rows,
-        ActivityRead::Unsupported => return result,
+        ActivityRead::Unsupported { response } => return (result, response),
         ActivityRead::Unrecognized => {
             result.status = "unrecognized";
-            return result;
+            return (result, None);
         }
     };
     let times: BTreeSet<_> = rows
@@ -403,7 +417,7 @@ fn temporal(read: ActivityRead<Vec<ActivityBucket>>, window: ActivityWindow) -> 
     } else {
         "reported"
     };
-    result
+    (result, None)
 }
 
 fn semantics(window: ActivityWindow) -> CounterSemantics {
@@ -431,8 +445,9 @@ fn unavailable(
     report: StatsReport,
     window: ActivityWindow,
     status: CoverageStatus,
+    response: Option<ApiError>,
 ) -> Result<CallToolResult, McpError> {
-    structured(StatsQueryOutput {
+    structured_stats(StatsQueryOutput {
         report: report_name(report),
         coverage: TrafficCoverage {
             status,
@@ -444,5 +459,14 @@ fn unavailable(
         wan_hourly: None,
         top_applications: None,
         activity: None,
+        source_errors: response
+            .into_iter()
+            .map(|error| StatsSourceError {
+                source: "activity",
+                error: error.to_string(),
+            })
+            .collect(),
+        source_errors_in_content: None,
+        activity_in_content: None,
     })
 }

@@ -738,17 +738,19 @@ impl LegacyClient {
                 Some(&body),
             )
             .await;
-        let availability = match result {
-            Ok(records) => return Ok(DpiReport::from_records(records)),
-            Err(ApiError::Status {
-                status: 404 | 405, ..
-            }) => DpiAvailability::Unsupported,
-            Err(error) => return Err(error),
-        };
-        Ok(DpiReport {
-            availability,
-            ..DpiReport::default()
-        })
+        match result {
+            Ok(records) => Ok(DpiReport::from_records(records)),
+            Err(
+                error @ ApiError::Status {
+                    status: 404 | 405, ..
+                },
+            ) => Ok(DpiReport {
+                availability: DpiAvailability::Unsupported,
+                unsupported_response: Some(error),
+                ..DpiReport::default()
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     /// Neighboring access points observed by the site's radios.

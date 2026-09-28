@@ -2403,6 +2403,19 @@ struct StatsQueryOutput {
     /// Internet activity totals, temporal evidence, and WAN reconciliation.
     #[serde(skip_serializing_if = "Option::is_none")]
     activity: Option<activity::ActivityDetails>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_errors: Vec<StatsSourceError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_errors_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity_in_content: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StatsSourceError {
+    source: &'static str,
+    error: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -5671,7 +5684,7 @@ impl UnifiMcp {
         let missing = samples
             .iter()
             .any(|row| row.time.is_none() || row.rx_bytes.is_none() || row.tx_bytes.is_none());
-        structured(StatsQueryOutput {
+        structured_stats(StatsQueryOutput {
             report: "wanHourly",
             coverage: TrafficCoverage {
                 status: if samples.is_empty() {
@@ -5689,15 +5702,42 @@ impl UnifiMcp {
             wan_hourly: Some(samples),
             top_applications: None,
             activity: None,
+            source_errors: Vec::new(),
+            source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
-    async fn dpi_stats(&self, top: u16) -> Result<CallToolResult, McpError> {
-        let report = self
-            .legacy()
-            .dpi_by_application(self.legacy_site())
-            .await
-            .map_err(api_error)?;
+    async fn dpi_stats(
+        &self,
+        top: u16,
+        activity_response: Option<ApiError>,
+    ) -> Result<CallToolResult, McpError> {
+        let report = match self.legacy().dpi_by_application(self.legacy_site()).await {
+            Ok(report) => report,
+            Err(error) => {
+                return Err(match activity_response {
+                    Some(activity) => McpError::internal_error(
+                        format!("activity source: {activity}; dpi source: {error}"),
+                        None,
+                    ),
+                    None => api_error(error),
+                });
+            }
+        };
+        let mut source_errors: Vec<StatsSourceError> = activity_response
+            .into_iter()
+            .map(|error| StatsSourceError {
+                source: "activity",
+                error: error.to_string(),
+            })
+            .collect();
+        if let Some(error) = &report.unsupported_response {
+            source_errors.push(StatsSourceError {
+                source: "dpi",
+                error: error.to_string(),
+            });
+        }
         let unavailable = match report.availability {
             DpiAvailability::Unsupported => Some((
                 CoverageStatus::Unsupported,
@@ -5710,7 +5750,7 @@ impl UnifiMcp {
             DpiAvailability::Reported => None,
         };
         if let Some((status, reason)) = unavailable {
-            return structured(StatsQueryOutput {
+            return structured_stats(StatsQueryOutput {
                 report: "dpiApplications",
                 coverage: TrafficCoverage {
                     status,
@@ -5722,6 +5762,9 @@ impl UnifiMcp {
                 wan_hourly: None,
                 top_applications: Some(Vec::new()),
                 activity: None,
+                source_errors,
+                source_errors_in_content: None,
+                activity_in_content: None,
             });
         }
         let status = match (
@@ -5750,7 +5793,7 @@ impl UnifiMcp {
         });
         let total_applications = applications.len();
         applications.truncate(usize::from(top));
-        structured(StatsQueryOutput {
+        structured_stats(StatsQueryOutput {
             report: "dpiApplications",
             coverage: TrafficCoverage {
                 status,
@@ -5762,6 +5805,9 @@ impl UnifiMcp {
             wan_hourly: None,
             top_applications: Some(applications),
             activity: None,
+            source_errors,
+            source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
@@ -8162,6 +8208,39 @@ pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpE
     let value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
     Ok(CallToolResult::structured(value))
+}
+
+/// Keep the structured traffic summary bounded while preserving complete
+/// source errors and, when necessary, the requested Activity page in content.
+fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError> {
+    let mut value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    let mut source_errors_text = None;
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(errors) = fields.remove("sourceErrors")
+    {
+        fields.insert("sourceErrorsInContent".to_owned(), Value::Bool(true));
+        let text = format!("sourceErrors: {errors}");
+        extra_content.push(ContentBlock::text(text.clone()));
+        source_errors_text = Some(text);
+    }
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(activity) = fields.remove("activity")
+    {
+        fields.insert("activityInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("activity: {activity}")));
+    }
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Some(errors) = source_errors_text
+    {
+        return Err(McpError::internal_error(errors, None));
+    }
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Preserve a secondary controller failure when its text cannot fit beside

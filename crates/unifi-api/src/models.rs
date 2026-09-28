@@ -10,6 +10,8 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::ApiError;
+
 /// One page of a paginated collection.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -652,6 +654,8 @@ pub struct DpiReport {
     pub applications: Vec<DpiApplication>,
     pub unrecognized_records: usize,
     pub availability: DpiAvailability,
+    /// Original controller failure when HTTP 404 or 405 means this endpoint is unavailable.
+    pub unsupported_response: Option<ApiError>,
 }
 
 /// Availability classified only from the DPI endpoint's own response.

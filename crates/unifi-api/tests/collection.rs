@@ -112,6 +112,30 @@ async fn unavailable_source_does_not_discard_successful_reports() {
 }
 
 #[tokio::test]
+async fn unsupported_source_retains_the_controller_status_and_body() {
+    let (server, client) = setup().await;
+    let failure = format!("graph route missing: {}unsupported-tail", "x".repeat(700));
+    fixed_sources(
+        &server,
+        405,
+        failure.clone(),
+        r#"{"meta":{"rc":"ok"},"data":[]}"#.to_owned(),
+    )
+    .await;
+    let snapshot = client
+        .collect_traffic("default", ActivityWindow::new(START, END).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.activity.status, SourceStatus::Collected);
+    assert_eq!(snapshot.wan.status, SourceStatus::Collected);
+    assert_eq!(snapshot.graph.status, SourceStatus::Unsupported);
+    assert_eq!(
+        snapshot.graph.error,
+        Some(format!("controller returned HTTP 405: {failure}"))
+    );
+}
+
+#[tokio::test]
 async fn failed_source_retains_the_controller_response_beside_successful_reports() {
     let (server, client) = setup().await;
     let failure = format!("graph unavailable: {}graph-error-tail", "x".repeat(700));

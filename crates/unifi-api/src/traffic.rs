@@ -33,7 +33,7 @@ impl ActivityWindow {
 #[derive(Debug)]
 pub enum ActivityRead<T> {
     Reported(T),
-    Unsupported,
+    Unsupported { response: Option<ApiError> },
     Unrecognized,
 }
 
