@@ -309,6 +309,44 @@ async fn camera_settings_patch_sends_only_typed_fields_and_decodes_camera() {
 }
 
 #[tokio::test]
+async fn camera_settings_patch_validation_keeps_the_exact_controller_body() {
+    use unifi_api::protect::ProtectCameraSettingsPatch;
+
+    for (id, model_key, field) in [
+        ("cam-1", "not-a-camera", "modelKey"),
+        ("cam-2", "camera", "id"),
+    ] {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "id": id, "modelKey": model_key, "name": "Front", "state": "CONNECTED",
+            "padding": "x".repeat(700),
+            "z_controller_field": "original-settings-tail"
+        })
+        .to_string();
+        Mock::given(method("PATCH"))
+            .and(path(format!("{PREFIX}/cameras/cam-1")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server)
+            .camera_settings_patch("cam-1", &ProtectCameraSettingsPatch::default())
+            .await
+            .expect_err("invalid settings response");
+        let ApiError::SchemaMismatch {
+            path,
+            response: Some(response),
+            ..
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(path.as_str(), field);
+        assert_eq!(response.as_str(), body);
+    }
+}
+
+#[tokio::test]
 async fn snapshot_fetches_a_bounded_jpeg_with_channel_and_quality() {
     let server = MockServer::start().await;
     let jpeg = jpeg_fixture();

@@ -276,7 +276,7 @@ impl ServerHandler for UnifiMcp {
             ))
             .with_instructions(match self.surface() {
                 ToolSurface::Network => "Curated operational interface for a UniFi Network controller; tools/list is the authoritative catalog.",
-                ToolSurface::Protect => "Curated read-only interface for a UniFi Protect console; tools/list is the authoritative catalog.",
+                ToolSurface::Protect => "Curated operational interface for a UniFi Protect console; tools/list is the authoritative catalog.",
             })
     }
 

@@ -13,6 +13,7 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
+use rmcp::handler::server::ServerHandler;
 use rmcp::model::{CallToolRequestParams, ContentBlock};
 use unifi_api::{
     ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, ProtectClient, TlsMode,
@@ -73,6 +74,16 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
     })
     .expect("protect client");
     UnifiMcp::new_protect("cameras", Arc::new(protect), None)
+}
+
+#[tokio::test]
+async fn protect_server_description_includes_its_action_tools() {
+    let server = MockServer::start().await;
+    let instructions = handler_for(&server)
+        .get_info()
+        .instructions
+        .expect("instructions");
+    assert!(instructions.contains("operational interface"));
 }
 
 fn handler_with_events(server: &MockServer) -> UnifiMcp {
@@ -584,6 +595,50 @@ async fn camera_settings_update_returns_controller_readback_error() {
         output["readbackError"],
         format!("controller returned HTTP 503: {failure}")
     );
+}
+
+#[tokio::test]
+async fn camera_settings_update_returns_invalid_action_response() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "cam-front", "modelKey": "camera", "name": "Front Door",
+            "state": "CONNECTED", "micVolume": 40
+        })))
+        .mount(&server)
+        .await;
+    let body = serde_json::json!({
+        "id": "other-camera", "modelKey": "camera", "name": "Front Door",
+        "state": "CONNECTED", "micVolume": 70,
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-settings-tail"
+    });
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "changes": {"micVolume": 70}, "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect_err("invalid action response");
+    assert!(
+        error.message.contains(&body.to_string()),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains("id"));
 }
 
 #[tokio::test]
