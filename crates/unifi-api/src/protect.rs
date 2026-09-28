@@ -732,6 +732,47 @@ impl ProtectClient {
         .await
     }
 
+    /// Submit one camera POS transaction without retrying an ambiguous write.
+    /// The caller validates and constructs the documented request before use.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] with the controller response when the request
+    /// fails or the accepted result does not contain its documented fields.
+    pub async fn camera_pos_transaction(
+        &self,
+        camera_id: &str,
+        transaction: &Value,
+    ) -> Result<Value, ApiError> {
+        validate_identifier("protect.pos.transactions", camera_id)?;
+        let request = self
+            .request(Method::POST, &["pos", "cameras", camera_id, "transactions"])?
+            .json(transaction);
+        let (result, bytes): (Value, Vec<u8>) = self
+            .send_json_once_with_response(request, "protect.pos.transactions")
+            .await?;
+        if result.get("created").and_then(Value::as_bool).is_none() {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "protect.pos.transactions",
+                path: BoundedMessage::new("created"),
+                response: None,
+            }
+            .with_controller_response(&bytes));
+        }
+        if result
+            .get("eventId")
+            .is_some_and(|value| !value.is_string())
+        {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "protect.pos.transactions",
+                path: BoundedMessage::new("eventId"),
+                response: None,
+            }
+            .with_controller_response(&bytes));
+        }
+        Ok(result)
+    }
+
     /// Patch one camera's documented settings once. The caller reads back
     /// the camera to check which fields the console persisted.
     ///
@@ -1169,6 +1210,7 @@ fn endpoint_name(segments: &[&str]) -> &'static str {
         [path, _] if is_device_path(path) => "protect.devices.by_id",
         ["users" | "ulp-users"] => "protect.users",
         ["users" | "ulp-users", _] => "protect.users.by_id",
+        ["pos", "cameras", _, "transactions"] => "protect.pos.transactions",
         _ => "protect.integration",
     }
 }

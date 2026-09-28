@@ -58,6 +58,7 @@ changes fields, by observation where it does not — see Write safety).
 `devices.control` (restart, locate, port cycle), `guests.authorize`,
 `port_forwards.update` (name, state, source, target, ports, protocol), `firewall.policies.update`
 (enable, disable; zone-based consoles), `firewall.policies.delete`,
+`cameras.pos.transaction` (camera event ingestion),
 `vouchers.create` (mint hotspot
 vouchers).
 

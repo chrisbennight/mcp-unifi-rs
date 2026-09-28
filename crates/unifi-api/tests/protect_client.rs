@@ -181,6 +181,82 @@ async fn user_identity_failure_keeps_the_accepted_body() {
 }
 
 #[tokio::test]
+async fn pos_transaction_posts_once_and_keeps_the_complete_accepted_result() {
+    let server = MockServer::start().await;
+    let transaction = serde_json::json!({
+        "type": "sale", "externalId": "receipt-1", "amount": 12.50,
+        "currency": "USD", "lineItems": [{"title": "Coffee", "quantity": 2}],
+        "location": {"id": "register-1", "name": "Front"},
+        "paymentTypes": ["card"], "timestamp": 1_789_000_000_000_u64,
+    });
+    let result = serde_json::json!({
+        "created": true, "eventId": "event-1",
+        "controllerSpecific": {"nested": ["kept", 42]},
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/pos/cameras/camera-1/transactions")))
+        .and(header("X-API-Key", API_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let accepted = client_for(&server)
+        .camera_pos_transaction("camera-1", &transaction)
+        .await
+        .expect("POS transaction");
+    assert_eq!(accepted, result);
+    let requests = server.received_requests().await.expect("requests");
+    let posted = requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST")
+        .expect("POST request");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&posted.body).expect("JSON body"),
+        transaction
+    );
+}
+
+#[tokio::test]
+async fn pos_transaction_keeps_conflict_and_malformed_accepted_bodies() {
+    let transaction = serde_json::json!({
+        "type": "refund", "externalId": "receipt-1", "amount": 0,
+    });
+    let server = MockServer::start().await;
+    let conflict = serde_json::json!({
+        "message": "processing", "controllerDetail": "conflict-tail".repeat(100),
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/pos/cameras/camera-1/transactions")))
+        .respond_with(ResponseTemplate::new(409).set_body_json(&conflict))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .camera_pos_transaction("camera-1", &transaction)
+        .await
+        .expect_err("conflict");
+    assert!(error.to_string().contains("HTTP 409"));
+    assert!(error.to_string().contains(&conflict.to_string()));
+
+    let server = MockServer::start().await;
+    let malformed = serde_json::json!({
+        "eventId": "event-1", "controllerDetail": "accepted-tail".repeat(100),
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/pos/cameras/camera-1/transactions")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&malformed))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .camera_pos_transaction("camera-1", &transaction)
+        .await
+        .expect_err("missing created field");
+    assert!(error.to_string().contains(&malformed.to_string()));
+    assert!(error.to_string().contains("created"));
+}
+
+#[tokio::test]
 async fn cameras_decode_the_complete_v7_1_87_official_shape() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
