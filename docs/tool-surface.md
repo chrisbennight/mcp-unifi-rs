@@ -151,6 +151,18 @@ response with a separate diagnostic. The detail tool accepts `kind` and the
 official `id`, returning the complete record. A large record is carried in
 MCP content and marked by `recordInContent`.
 
+`dns.policies.configure` and `traffic.matching_lists.configure` accept
+`operation` (`create`, `update`, or `delete`) and preview by default. Create
+requires `policy` or `list`; update also requires `id`; delete requires `id`
+without a request body. Set `confirm: true` to submit. DNS requests cover A,
+AAAA, CNAME, forwarding, MX, SRV, and TXT policies. Traffic lists cover IPv4
+addresses, IPv6 addresses, and ports, including the documented item variants.
+The tool returns the complete accepted controller record and HTTP status for
+create or update, or the complete response body and status for delete. It also
+reports the subsequent detail read and whether the requested values or
+deletion were observed. A failed readback does not erase an accepted write.
+Large values move to MCP content with a corresponding `InContent` marker.
+
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 
 These tools use the [official Network Wi-Fi broadcast API](https://developer.ui.com/network/v10.4.57/getwifibroadcastpage).
@@ -591,6 +603,8 @@ it.
 | `devices.control` | no | no | no |
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
+| `dns.policies.configure` | no | yes | yes |
+| `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |
 | `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |

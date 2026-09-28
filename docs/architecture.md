@@ -60,6 +60,7 @@ changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
 `devices.control` (restart, locate, port cycle), `devices.adopt`,
 `devices.remove`, `guests.authorize`,
+`dns.policies.configure`, `traffic.matching_lists.configure`,
 `port_forwards.update` (name, state, source, target, ports, protocol), `firewall.policies.update`
 (enable, disable; zone-based consoles), `firewall.policies.delete`,
 `cameras.pos.transaction` (camera event ingestion),

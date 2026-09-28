@@ -65,6 +65,7 @@ const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 /// A tool whose result carries credentials this call created is exempt, since
 /// there is nothing for the caller to recover by narrowing.
 pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
+const MAXIMUM_POLICY_REQUEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 
 /// Search pagination bounds shared by the list tools.
@@ -2585,6 +2586,313 @@ struct NetworkPolicyDetailOutput {
     record_in_content: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum NetworkPolicyWriteOperation {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum DnsPolicyRequest {
+    #[serde(rename = "A_RECORD")]
+    ARecord {
+        enabled: bool,
+        domain: String,
+        ipv4_address: String,
+        ttl_seconds: u32,
+    },
+    #[serde(rename = "AAAA_RECORD")]
+    AaaaRecord {
+        enabled: bool,
+        domain: String,
+        ipv6_address: String,
+        ttl_seconds: u32,
+    },
+    #[serde(rename = "CNAME_RECORD")]
+    CnameRecord {
+        enabled: bool,
+        domain: String,
+        target_domain: String,
+        ttl_seconds: u32,
+    },
+    #[serde(rename = "FORWARD_DOMAIN")]
+    ForwardDomain {
+        enabled: bool,
+        domain: String,
+        ip_address: String,
+    },
+    #[serde(rename = "MX_RECORD")]
+    MxRecord {
+        enabled: bool,
+        domain: String,
+        mail_server_domain: String,
+        priority: u16,
+    },
+    #[serde(rename = "SRV_RECORD")]
+    SrvRecord {
+        enabled: bool,
+        domain: String,
+        port: u16,
+        priority: u16,
+        protocol: String,
+        server_domain: String,
+        service: String,
+        weight: u16,
+    },
+    #[serde(rename = "TXT_RECORD")]
+    TxtRecord {
+        enabled: bool,
+        domain: String,
+        text: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum Ipv4ListItem {
+    #[serde(rename = "IP_ADDRESS")]
+    IpAddress { value: String },
+    #[serde(rename = "IP_ADDRESS_RANGE")]
+    IpAddressRange { start: String, stop: String },
+    #[serde(rename = "SUBNET")]
+    Subnet { value: String },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum Ipv6ListItem {
+    #[serde(rename = "IP_ADDRESS")]
+    IpAddress { value: String },
+    #[serde(rename = "SUBNET")]
+    Subnet { value: String },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum PortListItem {
+    #[serde(rename = "PORT_NUMBER")]
+    PortNumber { value: u16 },
+    #[serde(rename = "PORT_NUMBER_RANGE")]
+    PortNumberRange { start: u16, stop: u16 },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum TrafficListRequest {
+    #[serde(rename = "IPV4_ADDRESSES")]
+    Ipv4Addresses {
+        name: String,
+        items: Vec<Ipv4ListItem>,
+    },
+    #[serde(rename = "IPV6_ADDRESSES")]
+    Ipv6Addresses {
+        name: String,
+        items: Vec<Ipv6ListItem>,
+    },
+    #[serde(rename = "PORTS")]
+    Ports {
+        name: String,
+        items: Vec<PortListItem>,
+    },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DnsPoliciesConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    policy: Option<DnsPolicyRequest>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TrafficListsConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    list: Option<TrafficListRequest>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct NetworkPolicyWriteOutput {
+    kind: NetworkPolicyKind,
+    operation: NetworkPolicyWriteOperation,
+    consequence: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_in_content: Option<bool>,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
+struct NetworkPolicyWritePlan {
+    kind: NetworkPolicyKind,
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    requested: Option<Value>,
+    confirm: bool,
+}
+
+fn policy_write_plan(
+    kind: NetworkPolicyKind,
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    requested: Option<Value>,
+    confirm: bool,
+) -> Result<NetworkPolicyWritePlan, McpError> {
+    let valid_shape = match operation {
+        NetworkPolicyWriteOperation::Create => id.is_none() && requested.is_some(),
+        NetworkPolicyWriteOperation::Update => id.is_some() && requested.is_some(),
+        NetworkPolicyWriteOperation::Delete => id.is_some() && requested.is_none(),
+    };
+    if !valid_shape {
+        return Err(McpError::invalid_params(
+            "create requires a request body and no id; update requires both; delete requires an id and no request body",
+            None,
+        ));
+    }
+    if id.as_ref().is_some_and(|id| {
+        id.trim().is_empty() || id.len() > 256 || matches!(id.as_str(), "." | "..")
+    }) {
+        return Err(McpError::invalid_params(
+            "id must be a nonempty id of at most 256 bytes",
+            None,
+        ));
+    }
+    if requested
+        .as_ref()
+        .is_some_and(|body| body.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES)
+    {
+        return Err(McpError::invalid_params(
+            "policy request exceeds the 1 MiB request bound",
+            None,
+        ));
+    }
+    Ok(NetworkPolicyWritePlan {
+        kind,
+        operation,
+        id,
+        requested,
+        confirm,
+    })
+}
+
+fn validate_dns_policy_request(policy: &DnsPolicyRequest) -> Result<(), McpError> {
+    let domain = match policy {
+        DnsPolicyRequest::ARecord { domain, .. }
+        | DnsPolicyRequest::AaaaRecord { domain, .. }
+        | DnsPolicyRequest::CnameRecord { domain, .. }
+        | DnsPolicyRequest::ForwardDomain { domain, .. }
+        | DnsPolicyRequest::MxRecord { domain, .. }
+        | DnsPolicyRequest::SrvRecord { domain, .. }
+        | DnsPolicyRequest::TxtRecord { domain, .. } => domain,
+    };
+    if domain.is_empty() || domain.len() > 127 {
+        return Err(McpError::invalid_params(
+            "domain must contain 1-127 bytes",
+            None,
+        ));
+    }
+    match policy {
+        DnsPolicyRequest::ARecord { ttl_seconds, .. }
+        | DnsPolicyRequest::AaaaRecord { ttl_seconds, .. }
+            if *ttl_seconds > 86_400 =>
+        {
+            Err(McpError::invalid_params(
+                "A and AAAA record ttlSeconds must be 0-86400",
+                None,
+            ))
+        }
+        DnsPolicyRequest::CnameRecord {
+            target_domain,
+            ttl_seconds,
+            ..
+        } if target_domain.is_empty() || target_domain.len() > 127 || *ttl_seconds > 604_800 => {
+            Err(McpError::invalid_params(
+                "CNAME targetDomain must contain 1-127 bytes and ttlSeconds must be 0-604800",
+                None,
+            ))
+        }
+        DnsPolicyRequest::MxRecord {
+            mail_server_domain, ..
+        } if mail_server_domain.is_empty() || mail_server_domain.len() > 127 => Err(
+            McpError::invalid_params("MX mailServerDomain must contain 1-127 bytes", None),
+        ),
+        DnsPolicyRequest::SrvRecord { server_domain, .. }
+            if server_domain.is_empty() || server_domain.len() > 127 =>
+        {
+            Err(McpError::invalid_params(
+                "SRV serverDomain must contain 1-127 bytes",
+                None,
+            ))
+        }
+        DnsPolicyRequest::TxtRecord { text, .. } if text.is_empty() || text.len() > 1024 => Err(
+            McpError::invalid_params("TXT text must contain 1-1024 bytes", None),
+        ),
+        _ => Ok(()),
+    }
+}
+
+fn validate_traffic_list_request(list: &TrafficListRequest) -> Result<(), McpError> {
+    let (name, item_count) = match list {
+        TrafficListRequest::Ipv4Addresses { name, items } => (name, items.len()),
+        TrafficListRequest::Ipv6Addresses { name, items } => (name, items.len()),
+        TrafficListRequest::Ports { name, items } => (name, items.len()),
+    };
+    if name.is_empty() || item_count == 0 {
+        return Err(McpError::invalid_params(
+            "name and at least one item are required",
+            None,
+        ));
+    }
+    if let TrafficListRequest::Ports { items, .. } = list {
+        for item in items {
+            let valid = match item {
+                PortListItem::PortNumber { value } => *value > 0,
+                PortListItem::PortNumberRange { start, stop } => *start > 0 && *stop > 0,
+            };
+            if !valid {
+                return Err(McpError::invalid_params(
+                    "port item values must be 1-65535",
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WifiBroadcastsListInput {
@@ -3710,6 +4018,12 @@ impl ToolSpec {
             ToolKind::NetworkPolicyDetail => {
                 tool::<NetworkPolicyDetailInput, NetworkPolicyDetailOutput>(self)
             }
+            ToolKind::DnsPoliciesConfigure => {
+                tool::<DnsPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
+            ToolKind::TrafficListsConfigure => {
+                tool::<TrafficListsConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
             ToolKind::WifiBroadcastsList => {
                 tool::<WifiBroadcastsListInput, WifiBroadcastsListOutput>(self)
             }
@@ -4042,6 +4356,8 @@ impl UnifiMcp {
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
+            ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
+            ToolKind::TrafficListsConfigure => self.traffic_lists_configure(params).await,
             ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
             ToolKind::WifiBroadcastsStatus => self.wifi_broadcasts_status(params).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
@@ -7027,6 +7343,208 @@ impl UnifiMcp {
             record: Some(record),
             record_in_content: None,
         })
+    }
+
+    async fn dns_policies_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<DnsPoliciesConfigureInput>(params)?;
+        let requested = input
+            .policy
+            .map(|policy| {
+                validate_dns_policy_request(&policy)?;
+                serde_json::to_value(policy)
+                    .map_err(|error| McpError::invalid_params(error.to_string(), None))
+            })
+            .transpose()?;
+        let plan = policy_write_plan(
+            NetworkPolicyKind::DnsPolicies,
+            input.operation,
+            input.id,
+            requested,
+            input.confirm,
+        )?;
+        self.network_policy_write(plan).await
+    }
+
+    async fn traffic_lists_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<TrafficListsConfigureInput>(params)?;
+        let requested = input
+            .list
+            .map(|list| {
+                validate_traffic_list_request(&list)?;
+                serde_json::to_value(list)
+                    .map_err(|error| McpError::invalid_params(error.to_string(), None))
+            })
+            .transpose()?;
+        let plan = policy_write_plan(
+            NetworkPolicyKind::TrafficMatchingLists,
+            input.operation,
+            input.id,
+            requested,
+            input.confirm,
+        )?;
+        self.network_policy_write(plan).await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The three fixed policy mutations share one accepted-response and readback contract"
+    )]
+    async fn network_policy_write(
+        &self,
+        plan: NetworkPolicyWritePlan,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let mut output = NetworkPolicyWriteOutput {
+            kind: plan.kind,
+            operation: plan.operation,
+            consequence: match plan.operation {
+                NetworkPolicyWriteOperation::Create => "create another policy or list",
+                NetworkPolicyWriteOperation::Update => "replace the named policy or list",
+                NetworkPolicyWriteOperation::Delete => {
+                    "delete the named policy or list and change rules that depend on it"
+                }
+            },
+            id: plan.id,
+            requested: plan.requested,
+            requested_in_content: None,
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !plan.confirm {
+            return network_policy_write_result(output);
+        }
+        let site_id = self.site_id().await?;
+        match output.operation {
+            NetworkPolicyWriteOperation::Create | NetworkPolicyWriteOperation::Update => {
+                let requested = output.requested.as_ref().expect("validated policy body");
+                let (status, accepted) = if output.operation == NetworkPolicyWriteOperation::Create
+                {
+                    self.integration()
+                        .network_policy_create(&site_id, output.kind.collection(), requested)
+                        .await
+                } else {
+                    self.integration()
+                        .network_policy_update(
+                            &site_id,
+                            output.kind.collection(),
+                            output.id.as_deref().expect("validated policy id"),
+                            requested,
+                        )
+                        .await
+                }
+                .map_err(api_error)?;
+                let accepted_id = accepted
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                output.submitted = true;
+                output.response_status = Some(status);
+                output.accepted = Some(accepted);
+                let id = output.id.clone().or(accepted_id.clone());
+                output.id = id.clone();
+                if let Some(id) = id {
+                    let budget = self
+                        .request_timeout()
+                        .saturating_sub(started.elapsed())
+                        .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+                        .min(NETWORK_POLICY_READBACK_BUDGET);
+                    if budget.is_zero() {
+                        output.readback_error =
+                            Some("policy readback skipped near request deadline".to_owned());
+                    } else {
+                        match tokio::time::timeout(
+                            budget,
+                            self.integration().network_policy_detail(
+                                &site_id,
+                                output.kind.collection(),
+                                &id,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(Ok(after)) => {
+                                output.verified = Some(
+                                    after.get("id").and_then(Value::as_str) == Some(id.as_str())
+                                        && accepted_id.as_deref() == Some(id.as_str())
+                                        && requested_json_matches(requested, &after),
+                                );
+                                output.after = Some(after);
+                            }
+                            Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                            Err(_) => {
+                                output.readback_error =
+                                    Some("policy readback timed out".to_owned());
+                            }
+                        }
+                    }
+                } else {
+                    output.readback_error =
+                        Some("accepted policy record had no id for readback".to_owned());
+                }
+            }
+            NetworkPolicyWriteOperation::Delete => {
+                let id = output.id.as_deref().expect("validated policy id");
+                let (status, body) = self
+                    .integration()
+                    .network_policy_delete(&site_id, output.kind.collection(), id)
+                    .await
+                    .map_err(api_error)?;
+                output.submitted = true;
+                output.response_status = Some(status);
+                output.response_body =
+                    Some(BoundedMessage::from_controller_bytes(&body).to_string());
+                let budget = self
+                    .request_timeout()
+                    .saturating_sub(started.elapsed())
+                    .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+                    .min(NETWORK_POLICY_READBACK_BUDGET);
+                if budget.is_zero() {
+                    output.readback_error =
+                        Some("policy readback skipped near request deadline".to_owned());
+                } else {
+                    match tokio::time::timeout(
+                        budget,
+                        self.integration().network_policy_detail(
+                            &site_id,
+                            output.kind.collection(),
+                            id,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(after)) => {
+                            output.after = Some(after);
+                            output.verified_absent = Some(false);
+                        }
+                        Ok(Err(error @ ApiError::Status { status: 404, .. })) => {
+                            output.verified_absent = Some(true);
+                            output.readback_error = Some(error.to_string());
+                        }
+                        Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                        Err(_) => {
+                            output.readback_error = Some("policy readback timed out".to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        network_policy_write_result(output)
     }
 
     async fn radius_profiles_list(
@@ -10281,6 +10799,8 @@ const FIREWALL_DELETE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const FIREWALL_DELETE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const DEVICE_LIFECYCLE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const DEVICE_LIFECYCLE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+const NETWORK_POLICY_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const NETWORK_POLICY_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -11965,6 +12485,50 @@ fn network_policy_list_result(
     Ok(full)
 }
 
+fn network_policy_write_result(
+    mut output: NetworkPolicyWriteOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &NetworkPolicyWriteOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(requested) = output.requested.take()
+    {
+        output.requested_in_content = Some(true);
+        content.push(ContentBlock::text(format!("requested: {requested}")));
+    }
+    if exceeds(&output)?
+        && let Some(accepted) = output.accepted.take()
+    {
+        output.accepted_in_content = Some(true);
+        content.push(ContentBlock::text(format!("accepted: {accepted}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn pending_devices_list_result(
     mut output: PendingDevicesListOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -12731,6 +13295,8 @@ mod tests {
         ("devices.control", false, false, false),
         ("devices.adopt", false, true, true),
         ("devices.remove", false, false, true),
+        ("dns.policies.configure", false, true, true),
+        ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.
         ("guests.authorize", false, false, true),
         // Revocation disconnects the client and returns the revoked grant.
