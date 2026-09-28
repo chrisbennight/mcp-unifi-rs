@@ -34,6 +34,9 @@ pub enum ToolKind {
     ClientsContext,
     DevicesSearch,
     DevicesStatus,
+    PendingDevicesList,
+    DevicesAdopt,
+    DevicesRemove,
     FirewallRead,
     NetworksRead,
     RadiusProfilesList,
@@ -98,6 +101,8 @@ impl ToolKind {
             Self::WlansUpdate
             | Self::ClientsControl
             | Self::DevicesControl
+            | Self::DevicesAdopt
+            | Self::DevicesRemove
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
@@ -123,6 +128,7 @@ impl ToolKind {
             | Self::ClientsContext
             | Self::DevicesSearch
             | Self::DevicesStatus
+            | Self::PendingDevicesList
             | Self::GuestsStatus
             | Self::FirewallRead
             | Self::NetworksRead
@@ -196,6 +202,9 @@ impl ToolKind {
             | Self::ClientsContext
             | Self::DevicesSearch
             | Self::DevicesStatus
+            | Self::PendingDevicesList
+            | Self::DevicesAdopt
+            | Self::DevicesRemove
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::RadiusProfilesList
@@ -398,6 +407,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "One device's bounded status: identity, state, firmware, uptime, CPU \
          and memory utilization, uplink rates, and summarized port and radio \
          tables, selected by id, MAC, or name.",
+    ),
+    sensitive_read_spec(
+        ToolKind::PendingDevicesList,
+        "devices.pending.list",
+        "Page through complete controller records for devices pending adoption, with the documented filter query and a continuation offset.",
     ),
     sensitive_read_spec(
         ToolKind::FirewallRead,
@@ -703,6 +717,20 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         // Not idempotent: each restart restarts, each port cycle cycles.
         ToolBehavior::write(false),
     ),
+    write_spec(
+        ToolKind::DevicesAdopt,
+        "devices.adopt",
+        "Preview or adopt a pending device by its MAC address, with the documented ignoreDeviceLimit choice. Return the complete accepted controller record and observable readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::DevicesRemove,
+        "devices.remove",
+        "Preview or remove an adopted device by id. An online device is factory-reset. Return the accepted HTTP status and complete controller body, then report observed absence or readback failure.",
+        ToolBehavior::write(false).result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::GuestsStatus,
         "guests.status",
@@ -801,6 +829,9 @@ mod tests {
         ToolKind::ClientsContext,
         ToolKind::DevicesSearch,
         ToolKind::DevicesStatus,
+        ToolKind::PendingDevicesList,
+        ToolKind::DevicesAdopt,
+        ToolKind::DevicesRemove,
         ToolKind::FirewallRead,
         ToolKind::NetworksRead,
         ToolKind::RadiusProfilesList,
@@ -919,6 +950,9 @@ mod tests {
                 | ToolKind::ClientsContext
                 | ToolKind::DevicesSearch
                 | ToolKind::DevicesStatus
+                | ToolKind::PendingDevicesList
+                | ToolKind::DevicesAdopt
+                | ToolKind::DevicesRemove
                 | ToolKind::FirewallRead
                 | ToolKind::NetworksRead
                 | ToolKind::RadiusProfilesList

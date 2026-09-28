@@ -44,9 +44,9 @@ The local account is required for Network and optional for Protect enrichment.
 ## Tool surface
 
 Reads: `network.overview`, `clients.search`, `clients.context`,
-`devices.search`, `devices.status`, `wifi.diagnose`, `firewall.read`,
-`networks.read`, `radius_profiles.list`, `network.inventory.list`,
-`network.switching.detail`, `wifi.broadcasts.list`,
+`devices.search`, `devices.status`, `devices.pending.list`, `wifi.diagnose`,
+`firewall.read`, `networks.read`, `radius_profiles.list`,
+`network.inventory.list`, `network.switching.detail`, `wifi.broadcasts.list`,
 `wifi.broadcasts.status`, `events.search`, `stats.query`, `cameras.search`,
 `cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
 `protect.overview`, `protect.events`, `protect.event.thumbnail`,
@@ -57,7 +57,8 @@ Reads: `network.overview`, `clients.search`, `clients.context`,
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
-`devices.control` (restart, locate, port cycle), `guests.authorize`,
+`devices.control` (restart, locate, port cycle), `devices.adopt`,
+`devices.remove`, `guests.authorize`,
 `port_forwards.update` (name, state, source, target, ports, protocol), `firewall.policies.update`
 (enable, disable; zone-based consoles), `firewall.policies.delete`,
 `cameras.pos.transaction` (camera event ingestion),
