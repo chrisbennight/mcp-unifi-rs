@@ -93,8 +93,9 @@ pub enum ApiError {
     /// The legacy controller API accepted the transport but rejected the
     /// operation with one of its `api.err.*` codes. `code` is the upstream
     /// token when present; `message` is the bounded upstream response body.
-    #[error("{message}")]
+    #[error("{status_prefix}{message}", status_prefix = rejection_status_prefix(*status))]
     Rejected {
+        status: Option<u16>,
         code: BoundedMessage,
         message: BoundedMessage,
     },
@@ -149,6 +150,12 @@ impl ApiError {
 
 fn controller_response_suffix(response: Option<&BoundedMessage>) -> String {
     response.map_or_else(String::new, |body| format!("; controller response: {body}"))
+}
+
+fn rejection_status_prefix(status: Option<u16>) -> String {
+    status.map_or_else(String::new, |status| {
+        format!("controller rejected HTTP {status}: ")
+    })
 }
 
 #[cfg(test)]

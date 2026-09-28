@@ -98,7 +98,7 @@ impl LegacyClient {
         site: &str,
         body: &serde_json::Value,
     ) -> Result<Vec<u8>, ApiError> {
-        let bytes = self
+        let (status, bytes) = self
             .execute_bytes(
                 RequestClass::IdempotentRead,
                 Method::POST,
@@ -108,7 +108,11 @@ impl LegacyClient {
             )
             .await?;
         if let Some(rejected) = super::envelope_rejection(&bytes) {
-            return Err(super::rejection(rejected.code.as_deref(), &bytes));
+            return Err(super::rejection(
+                Some(status),
+                rejected.code.as_deref(),
+                &bytes,
+            ));
         }
         Ok(bytes)
     }

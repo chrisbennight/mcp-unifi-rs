@@ -396,7 +396,10 @@ async fn system_log_failure_preserves_controller_code() {
         .call(&call("events.search", &serde_json::json!({})), None)
         .await
         .expect_err("missing endpoint must fail");
-    assert_eq!(error.message, upstream.to_string());
+    assert_eq!(
+        error.message,
+        format!("controller rejected HTTP 404: {upstream}")
+    );
 }
 
 #[tokio::test]
