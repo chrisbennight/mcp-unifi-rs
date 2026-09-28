@@ -328,8 +328,25 @@ impl IntegrationClient {
         site_id: &str,
         client_id: &str,
     ) -> Result<ClientDetail, ApiError> {
-        self.get_json(&["sites", site_id, "clients", client_id], &[])
+        self.client_detail_with_response(site_id, client_id)
             .await
+            .map(|(detail, _)| detail)
+    }
+
+    /// Read a connected client and retain the accepted response for caller-side
+    /// identity and guest-state validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn client_detail_with_response(
+        &self,
+        site_id: &str,
+        client_id: &str,
+    ) -> Result<(ClientDetail, BoundedMessage), ApiError> {
+        self.get_json_with_response(&["sites", site_id, "clients", client_id], &[])
+            .await
+            .map(|(detail, bytes)| (detail, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Authorize one guest with optional access limits. Never retried.
