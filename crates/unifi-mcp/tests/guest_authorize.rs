@@ -231,6 +231,49 @@ async fn a_confirmed_authorization_posts_the_action() {
 }
 
 #[tokio::test]
+async fn malformed_guest_action_reaches_the_tool_caller() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    mount_clients(
+        &server,
+        &serde_json::json!([{"id": CLIENT_ID, "macAddress": MAC}]),
+        1,
+    )
+    .await;
+    let before = detail(false, None);
+    mount_detail(&server, &before, &before).await;
+    let body = serde_json::json!({
+        "action": "AUTHORIZE_GUEST_ACCESS",
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-guest-action-tail",
+    });
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}/actions"
+        )))
+        .and(body_json(
+            serde_json::json!({"action": "AUTHORIZE_GUEST_ACCESS"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &authorize(&serde_json::json!({"client": MAC, "confirm": true})),
+            None,
+        )
+        .await
+        .expect_err("missing action grant");
+    assert!(
+        error.message.contains(&body.to_string()),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains("action/grantedAuthorization"));
+}
+
+#[tokio::test]
 async fn repeated_authorization_returns_revoked_and_new_grants() {
     let server = MockServer::start().await;
     mount_site(&server).await;

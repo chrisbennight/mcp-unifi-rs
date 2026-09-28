@@ -538,6 +538,8 @@ The observed grant is returned separately when it can be read. If a disconnected
 client is no longer readable, the action response remains available and the
 result says that verification was unavailable. If the verification read fails,
 `readbackError` carries the controller response alongside the action response.
+If an accepted guest action response omits the required grant or revocation,
+the error includes the complete controller body and the missing field.
 
 ### Rule deletion: `firewall.policies.delete`
 
