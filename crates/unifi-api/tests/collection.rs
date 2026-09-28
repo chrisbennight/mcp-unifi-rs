@@ -44,6 +44,31 @@ async fn mocks(server: &MockServer, activity: Value, graph_status: u16) {
     Mock::given(method("POST")).and(path("/proxy/network/api/s/default/stat/report/hourly.site")).respond_with(ResponseTemplate::new(200).set_body_string(format!(r#"{{"meta":{{"rc":"ok","extra":"retained"}},"data":[{{"time":{START},"wan-rx_bytes":1.2300,"wan-tx_bytes":4,"unknown":123456789012345678901234567890}}]}}"#))).mount(server).await;
 }
 
+async fn fixed_sources(
+    server: &MockServer,
+    graph_status: u16,
+    graph_body: String,
+    wan_body: String,
+) {
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/v2/api/site/default/traffic"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "client_usage_by_app": [], "total_usage_by_app": []
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/v2/api/site/default/app-traffic-rate"))
+        .respond_with(ResponseTemplate::new(graph_status).set_body_string(graph_body))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/api/s/default/stat/report/hourly.site"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(wan_body))
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn one_read_retains_more_than_an_mcp_page_and_preserves_all_fields() {
     let (server, client) = setup().await;
@@ -84,6 +109,47 @@ async fn unavailable_source_does_not_discard_successful_reports() {
     assert_eq!(snapshot.wan.status, SourceStatus::Collected);
     assert_eq!(snapshot.graph.status, SourceStatus::Unsupported);
     assert!(snapshot.activity.data.is_some());
+}
+
+#[tokio::test]
+async fn failed_source_retains_the_controller_response_beside_successful_reports() {
+    let (server, client) = setup().await;
+    let failure = format!("graph unavailable: {}graph-error-tail", "x".repeat(700));
+    fixed_sources(
+        &server,
+        503,
+        failure.clone(),
+        r#"{"meta":{"rc":"ok"},"data":[]}"#.to_owned(),
+    )
+    .await;
+    let snapshot = client
+        .collect_traffic("default", ActivityWindow::new(START, END).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.activity.status, SourceStatus::Collected);
+    assert_eq!(snapshot.wan.status, SourceStatus::Collected);
+    assert_eq!(snapshot.graph.status, SourceStatus::Failed);
+    assert_eq!(
+        snapshot.graph.error,
+        Some(format!("controller returned HTTP 503: {failure}"))
+    );
+}
+
+#[tokio::test]
+async fn malformed_wan_response_retains_the_controller_body() {
+    let (server, client) = setup().await;
+    let malformed = format!("not JSON {}wan-error-tail", "x".repeat(700));
+    fixed_sources(&server, 200, "[]".to_owned(), malformed.clone()).await;
+    let snapshot = client
+        .collect_traffic("default", ActivityWindow::new(START, END).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.activity.status, SourceStatus::Collected);
+    assert_eq!(snapshot.graph.status, SourceStatus::Collected);
+    assert_eq!(snapshot.wan.status, SourceStatus::Failed);
+    let error = snapshot.wan.error.expect("source error");
+    assert!(error.contains(&malformed));
+    assert!(error.contains("decode error"));
 }
 
 #[tokio::test]

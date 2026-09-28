@@ -25,19 +25,23 @@ where
                     SourceStatus::Unrecognized
                 },
                 data: Some(data),
+                error: None,
             }
         }
         Ok(ActivityRead::Unsupported) => SourceReport {
             status: SourceStatus::Unsupported,
             data: None,
+            error: None,
         },
         Ok(ActivityRead::Unrecognized) => SourceReport {
             status: SourceStatus::Unrecognized,
             data: None,
+            error: None,
         },
-        Err(_) => SourceReport {
+        Err(error) => SourceReport {
             status: SourceStatus::Failed,
             data: None,
+            error: Some(error.to_string()),
         },
     }
 }
@@ -88,10 +92,9 @@ impl LegacyClient {
             }
             other => other?,
         };
-        Ok(match serde_json::from_slice(&bytes) {
-            Ok(raw) => ActivityRead::Reported(raw),
-            Err(_) => ActivityRead::Unrecognized,
-        })
+        serde_json::from_slice(&bytes)
+            .map(ActivityRead::Reported)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))
     }
     async fn collect_wan_bytes(
         &self,

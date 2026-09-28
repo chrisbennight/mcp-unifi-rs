@@ -43,6 +43,7 @@ fn source(value: Value) -> SourceReport {
     SourceReport {
         status: SourceStatus::Collected,
         data: Some(serde_json::value::to_raw_value(&value).unwrap()),
+        error: None,
     }
 }
 
