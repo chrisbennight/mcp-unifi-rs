@@ -257,6 +257,77 @@ async fn pos_transaction_keeps_conflict_and_malformed_accepted_bodies() {
 }
 
 #[tokio::test]
+async fn viewers_and_liveviews_keep_complete_records_on_fixed_routes() {
+    for (route, id) in [("viewers", "viewer-1"), ("liveviews", "liveview-1")] {
+        let server = MockServer::start().await;
+        let record = serde_json::json!({
+            "id": id, "name": "Front display",
+            "layout": 4, "slots": [{"cameras": ["camera-1"], "cycleMode": "time", "cycleInterval": 10}],
+            "controllerSpecific": {"nested": ["kept", 42]},
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{route}")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([record.clone()])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{route}/{id}")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let (list, detail) = if route == "viewers" {
+            (
+                client.viewers().await.expect("viewers"),
+                client.viewer(id).await.expect("viewer"),
+            )
+        } else {
+            (
+                client.liveviews().await.expect("liveviews"),
+                client.liveview(id).await.expect("liveview"),
+            )
+        };
+        assert_eq!(list, vec![record.clone()]);
+        assert_eq!(detail, record);
+    }
+}
+
+#[tokio::test]
+async fn view_detail_identity_failure_keeps_the_accepted_body() {
+    for (route, requested) in [("viewers", "viewer-1"), ("liveviews", "liveview-1")] {
+        let server = MockServer::start().await;
+        let response = serde_json::json!({
+            "id": "another-id", "controllerSpecific": "identity-tail".repeat(100),
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{route}/{requested}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let error = if route == "viewers" {
+            client
+                .viewer(requested)
+                .await
+                .expect_err("wrong viewer identity")
+        } else {
+            client
+                .liveview(requested)
+                .await
+                .expect_err("wrong liveview identity")
+        };
+        assert!(error.to_string().contains(&response.to_string()));
+    }
+}
+
+#[tokio::test]
 async fn cameras_decode_the_complete_v7_1_87_official_shape() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

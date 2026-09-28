@@ -773,6 +773,62 @@ impl ProtectClient {
         Ok(result)
     }
 
+    /// Read complete Protect viewer device records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn viewers(&self) -> Result<Vec<Value>, ApiError> {
+        self.get_json_validated(&["viewers"], |viewers: &Vec<Value>| {
+            for viewer in viewers {
+                validate_resource_record("protect.viewers", viewer, None)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Read one complete Protect viewer device record by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn viewer(&self, viewer_id: &str) -> Result<Value, ApiError> {
+        validate_identifier("protect.viewers.by_id", viewer_id)?;
+        self.get_json_validated(&["viewers", viewer_id], |viewer: &Value| {
+            validate_resource_record("protect.viewers.by_id", viewer, Some(viewer_id))
+        })
+        .await
+    }
+
+    /// Read complete Protect live-view configuration records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn liveviews(&self) -> Result<Vec<Value>, ApiError> {
+        self.get_json_validated(&["liveviews"], |liveviews: &Vec<Value>| {
+            for liveview in liveviews {
+                validate_resource_record("protect.liveviews", liveview, None)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Read one complete Protect live-view configuration record by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn liveview(&self, liveview_id: &str) -> Result<Value, ApiError> {
+        validate_identifier("protect.liveviews.by_id", liveview_id)?;
+        self.get_json_validated(&["liveviews", liveview_id], |liveview: &Value| {
+            validate_resource_record("protect.liveviews.by_id", liveview, Some(liveview_id))
+        })
+        .await
+    }
+
     /// Patch one camera's documented settings once. The caller reads back
     /// the camera to check which fields the console persisted.
     ///
@@ -1211,6 +1267,10 @@ fn endpoint_name(segments: &[&str]) -> &'static str {
         ["users" | "ulp-users"] => "protect.users",
         ["users" | "ulp-users", _] => "protect.users.by_id",
         ["pos", "cameras", _, "transactions"] => "protect.pos.transactions",
+        ["viewers"] => "protect.viewers",
+        ["viewers", _] => "protect.viewers.by_id",
+        ["liveviews"] => "protect.liveviews",
+        ["liveviews", _] => "protect.liveviews.by_id",
         _ => "protect.integration",
     }
 }

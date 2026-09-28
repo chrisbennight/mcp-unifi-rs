@@ -326,6 +326,19 @@ after that window. The server never retries a POST after an ambiguous transport
 result. An upstream 409 in-progress conflict retains its status and complete
 body. Input and result sensitivity metadata tells the gateway what to govern.
 
+### `protect.viewers.list/status` and `protect.liveviews.list/status`
+
+These tools read viewer devices and live-view configurations from the Protect
+7.3.53 API. Viewer records include their assigned live view and stream limit;
+live-view records include their layout and camera slots. The tools preserve
+the complete controller records, including future fields. Lists accept
+`offset` and `limit` (1-200, default 50) and return `totalCount` and
+`nextOffset` until complete. Detail reads use the exact `viewerId` or
+`liveviewId`. An empty inventory is distinct from an absent route. Invalid
+records or a wrong detail id return the accepted controller body with a local
+diagnostic. A result that exceeds the MCP budget fails explicitly so the
+caller can lower the page limit.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It
