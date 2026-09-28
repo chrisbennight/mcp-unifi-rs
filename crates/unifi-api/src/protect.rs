@@ -397,18 +397,51 @@ pub struct ProtectResolutionDistribution {
 ///
 /// The paged list carries compact event facts. Event thumbnails are available
 /// separately by id so image bytes do not expand every search result.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtectEvent {
     pub id: String,
-    #[serde(rename = "type")]
     pub kind: String,
     pub start: u64,
     pub end: Option<u64>,
     pub score: Option<u32>,
     pub camera: Option<String>,
-    #[serde(default)]
     pub smart_detect_types: Vec<String>,
+    /// The complete event object as the controller returned it. Search views
+    /// select this only when a caller asks for event details.
+    pub details: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtectEventFields {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    start: u64,
+    end: Option<u64>,
+    score: Option<u32>,
+    camera: Option<String>,
+    #[serde(default)]
+    smart_detect_types: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ProtectEvent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let details = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let fields: ProtectEventFields =
+            serde_json::from_value(serde_json::Value::Object(details.clone()))
+                .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            id: fields.id,
+            kind: fields.kind,
+            start: fields.start,
+            end: fields.end,
+            score: fields.score,
+            camera: fields.camera,
+            smart_detect_types: fields.smart_detect_types,
+            details,
+        })
+    }
 }
 
 /// Stable time key used to resume an event scan without depending on the

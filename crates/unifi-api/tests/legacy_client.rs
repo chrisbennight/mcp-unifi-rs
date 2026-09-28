@@ -1551,8 +1551,8 @@ async fn protect_events_page_without_a_scan_ceiling_uses_a_time_keyset() {
                 "score": 91,
                 "camera": "cam-front",
                 "smartDetectTypes": ["person"],
-                "metadata": {"detectedThumbnails": ["must-not-leave-the-client"]},
-                "thumbnail": "base64-must-not-leave-the-client"
+                "metadata": {"detectedThumbnails": ["frame-1"]},
+                "thumbnail": "thumbnail-ref-1"
             },
             {"id": "event-2", "type": "motion", "start": 1800,
              "camera": "cam-front"},
@@ -1590,6 +1590,13 @@ async fn protect_events_page_without_a_scan_ceiling_uses_a_time_keyset() {
     assert_eq!(first.events[0].kind, "smartDetectZone");
     assert_eq!(first.events[0].camera.as_deref(), Some("cam-front"));
     assert_eq!(first.events[0].smart_detect_types, ["person"]);
+    assert_eq!(first.events[0].details["type"], "smartDetectZone");
+    assert_eq!(first.events[0].details["start"], 1900);
+    assert_eq!(
+        first.events[0].details["metadata"]["detectedThumbnails"][0],
+        "frame-1"
+    );
+    assert_eq!(first.events[0].details["thumbnail"], "thumbnail-ref-1");
     let continuation = first.next.expect("continuation");
     assert_eq!(continuation.next_end, 1799);
 

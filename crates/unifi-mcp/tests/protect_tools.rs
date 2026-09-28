@@ -1674,10 +1674,11 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
         .and(query_param("offset", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"id": "event-1", "type": "smartDetectLine", "start": 1100,
-             "camera": "cam-front", "smartDetectTypes": ["person"]},
+             "camera": "cam-front", "smartDetectTypes": ["person"],
+             "metadata": {"zoneName": "Driveway"}, "thumbnail": "thumb-1"},
             {"id": "before-window", "type": "motion", "start": 999}
         ])))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let handler = handler_with_events(&server);
@@ -1700,6 +1701,7 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
         .expect("first page");
     let output = first.structured_content.expect("structured");
     assert_eq!(output["rows"].as_array().expect("rows").len(), 1);
+    assert!(output["rows"][0].get("details").is_none());
     assert_eq!(output["rows"][0]["cameraName"], " Front Door ");
     assert_eq!(
         output["rows"][0]["detectionTypes"]
@@ -1718,7 +1720,7 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
         .call(
             &call(
                 "protect.events",
-                &serde_json::json!({"cursor": cursor, "limit": 2}),
+                &serde_json::json!({"cursor": cursor.clone(), "limit": 2, "includeDetails": true}),
             ),
             None,
         )
@@ -1727,12 +1729,36 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
     let output = second.structured_content.expect("structured");
     assert_eq!(output["rows"].as_array().expect("rows").len(), 1);
     assert_eq!(output["rows"][0]["id"], "event-1");
+    assert_eq!(output["rows"][0]["details"]["type"], "smartDetectLine");
+    assert_eq!(
+        output["rows"][0]["details"]["metadata"]["zoneName"],
+        "Driveway"
+    );
+    assert_eq!(output["rows"][0]["details"]["thumbnail"], "thumb-1");
     assert_eq!(
         output["rows"][0]["detectionTypes"],
         serde_json::json!(["person"])
     );
     assert_eq!(output["complete"], true);
     assert!(output.get("nextCursor").is_none());
+
+    let selected = handler
+        .call(
+            &call(
+                "protect.events",
+                &serde_json::json!({"cursor": cursor, "limit": 2, "detailFields": ["metadata"]}),
+            ),
+            None,
+        )
+        .await
+        .expect("selected event details")
+        .structured_content
+        .expect("structured");
+    assert_eq!(
+        selected["rows"][0]["details"]["metadata"]["zoneName"],
+        "Driveway"
+    );
+    assert!(selected["rows"][0]["details"].get("thumbnail").is_none());
 }
 
 #[tokio::test]

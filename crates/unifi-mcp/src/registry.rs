@@ -411,7 +411,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.events",
         "Search historical Protect detections in a bounded window, filtered \
          by camera or detection kind, newest first with pagination. Returns \
-         typed event metadata. Use protect.event.thumbnail to fetch an event image.",
+         compact event facts, or the controller's complete event records when includeDetails is true. Use protect.event.thumbnail to fetch an event image.",
     ),
     sensitive_read_spec(
         ToolKind::ProtectEventThumbnail,
