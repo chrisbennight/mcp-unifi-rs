@@ -10,7 +10,7 @@ use unifi_mcp::{IdentityPrincipal, UnifiMcp};
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{method, path, query_param},
 };
 use zeroize::Zeroizing;
 
@@ -60,6 +60,103 @@ fn principal(groups: &[&str]) -> IdentityPrincipal {
         subject: "user:test".to_owned(),
         groups: groups.iter().map(|group| (*group).to_owned()).collect(),
     }
+}
+
+#[tokio::test]
+async fn radius_profiles_list_pages_without_dropping_controller_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(&server)
+        .await;
+    for (offset, id, name) in [(0, "radius-1", "Office"), (1, "radius-2", "Guest")] {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/radius/profiles"
+            )))
+            .and(query_param("offset", offset.to_string()))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "offset": offset, "limit": 1, "count": 1, "totalCount": 2,
+                "data": [{"id": id, "name": name, "controllerExtension": {"source": "upstream"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let handler = handler_for(&server);
+    let first = handler
+        .call(
+            &call("radius_profiles.list", &serde_json::json!({"limit": 1})),
+            None,
+        )
+        .await
+        .expect("first page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(first["profiles"][0]["id"], "radius-1");
+    assert_eq!(
+        first["profiles"][0]["controllerExtension"]["source"],
+        "upstream"
+    );
+    assert_eq!(first["nextOffset"], 1);
+
+    let second = handler
+        .call(
+            &call(
+                "radius_profiles.list",
+                &serde_json::json!({"offset": 1, "limit": 1}),
+            ),
+            None,
+        )
+        .await
+        .expect("second page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(second["profiles"][0]["name"], "Guest");
+    assert!(second.get("nextOffset").is_none());
+}
+
+#[tokio::test]
+async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/radius/profiles"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 0, "count": 2, "totalCount": 2,
+            "data": [{"id": "radius-1", "name": "Office"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &call("radius_profiles.list", &serde_json::json!({"limit": 1})),
+            None,
+        )
+        .await
+        .expect_err("contradictory page metadata");
+    assert!(
+        error
+            .message
+            .contains("reported offset 0, limit 0, count 2, and 1 rows")
+    );
 }
 
 async fn common_mocks(server: &MockServer) {

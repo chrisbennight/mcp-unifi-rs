@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -133,6 +134,21 @@ impl IntegrationClient {
     /// Returns an [`ApiError`] when the request or decoding fails.
     pub async fn sites(&self, page: PageRequest) -> Result<Page<SiteSummary>, ApiError> {
         self.get_json(&["sites"], &page_query(page)).await
+    }
+
+    /// RADIUS profiles available to wireless enterprise configurations.
+    /// Each bounded page retains the fields the controller returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn radius_profiles(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<Map<String, Value>>, ApiError> {
+        self.get_json(&["sites", site_id, "radius", "profiles"], &page_query(page))
+            .await
     }
 
     /// # Errors

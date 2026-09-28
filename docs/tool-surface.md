@@ -5,9 +5,9 @@ point — this is a workflow surface, not an endpoint mirror, and a tool exists
 here because an operator reaches for it, not because the controller exposes
 it.
 
-Every tool rejects unknown parameters, returns a bounded structured result, and
-carries MCP behavior annotations the gateway uses for authorization. Nothing
-returns a raw controller record.
+Every tool rejects unknown parameters, returns a bounded result, and carries
+MCP behavior annotations the gateway uses for authorization. Common views
+stay compact; selected tools also return the controller's original fields.
 
 The registry in `crates/unifi-mcp/src/registry.rs` is the executable source of
 these names, descriptions, and classifications; this page explains them.
@@ -16,10 +16,8 @@ these names, descriptions, and classifications; this page explains them.
 
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read` and `networks.read`, because a firewall rule names the
-addresses it governs and a wireless network names its security mode; and the
-four Protect reads, because an inventory of what is watched and whether it is
-watching is disclosure-relevant even without an image.
+`firewall.read`, `networks.read`, `radius_profiles.list`, and Protect reads.
+The gateway decides who can receive these controller values.
 
 ### `network.overview`
 
@@ -98,6 +96,16 @@ scan with `sectionOffset` taken from `nextSectionOffset`.
 
 Configured networks and wireless networks: VLANs, subnets, DHCP scopes, SSIDs,
 security modes, and passphrases. The gateway controls access to these values.
+
+### `radius_profiles.list`
+
+`offset` and `limit` (1-200, default 50) page through the official Network
+API's [RADIUS profiles](https://developer.ui.com/network/v10.4.57/getradiusprofileoverviewpage)
+for the selected site. Each profile preserves the fields
+the controller returned, including the id needed for enterprise Wi-Fi setup.
+The result includes the controller's page metadata and `nextOffset` until the
+list is complete. An over-budget result fails explicitly; lower `limit` to
+continue with smaller pages.
 
 ### `wifi.diagnose`
 

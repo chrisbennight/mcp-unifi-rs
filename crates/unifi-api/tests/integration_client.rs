@@ -57,6 +57,38 @@ async fn every_request_authenticates_with_the_api_key_header() {
 }
 
 #[tokio::test]
+async fn radius_profile_pages_keep_the_controllers_complete_records() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/site-1/radius/profiles")))
+        .and(header("X-API-KEY", API_KEY))
+        .and(query_param("offset", "2"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 2, "limit": 1, "count": 1, "totalCount": 3,
+            "data": [{"id": "radius-3", "name": "Enterprise", "origin": "EXTERNAL",
+                      "controllerExtension": {"enabled": true}}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = client_for(&server)
+        .radius_profiles(
+            "site-1",
+            PageRequest {
+                offset: 2,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("RADIUS profile page");
+    assert_eq!(page.total_count, 3);
+    assert_eq!(page.data[0]["id"], "radius-3");
+    assert_eq!(page.data[0]["controllerExtension"]["enabled"], true);
+}
+
+#[tokio::test]
 async fn device_detail_decodes_port_and_radio_tables() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
