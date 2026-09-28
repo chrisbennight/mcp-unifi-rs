@@ -233,6 +233,39 @@ async fn wifi_broadcasts_list_and_status_return_complete_controller_fields() {
     assert_eq!(record["controllerExtension"]["value"], "from-controller");
 }
 
+#[tokio::test]
+async fn wifi_broadcasts_list_rejects_rows_beyond_reported_total() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/wifi/broadcasts"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 1, "count": 1, "totalCount": 0,
+            "data": [{"id": "wifi-1", "name": "Studio"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &call("wifi.broadcasts.list", &serde_json::json!({"limit": 1})),
+            None,
+        )
+        .await
+        .expect_err("contradictory total count");
+    assert!(error.message.contains("offset 1 exceeds reported total 0"));
+}
+
 async fn common_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))

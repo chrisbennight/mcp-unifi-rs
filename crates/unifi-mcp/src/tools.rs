@@ -4199,6 +4199,15 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| McpError::internal_error("Wi-Fi broadcast offset overflow", None))?;
+        if next > page.total_count {
+            return Err(McpError::internal_error(
+                format!(
+                    "Wi-Fi broadcast page through offset {next} exceeds reported total {}",
+                    page.total_count
+                ),
+                None,
+            ));
+        }
         if next < page.total_count && page.data.is_empty() {
             return Err(McpError::internal_error(
                 format!(
