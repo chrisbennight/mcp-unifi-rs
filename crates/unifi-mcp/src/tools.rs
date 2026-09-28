@@ -1684,7 +1684,7 @@ struct FirewallPoliciesDeleteInput {
     confirm: bool,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct FirewallPoliciesDeleteOutput {
     policy: PolicyView,
@@ -1696,7 +1696,7 @@ struct FirewallPoliciesDeleteOutput {
     warnings: Vec<String>,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PolicyPreviewCoverage {
     /// Full values for the official policy fields that the compact summary omits.
@@ -4577,7 +4577,7 @@ impl UnifiMcp {
             ));
         }
         let mut output = FirewallPoliciesDeleteOutput {
-            policy: policy_view_from_record(&input.policy, &record),
+            policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
             preview: policy_preview_coverage(&record),
             applied: false,
             verified_absent: None,
@@ -4595,6 +4595,18 @@ impl UnifiMcp {
         if !input.confirm {
             return structured(output);
         }
+        // Check the confirmed result shape before the irreversible call.
+        let mut final_shape = output.clone();
+        final_shape.applied = true;
+        final_shape.verified_absent = Some(false);
+        final_shape.warnings.push(
+            "the delete request was accepted, but policy absence was not verified".to_owned(),
+        );
+        finalize(
+            structured(final_shape)?,
+            self.redact(),
+            ToolBehavior::write(false),
+        )?;
         self.integration()
             .delete_firewall_policy(&site_id, &input.policy)
             .await
@@ -6410,6 +6422,25 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
     }
 }
 
+/// A deletion result must remain small even when the controller supplied
+/// unusually long policy labels or endpoint identifiers.
+fn bounded_policy_view(mut policy: PolicyView) -> PolicyView {
+    for field in [
+        &mut policy.name,
+        &mut policy.action,
+        &mut policy.ip_protocol_scope,
+        &mut policy.source_zone_id,
+        &mut policy.source_port,
+        &mut policy.destination_zone_id,
+        &mut policy.destination_port,
+    ] {
+        if let Some(value) = field.take() {
+            *field = Some(bounded_text(value));
+        }
+    }
+    policy
+}
+
 /// Include the official policy fields that affect matching or explain the
 /// deletion. Unknown controller fields remain named but are not echoed.
 fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
@@ -6426,14 +6457,21 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
     ];
     const SUMMARY_FIELDS: &[&str] = &["id", "name", "enabled", "action", "index"];
     const FIELD_LIMIT: usize = 16;
-    let details = DETAIL_FIELDS
-        .iter()
-        .filter_map(|name| {
-            record
-                .get(*name)
-                .map(|value| ((*name).to_owned(), value.clone()))
-        })
-        .collect();
+    const DETAIL_BUDGET: usize = 16 * 1024;
+    let mut details = Map::new();
+    let mut detail_bytes = 0;
+    let mut omitted_details = Vec::new();
+    for name in DETAIL_FIELDS {
+        if let Some(value) = record.get(*name) {
+            let bytes = name.len() + value.to_string().len();
+            if detail_bytes + bytes <= DETAIL_BUDGET {
+                detail_bytes += bytes;
+                details.insert((*name).to_owned(), value.clone());
+            } else {
+                omitted_details.push((*name).to_owned());
+            }
+        }
+    }
     let mut omitted_fields = Vec::new();
     let mut omitted_fields_truncated = false;
     let mut add = |name: String| {
@@ -6443,11 +6481,18 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
             omitted_fields_truncated = true;
         }
     };
+    for name in omitted_details {
+        add(name);
+    }
     for (name, value) in record {
         if DETAIL_FIELDS.contains(&name.as_str()) {
             continue;
         }
-        if !SUMMARY_FIELDS.contains(&name.as_str())
+        if (matches!(name.as_str(), "name" | "action")
+            && value
+                .as_str()
+                .is_some_and(|text| text.chars().count() > EVENT_MESSAGE_CEILING))
+            || !SUMMARY_FIELDS.contains(&name.as_str())
             || (!value.is_null()
                 && match name.as_str() {
                     "enabled" => !value.is_boolean(),

@@ -452,8 +452,10 @@ read distinguishes a policy that is absent from one the controller retained.
 The preview shows full source, destination, protocol, connection-state, IPsec,
 and schedule conditions alongside the compact policy summary. It also shows
 the official descriptive and metadata fields when present. It marks whether
-these bounded views cover the controller record and names unknown omitted
-fields when they do not; those fields may change the policy's effect.
+these bounded views cover the controller record and names omitted fields when
+they do not; those fields may change the policy's effect. Large field values
+are omitted with that signal so the preview and deletion result remain
+returnable.
 
 ## Remaining rule workflows
 

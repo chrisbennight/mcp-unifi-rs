@@ -322,6 +322,71 @@ async fn policy_delete_sends_once_and_verifies_absence() {
 }
 
 #[tokio::test]
+async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut record = stored(true, "BLOCK");
+    record["name"] = serde_json::json!("n".repeat(60_000));
+    record["source"]["networkFilter"] = serde_json::json!({"networkIds": ["n".repeat(60_000)]});
+    record["description"] = serde_json::json!("d".repeat(60_000));
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    let preview = handler
+        .call(&delete(&serde_json::json!({"policy": POLICY})), None)
+        .await
+        .expect("bounded preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["preview"]["complete"], false);
+    assert!(
+        preview["preview"]["omittedFields"]
+            .to_string()
+            .contains("source")
+    );
+    assert!(
+        preview["preview"]["omittedFields"]
+            .to_string()
+            .contains("description")
+    );
+    assert!(
+        preview["policy"]["name"]
+            .as_str()
+            .expect("name")
+            .ends_with('…')
+    );
+
+    let result = handler
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("bounded confirmed result")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["verifiedAbsent"], true);
+}
+
+#[tokio::test]
 async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
     let server = MockServer::start().await;
     let record = stored(true, "BLOCK");
