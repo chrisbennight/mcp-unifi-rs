@@ -544,6 +544,10 @@ struct CameraSettingsOutput {
     after: Option<CameraSettingsState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -682,6 +686,10 @@ struct CameraPtzOutput {
     /// Omitted when the camera does not report patrol state; null means idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     active_patrol_slot: Option<PatrolSlotView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -763,6 +771,10 @@ struct CameraStreamsUpdateOutput {
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     /// Created stream handles are retained even if readback fails.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     streams: Vec<CameraStreamHandle>,
@@ -3314,6 +3326,8 @@ impl UnifiMcp {
             response: None,
             after: None,
             verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings: Vec::new(),
         };
         if !input.confirm {
@@ -3336,12 +3350,11 @@ impl UnifiMcp {
         let readback = if budget.is_zero() {
             None
         } else {
-            tokio::time::timeout(budget, self.protect().camera(&camera_id))
-                .await
-                .ok()
+            Some(tokio::time::timeout(budget, self.protect().camera(&camera_id)).await)
         };
+        let mut upstream_error = None;
         match readback {
-            Some(Ok(after)) if after.id == camera_id => {
+            Some(Ok(Ok(after))) if after.id == camera_id => {
                 let after: CameraSettingsState = after.into();
                 output.verified = Some(camera_settings_match(
                     &patch,
@@ -3350,15 +3363,23 @@ impl UnifiMcp {
                 ));
                 output.after = Some(after);
             }
+            Some(Ok(Err(error))) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+            }
+            Some(Err(_)) => output.warnings.push("camera readback timed out".to_owned()),
+            None => output
+                .warnings
+                .push("camera readback skipped because the request deadline was near".to_owned()),
             _ => {}
         }
-        if output.verified != Some(true) {
+        if output.verified != Some(true) && upstream_error.is_none() {
             output.warnings.push(
                 "the controller accepted the patch, but the requested settings were not verified"
                     .to_owned(),
             );
         }
-        structured(output)
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn cameras_snapshot(
@@ -3428,6 +3449,8 @@ impl UnifiMcp {
             applied: false,
             verified: None,
             active_patrol_slot: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings: Vec::new(),
         };
         if !input.confirm {
@@ -3446,6 +3469,7 @@ impl UnifiMcp {
             );
             return structured(output);
         }
+        let mut upstream_error = None;
         match self.protect().camera(&camera_id).await {
             Ok(camera) if camera.id == camera_id => {
                 output.active_patrol_slot = patrol_slot_view(camera.active_patrol_slot);
@@ -3472,11 +3496,16 @@ impl UnifiMcp {
                     );
                 }
             }
-            Ok(_) | Err(_) => output.warnings.push(
-                "controller accepted the PTZ action but camera readback was unavailable".to_owned(),
-            ),
+            Ok(camera) => output.warnings.push(format!(
+                "controller returned camera {} during readback of {camera_id}",
+                camera.id
+            )),
+            Err(error) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+            }
         }
-        structured(output)
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn cameras_streams_list(
@@ -3518,6 +3547,8 @@ impl UnifiMcp {
             qualities: input.qualities.clone(),
             applied: false,
             verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             streams: Vec::new(),
             warnings: Vec::new(),
         };
@@ -3572,12 +3603,11 @@ impl UnifiMcp {
         let readback = if budget.is_zero() {
             None
         } else {
-            tokio::time::timeout(budget, self.protect().camera_streams(&camera_id))
-                .await
-                .ok()
+            Some(tokio::time::timeout(budget, self.protect().camera_streams(&camera_id)).await)
         };
+        let mut upstream_error = None;
         match readback {
-            Some(Ok(after)) => {
+            Some(Ok(Ok(after))) => {
                 output.verified = Some(input.qualities.iter().all(|quality| {
                     let exists = stream_url_for(&after, *quality).is_some();
                     match input.action {
@@ -3592,11 +3622,16 @@ impl UnifiMcp {
                     );
                 }
             }
-            None | Some(Err(_)) => output.warnings.push(
-                "controller accepted the stream change but readback was unavailable".to_owned(),
-            ),
+            Some(Ok(Err(error))) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+            }
+            Some(Err(_)) => output.warnings.push("stream readback timed out".to_owned()),
+            None => output
+                .warnings
+                .push("stream readback skipped because the request deadline was near".to_owned()),
         }
-        structured(output)
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn cameras_talkback_start(
@@ -8036,6 +8071,29 @@ fn structured_with_upstream_error<T: Serialize>(
     Ok(CallToolResult::structured(value))
 }
 
+/// Keep an applied mutation's result available when a failed verification
+/// read returned more text than fits beside that result.
+fn structured_with_mutation_readback_error<T: Serialize>(
+    output: T,
+    upstream_error: Option<&ApiError>,
+) -> Result<CallToolResult, McpError> {
+    let mut value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Some(error) = upstream_error
+        && let Value::Object(fields) = &mut value
+        && fields.remove("readbackError").is_some()
+    {
+        fields.insert("readbackErrorInContent".to_owned(), Value::Bool(true));
+        let mut result = CallToolResult::structured(value);
+        result
+            .content
+            .push(ContentBlock::text(format!("readbackError: {error}")));
+        return Ok(result);
+    }
+    Ok(CallToolResult::structured(value))
+}
+
 /// Enforce the response budget on the values returned by the tool, then
 /// attach the gateway's sensitivity and trust labels.
 fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolResult, McpError> {
@@ -8049,12 +8107,10 @@ fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolRe
         ));
     }
     let mut finalized = CallToolResult::structured(value);
-    finalized.content.extend(
-        result
-            .content
-            .into_iter()
-            .filter(|content| matches!(content, ContentBlock::Image(_))),
-    );
+    // The library supplies the first text block from structuredContent.
+    // Regenerating it above avoids a duplicate while preserving any additional
+    // controller content the tool attached after that block.
+    finalized.content.extend(result.content.into_iter().skip(1));
     Ok(trust_annotated(finalized, behavior))
 }
 

@@ -22,8 +22,9 @@ application and reads only its credentials. Create the key for that application,
 not a Site Manager cloud key. Follow Ubiquiti's application API instructions for
 your installed version. The local session client accepts username/password
 login; use a dedicated account and restrict its controller permissions where
-possible. The server's read/write grants limit what its clients may invoke;
-they do not reduce the privileges of the stored controller account.
+possible. The gateway decides which gateway callers may invoke each tool.
+The controller account's own permissions determine which upstream operations
+succeed.
 
 ## Supported versions
 
