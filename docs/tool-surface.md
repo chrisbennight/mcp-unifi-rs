@@ -454,9 +454,10 @@ and schedule conditions alongside the compact policy summary. It also shows
 the official descriptive and metadata fields when present. It marks whether
 these bounded views cover the controller record and names omitted fields when
 they do not; those fields may change the policy's effect. Large field values
-and fields with credential-bearing nested keys are omitted with that signal
-so the preview and deletion result remain returnable without disclosing
-configured credentials.
+are omitted with that signal so the preview and deletion result remain within
+the response bound. Selected controller keys and values, including nested
+keys, are returned as received; the gateway governs caller access to sensitive
+results.
 
 ## Remaining rule workflows
 
