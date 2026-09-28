@@ -30,7 +30,7 @@ jsonschema = { version = "0.52", default-features = false }
 # the existing trust modes as a side effect of adding a new one.
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
 sha2 = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["cookies", "json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["cookies", "json", "multipart", "rustls"] }
 rmcp = { version = "3", default-features = false, features = ["server", "transport-streamable-http-server"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

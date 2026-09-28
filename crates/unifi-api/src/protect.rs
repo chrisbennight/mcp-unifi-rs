@@ -13,7 +13,7 @@
 //! request details that those views do not yet model.
 
 use image::{ImageFormat, ImageReader, Limits};
-use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
+use reqwest::{Method, RequestBuilder, Response, StatusCode, header, multipart};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, error::Category};
@@ -773,6 +773,38 @@ impl ProtectClient {
                 log_response_rejection("cameras.microphone.disable", status, error);
             })?;
         Ok(ProtectActionResponse { status, body })
+    }
+
+    /// List all animation assets from Protect's fixed device-file family.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for an upstream or bounded-response failure.
+    pub async fn animation_assets(&self) -> Result<Vec<Value>, ApiError> {
+        self.get_json(&["files", "animations"]).await
+    }
+
+    /// Upload one animation asset as a multipart file without retrying an
+    /// ambiguous POST. The controller's complete JSON result is retained.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for an invalid media type or upstream failure.
+    pub async fn animation_asset_upload(
+        &self,
+        file_name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Value, ApiError> {
+        let part = multipart::Part::bytes(bytes)
+            .file_name(file_name.to_owned())
+            .mime_str(mime_type)
+            .map_err(|error| ApiError::Config(error.to_string()))?;
+        let form = multipart::Form::new().part("file", part);
+        let request = self
+            .request(Method::POST, &["files", "animations"])?
+            .multipart(form);
+        self.send_json_once(request, "protect.assets.upload").await
     }
 
     /// Read one documented non-camera device family without discarding fields
