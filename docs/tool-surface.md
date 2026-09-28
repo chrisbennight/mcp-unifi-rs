@@ -166,10 +166,10 @@ there is no silent scan truncation. Display text uses visible truncation markers
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
 
-### `cameras.search`, `cameras.status`, `cameras.snapshot`, `protect.overview`, `protect.events`
+### Protect camera inventory, snapshots, PTZ, overview, and events
 
 The Protect console, which is a separate console from the network controller
-with its own key and its own certificate. These five tools are served by their
+with its own key and its own certificate. These six tools are served by their
 own process: a server started with `UNIFI_MCP_SURFACE=protect` advertises and
 dispatches exactly them, and a `network` server does not list them at all, so
 a deployment without cameras simply runs no Protect server.
@@ -203,6 +203,14 @@ metadata, so an agent can inspect a frame without receiving a base64 string
 as text. The `channel` input chooses `main` (default) or `package`; the latter
 is for cameras with a package camera. `highQuality` requests 1080p or higher
 when available. A response above 4 MiB fails explicitly.
+
+`cameras.ptz.control` previews or runs a preset move, patrol start, or patrol
+stop for one camera. A preset slot of `-1` means home; patrol slots are `0` to
+`4`. Confirmed patrol actions read the reported active slot back and state
+whether it matches. The official API does not report position after a preset
+move, so that action reports controller acceptance without claiming position
+verification. `cameras.status` includes `activePatrolSlot` when reported by the
+console; null means no patrol is running.
 
 Search and overview responses include capabilities. Basic public inventory is
 available with only the API key. Hardware model, functional class, recording,
@@ -253,6 +261,7 @@ it.
 | `firewall.policies.update` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
+| `cameras.ptz.control` | **no** | no | yes |
 
 ### What every write does
 

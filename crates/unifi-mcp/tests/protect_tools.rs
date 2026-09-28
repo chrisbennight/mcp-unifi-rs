@@ -17,7 +17,7 @@ use rmcp::model::{CallToolRequestParams, ContentBlock};
 use unifi_api::{
     ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, ProtectClient, TlsMode,
 };
-use unifi_mcp::UnifiMcp;
+use unifi_mcp::{UnifiMcp, handler::LocalAccess};
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -141,6 +141,191 @@ async fn console_with(server: &MockServer, cameras: serde_json::Value) {
         .respond_with(ResponseTemplate::new(200).set_body_json(cameras))
         .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn ptz_previews_and_verifies_a_confirmed_patrol() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/ptz/patrol/start/2"
+        )))
+        .and(header("X-API-Key", PROTECT_KEY))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "cam-front", "modelKey": "camera", "name": "Front Door",
+            "state": "CONNECTED", "activePatrolSlot": 2,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    let request = serde_json::json!({
+        "camera": "Front Door", "action": "startPatrol", "slot": 2,
+    });
+    let preview = handler
+        .call(&call("cameras.ptz.control", &request), None)
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["slot"], 2);
+
+    let confirmed = handler
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "Front Door", "action": "startPatrol", "slot": 2,
+                    "confirm": true,
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("confirmed")
+        .structured_content
+        .expect("structured");
+    assert_eq!(confirmed["applied"], true);
+    assert_eq!(confirmed["verified"], true);
+    assert_eq!(confirmed["activePatrolSlot"], 2);
+}
+
+#[tokio::test]
+async fn camera_status_reports_a_public_active_patrol_slot() {
+    let server = MockServer::start().await;
+    console_with(
+        &server,
+        serde_json::json!([{
+            "id": "cam-ptz", "modelKey": "camera", "name": "PTZ",
+            "state": "CONNECTED", "activePatrolSlot": 3,
+        }]),
+    )
+    .await;
+    let status = handler_for(&server)
+        .call(
+            &call("cameras.status", &serde_json::json!({"camera": "cam-ptz"})),
+            None,
+        )
+        .await
+        .expect("camera status")
+        .structured_content
+        .expect("structured");
+    assert_eq!(status["activePatrolSlot"], 3);
+}
+
+#[tokio::test]
+async fn ptz_preset_reports_acceptance_without_claiming_position_verification() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/ptz/goto/-1")))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "gotoPreset", "slot": -1,
+                    "confirm": true,
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preset")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verified").is_none());
+    assert!(
+        output["warnings"]
+            .to_string()
+            .contains("does not report camera position")
+    );
+}
+
+#[tokio::test]
+async fn ptz_stop_verifies_the_reported_idle_state() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/ptz/patrol/stop")))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "cam-front", "modelKey": "camera", "name": "Front Door",
+            "state": "CONNECTED", "activePatrolSlot": null,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "stopPatrol", "confirm": true,
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("stop patrol")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true);
+    assert_eq!(
+        output.get("activePatrolSlot"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn ptz_rejects_invalid_action_shape_and_independent_write_denial() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for arguments in [
+        serde_json::json!({"camera":"cam-front","action":"gotoPreset"}),
+        serde_json::json!({"camera":"cam-front","action":"startPatrol","slot":5}),
+        serde_json::json!({"camera":"cam-front","action":"stopPatrol","slot":0}),
+    ] {
+        assert!(
+            handler
+                .call(&call("cameras.ptz.control", &arguments), None)
+                .await
+                .is_err()
+        );
+    }
+    let local = handler.with_local_access(LocalAccess {
+        writes: false,
+        secrets: false,
+    });
+    let error = local
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({"camera":"cam-front","action":"stopPatrol"}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("local write denied");
+    assert!(error.message.contains("write access"));
 }
 
 fn sample_cameras() -> serde_json::Value {
