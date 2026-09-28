@@ -99,7 +99,7 @@ pub enum ApiError {
     },
     /// The controller rate limited the request and the client did not (or
     /// must not) retry it.
-    #[error("controller rate limited the request: {message}")]
+    #[error("controller returned HTTP 429: {message}")]
     RateLimited {
         retry_after: Option<Duration>,
         message: BoundedMessage,

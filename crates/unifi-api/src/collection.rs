@@ -22,6 +22,8 @@ pub struct WanMeta {
 pub struct SourceReport {
     pub status: SourceStatus,
     pub data: Option<Box<RawValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Concrete retrieval outcomes, independent of controller accounting differences.
