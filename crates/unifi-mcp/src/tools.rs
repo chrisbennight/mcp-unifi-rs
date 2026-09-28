@@ -3115,13 +3115,11 @@ impl UnifiMcp {
             ProtectAvailability::Available {
                 application_version,
             } => application_version,
-            ProtectAvailability::Unsupported => {
-                return Err(McpError::invalid_params(
-                    "this console does not expose the Protect integration API, so \
-                     its cameras cannot be read; that is not the same as a console \
-                     with no cameras",
-                    None,
-                ));
+            ProtectAvailability::Unsupported { status, response } => {
+                return Err(api_error(ApiError::Status {
+                    status,
+                    message: response,
+                }));
             }
         };
         let public = protect.cameras().await.map_err(api_error)?;

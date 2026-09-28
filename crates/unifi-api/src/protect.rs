@@ -492,7 +492,10 @@ pub enum ProtectAvailability {
     /// The integration API answered, and reported this application version.
     Available { application_version: String },
     /// The console answered, but has no integration API at this path.
-    Unsupported,
+    Unsupported {
+        status: u16,
+        response: BoundedMessage,
+    },
 }
 
 /// Client for one Protect console's official integration API.
@@ -798,7 +801,13 @@ impl ProtectClient {
             Ok(info) => Ok(ProtectAvailability::Available {
                 application_version: info.application_version,
             }),
-            Err(ApiError::Status { status: 404, .. }) => Ok(ProtectAvailability::Unsupported),
+            Err(ApiError::Status {
+                status: 404,
+                message,
+            }) => Ok(ProtectAvailability::Unsupported {
+                status: 404,
+                response: message,
+            }),
             Err(error) => Err(error),
         }
     }

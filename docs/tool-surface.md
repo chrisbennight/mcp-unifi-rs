@@ -205,9 +205,9 @@ a deployment without cameras simply runs no Protect server.
 Within a Protect server, a console that cannot answer must never look like a
 console with nothing to report. There are two ways to end up with no cameras —
 a console without the Protect integration API, and a console that genuinely
-has none — and only the latter is an empty list. The former is a refusal that
-says so, because an agent that cannot tell them apart will report an
-unmonitored house as an empty one.
+has none — and only the latter is an empty list. When the API probe returns
+HTTP 404, camera tools return that status and the complete accepted controller
+body. An agent can therefore distinguish an absent API from an empty inventory.
 
 The documented Integration API is authoritative for basic inventory. Its
 `modelKey` value is a resource discriminator (`camera` or `nvr`), not a

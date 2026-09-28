@@ -2394,9 +2394,10 @@ async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_r
 async fn a_console_without_the_integration_api_is_refused_by_every_camera_tool() {
     let server = MockServer::start().await;
     // The console answers, and has no integration API at this path.
+    let body = format!("protect route missing: {}controller-tail", "x".repeat(700));
     Mock::given(method("GET"))
         .and(path(format!("{PROTECT}/meta/info")))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(404).set_body_string(body.clone()))
         .mount(&server)
         .await;
     let handler = handler_for(&server);
@@ -2414,22 +2415,26 @@ async fn a_console_without_the_integration_api_is_refused_by_every_camera_tool()
             .call(&call(tool, &arguments), None)
             .await
             .expect_err("console without the integration API must refuse");
-        assert!(
-            error
-                .message
-                .contains("does not expose the Protect integration"),
-            "{tool} must name the reason: {}",
-            error.message
-        );
-        // The distinction this whole boundary exists for.
-        assert!(
-            error
-                .message
-                .contains("not the same as a console with no cameras"),
-            "{tool} must distinguish itself from an empty console: {}",
-            error.message
+        assert_eq!(
+            error.message,
+            format!("controller returned HTTP 404: {body}")
         );
     }
+}
+
+#[tokio::test]
+async fn an_available_console_with_no_cameras_returns_an_empty_inventory() {
+    let server = MockServer::start().await;
+    console_with(&server, serde_json::json!([])).await;
+    let output = handler_for(&server)
+        .call(&call("cameras.search", &serde_json::json!({})), None)
+        .await
+        .expect("available empty inventory")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["total"], 0);
+    assert_eq!(output["cameras"], serde_json::json!([]));
+    assert_eq!(output["capabilities"]["publicInventory"], true);
 }
 
 #[tokio::test]
