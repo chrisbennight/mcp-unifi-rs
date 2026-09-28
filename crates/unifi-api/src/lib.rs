@@ -38,7 +38,7 @@ pub mod protect;
 pub mod system_log;
 pub mod traffic;
 
-pub use client::IntegrationClient;
+pub use client::{IntegrationClient, SiteInventoryKind, SwitchingDetailKind};
 pub use config::{ControllerConfig, TlsMode};
 pub use error::{ApiError, BoundedMessage};
 pub use legacy::{LegacyClient, LegacyConfig, RecordFingerprint};
