@@ -1742,6 +1742,10 @@ struct GuestsAuthorizeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     granted_authorization: Option<GuestAuthorizationView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     revoked_authorization: Option<GuestAuthorizationView>,
@@ -1829,6 +1833,10 @@ struct FirewallPoliciesDeleteOutput {
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -1904,6 +1912,10 @@ struct VoucherRevokeOutput {
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -4359,6 +4371,8 @@ impl UnifiMcp {
             authorized_before: None,
             authorized_after: None,
             verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             granted_authorization: None,
             revoked_authorization: None,
             observed_authorization: None,
@@ -4382,16 +4396,17 @@ impl UnifiMcp {
             .expect("validated action response");
         output.granted_authorization = Some(grant.clone().into());
         output.revoked_authorization = response.revoked_authorization.map(Into::into);
-        self.guest_readback(
-            &site_id,
-            &client_id,
-            &client,
-            started,
-            &mut output,
-            Some(&grant),
-        )
-        .await;
-        structured(output)
+        let upstream_error = self
+            .guest_readback(
+                &site_id,
+                &client_id,
+                &client,
+                started,
+                &mut output,
+                Some(&grant),
+            )
+            .await;
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn guests_unauthorize(
@@ -4409,6 +4424,8 @@ impl UnifiMcp {
             authorized_before: None,
             authorized_after: None,
             verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             granted_authorization: None,
             revoked_authorization: None,
             observed_authorization: None,
@@ -4428,9 +4445,10 @@ impl UnifiMcp {
             .map_err(api_error)?;
         output.applied = true;
         output.revoked_authorization = response.revoked_authorization.map(Into::into);
-        self.guest_readback(&site_id, &client_id, &client, started, &mut output, None)
+        let upstream_error = self
+            .guest_readback(&site_id, &client_id, &client, started, &mut output, None)
             .await;
-        structured(output)
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn guests_status(
@@ -4492,7 +4510,7 @@ impl UnifiMcp {
         started: tokio::time::Instant,
         output: &mut GuestsAuthorizeOutput,
         grant: Option<&GuestAuthorization>,
-    ) {
+    ) -> Option<ApiError> {
         let budget = self
             .request_timeout()
             .saturating_sub(started.elapsed())
@@ -4501,12 +4519,14 @@ impl UnifiMcp {
         let readback = if budget.is_zero() {
             None
         } else {
-            tokio::time::timeout(budget, self.integration().client_detail(site_id, client_id))
-                .await
-                .ok()
+            Some(
+                tokio::time::timeout(budget, self.integration().client_detail(site_id, client_id))
+                    .await,
+            )
         };
+        let mut upstream_error = None;
         match readback {
-            Some(Ok(detail))
+            Some(Ok(Ok(detail)))
                 if detail.id == client_id
                     && detail.mac_address.as_deref().map(normalize_mac).as_deref() == Some(mac) =>
             {
@@ -4535,14 +4555,23 @@ impl UnifiMcp {
                     });
                 }
             }
+            Some(Ok(Err(error))) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+            }
+            Some(Err(_)) => output.warnings.push("guest readback timed out".to_owned()),
+            None => output
+                .warnings
+                .push("guest readback skipped because the request deadline was near".to_owned()),
             _ => {}
         }
-        if output.verified != Some(true) {
+        if output.verified != Some(true) && upstream_error.is_none() {
             output.warnings.push(
                 "the action response was returned, but the current guest state was not verified"
                     .to_owned(),
             );
         }
+        upstream_error
     }
 
     /// The controller's id for the client at one hardware address.
@@ -4983,6 +5012,10 @@ impl UnifiMcp {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "deletion previews the policy and verifies absence after the upstream action"
+    )]
     async fn firewall_policies_delete(
         &self,
         params: &CallToolRequestParams,
@@ -5017,6 +5050,8 @@ impl UnifiMcp {
             preview: policy_preview_coverage(&record),
             applied: false,
             verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings: vec![
                 "deleting this policy changes how later firewall policies handle matching traffic"
                     .to_owned(),
@@ -5052,25 +5087,45 @@ impl UnifiMcp {
         let readback = if budget.is_zero() {
             None
         } else {
-            tokio::time::timeout(
-                budget,
-                self.integration()
-                    .firewall_policy_snapshot(&site_id, &input.policy),
+            Some(
+                tokio::time::timeout(
+                    budget,
+                    self.integration()
+                        .firewall_policy_snapshot(&site_id, &input.policy),
+                )
+                .await,
             )
-            .await
-            .ok()
         };
+        let mut upstream_error = None;
         output.verified_absent = match readback {
-            Some(Err(ApiError::Status { status: 404, .. })) => Some(true),
-            Some(Ok(_)) => Some(false),
-            _ => None,
+            Some(Ok(Err(error @ ApiError::Status { status: 404, .. }))) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+                Some(true)
+            }
+            Some(Ok(Ok(_))) => Some(false),
+            Some(Ok(Err(error))) => {
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+                None
+            }
+            Some(Err(_)) => {
+                output.warnings.push("policy readback timed out".to_owned());
+                None
+            }
+            None => {
+                output.warnings.push(
+                    "policy readback skipped because the request deadline was near".to_owned(),
+                );
+                None
+            }
         };
-        if output.verified_absent != Some(true) {
+        if output.verified_absent != Some(true) && upstream_error.is_none() {
             output.warnings.push(
                 "the delete request was accepted, but policy absence was not verified".to_owned(),
             );
         }
-        structured(output)
+        structured_with_mutation_readback_error(output, upstream_error.as_ref())
     }
 
     async fn vouchers_search(
@@ -5171,6 +5226,8 @@ impl UnifiMcp {
             authorized_guest_count: voucher.authorized_guest_count,
             applied: false,
             verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings: Vec::new(),
         };
         if !input.confirm {
@@ -5181,15 +5238,17 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
         result.applied = true;
+        let mut upstream_error = None;
         let persisted = match self.integration().voucher(&site_id, id).await {
-            Err(ApiError::Status { status: 404, .. }) => false,
+            Err(error @ ApiError::Status { status: 404, .. }) => {
+                result.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+                false
+            }
             Ok(_) => true,
-            Err(_) => {
-                result.warnings.push(
-                    "controller accepted deletion but readback failed; inspect vouchers.status by id"
-                        .to_owned(),
-                );
-                return structured(result);
+            Err(error) => {
+                result.readback_error = Some(error.to_string());
+                return structured_with_mutation_readback_error(result, Some(&error));
             }
         };
         result.verified = Some(!persisted);
@@ -5198,7 +5257,7 @@ impl UnifiMcp {
                 .warnings
                 .push("controller acknowledged deletion but the voucher still exists".to_owned());
         }
-        structured(result)
+        structured_with_mutation_readback_error(result, upstream_error.as_ref())
     }
 
     async fn verify_created_vouchers(

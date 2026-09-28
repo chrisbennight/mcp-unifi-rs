@@ -131,6 +131,59 @@ async fn an_unconfirmed_authorization_describes_itself_and_authorizes_nothing() 
 }
 
 #[tokio::test]
+async fn accepted_guest_grant_keeps_controller_readback_error() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    mount_clients(
+        &server,
+        &serde_json::json!([{"id": CLIENT_ID, "macAddress": MAC}]),
+        1,
+    )
+    .await;
+    let endpoint = format!("{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}");
+    let failure = format!("guest read failed: {}guest-readback-tail", "x".repeat(700));
+    Mock::given(method("GET"))
+        .and(path(&endpoint))
+        .respond_with(ResponseTemplate::new(200).set_body_json(detail(false, None)))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&endpoint))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}/actions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "action": "AUTHORIZE_GUEST_ACCESS",
+            "grantedAuthorization": grant("2026-09-28T00:00:00Z")
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &authorize(&serde_json::json!({"client": MAC, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("action accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["grantedAuthorization"]["dataUsageLimitMBytes"], 500);
+    assert_eq!(
+        output["readbackError"],
+        format!("controller returned HTTP 503: {failure}")
+    );
+}
+
+#[tokio::test]
 async fn a_confirmed_authorization_posts_the_action() {
     let server = MockServer::start().await;
     mount_site(&server).await;

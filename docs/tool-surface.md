@@ -352,6 +352,11 @@ before any request, and the rejection names what would have been accepted.
 **Is never retried.** Writes are classed as mutations in the transport, so an
 ambiguous transport result is surfaced rather than resent.
 
+For guest actions, voucher revocation, and firewall policy deletion, a
+verification error too large for the structured result is returned in a
+separate text content block. `readbackErrorInContent` points to that block so
+the accepted action result remains available.
+
 ### Field writes: `wlans.update`, `port_forwards.update`
 
 These take a resource id and a `changes` object, and only the named fields are
@@ -394,7 +399,9 @@ access limits are different batches — a count alone could not tell them apart.
 The official voucher list and detail endpoints return each code. `vouchers.search`
 pages through vouchers and `vouchers.status` reads one by id; both return codes
 as sensitive results. `vouchers.revoke` previews a deletion and, when confirmed,
-checks whether the voucher disappeared from the detail endpoint.
+checks whether the voucher disappeared from the detail endpoint. Its
+`readbackError` carries the controller's response when that lookup fails,
+including the HTTP 404 response used to confirm absence.
 
 Creation checks the returned batch — whether as many came back as
 were asked for, whether each carries an id and a code, whether the codes are
@@ -499,13 +506,16 @@ disconnects the client. Both actions mark `verified` true only when a bounded
 read of the connected client reports the expected state and grant metadata.
 The observed grant is returned separately when it can be read. If a disconnected
 client is no longer readable, the action response remains available and the
-result says that verification was unavailable.
+result says that verification was unavailable. If the verification read fails,
+`readbackError` carries the controller response alongside the action response.
 
 ### Rule deletion: `firewall.policies.delete`
 
 `firewall.policies.delete` removes a zone-based policy by id. It previews the
 policy's match and action, then sends one DELETE when confirmed. A following
 read distinguishes a policy that is absent from one the controller retained.
+The `readbackError` field carries the controller's response when that read
+fails, including an HTTP 404 response that confirms absence.
 The preview shows full source, destination, protocol, connection-state, IPsec,
 and schedule conditions alongside the compact policy summary. It also shows
 the official descriptive and metadata fields when present. It marks whether

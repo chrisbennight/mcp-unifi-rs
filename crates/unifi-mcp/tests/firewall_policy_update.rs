@@ -299,7 +299,7 @@ async fn policy_delete_sends_once_and_verifies_absence() {
         .await;
     Mock::given(method("GET"))
         .and(path(route.clone()))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(404).set_body_string("policy no longer exists"))
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
@@ -319,6 +319,54 @@ async fn policy_delete_sends_once_and_verifies_absence() {
         .expect("structured");
     assert_eq!(output["applied"], true);
     assert_eq!(output["verifiedAbsent"], true);
+    assert_eq!(
+        output["readbackError"],
+        "controller returned HTTP 404: policy no longer exists"
+    );
+}
+
+#[tokio::test]
+async fn policy_delete_returns_failed_readback_response() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    let failure = format!(
+        "policy lookup failed: {}policy-readback-tail",
+        "x".repeat(700)
+    );
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stored(true, "BLOCK")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete was accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verifiedAbsent").is_none());
+    assert_eq!(
+        output["readbackError"],
+        format!("controller returned HTTP 503: {failure}")
+    );
 }
 
 #[tokio::test]
