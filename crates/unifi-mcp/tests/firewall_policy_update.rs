@@ -439,6 +439,64 @@ async fn accepted_policy_update_survives_a_failed_readback() {
 }
 
 #[tokio::test]
+async fn accepted_policy_update_survives_a_stalled_readback() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let before = stored(true, "BLOCK");
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(stored(false, "BLOCK"))
+                .set_delay(Duration::from_secs(6)),
+        )
+        .mount(&server)
+        .await;
+    let mut expected = before;
+    expected["enabled"] = serde_json::json!(false);
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .and(body_json(expected))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("controller accepted before readback stalled"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server).with_request_limits(1, Duration::from_secs(2));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        ),
+    )
+    .await
+    .expect("completed before the outer deadline")
+    .expect("accepted write returned before the outer deadline")
+    .structured_content
+    .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(
+        output["responseBody"],
+        "controller accepted before readback stalled"
+    );
+    assert_eq!(output["readbackError"], "policy readback timed out");
+}
+
+#[tokio::test]
 async fn policy_delete_previews_scope_without_sending_delete() {
     let server = MockServer::start().await;
     let mut record = stored(true, "BLOCK");

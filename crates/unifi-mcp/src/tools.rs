@@ -8321,6 +8321,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         reject_unknown_change_fields(params, FIREWALL_POLICY_CHANGE_FIELDS)?;
         let input = parse::<FirewallPoliciesUpdateInput>(params)?;
         let Some(wanted) = input.changes.enabled else {
@@ -8424,10 +8425,26 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
 
-        let readback = self
-            .integration()
-            .firewall_policy_snapshot_with_response(&site_id, &input.policy)
-            .await;
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(FIREWALL_UPDATE_RESPONSE_RESERVE)
+            .min(FIREWALL_UPDATE_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            Err("policy readback skipped near request deadline".to_owned())
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration()
+                    .firewall_policy_snapshot_with_response(&site_id, &input.policy),
+            )
+            .await
+            {
+                Ok(Ok(readback)) => Ok(readback),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("policy readback timed out".to_owned()),
+            }
+        };
         let (after_raw, after_digest, after_response) = match readback {
             Ok(readback) => readback,
             Err(error) => {
@@ -8447,7 +8464,7 @@ impl UnifiMcp {
                     fields: None,
                     unexpected_changes: None,
                     verified: None,
-                    readback_error: Some(error.to_string()),
+                    readback_error: Some(error),
                     readback_error_in_content: None,
                     warnings,
                 });
@@ -10893,6 +10910,8 @@ const CAMERA_SETTINGS_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Leave time to return a successful firewall deletion after checking absence.
 const FIREWALL_DELETE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const FIREWALL_DELETE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+const FIREWALL_UPDATE_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const FIREWALL_UPDATE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const DEVICE_LIFECYCLE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const DEVICE_LIFECYCLE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const NETWORK_POLICY_READBACK_BUDGET: Duration = Duration::from_secs(5);
