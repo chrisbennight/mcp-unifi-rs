@@ -861,12 +861,16 @@ mod tests {
 
     #[test]
     fn credential_values_do_not_limit_startup_when_within_bounds() {
-        for value in ["sample-alpha", "sample-beta"] {
+        for value in ["sample-alpha", "acted", "[", "sample-beta"] {
             let environment = move |variable: &'static str| match variable {
                 "UNIFI_MCP_CONTROLLER_PASSWORD" => Ok(value.to_owned()),
                 other => complete_environment(other),
             };
-            assert!(Settings::from_environment(&environment).is_ok(), "{value}");
+            let settings = Settings::from_environment(&environment).expect("settings");
+            let RuntimeSettings::Network(controller) = settings.runtime else {
+                panic!("Network runtime")
+            };
+            assert_eq!(controller.password.as_str(), value);
         }
     }
 

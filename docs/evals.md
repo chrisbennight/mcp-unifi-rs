@@ -18,6 +18,20 @@ A task can mint working guest passes, and the registry classifies those results
 as sensitive. Keep the complete tool response for evaluation and limit who can
 read the resulting artifact.
 
+Read each transcript against the task's expected path and record which of these
+happened:
+
+- **Wrong tool.** The agent chose a tool that could not answer the question.
+- **Guessed parameter.** The agent passed a value the schema rejected, or used
+  the wrong parameter name.
+- **Extra round trip.** The agent needed an avoidable call, such as a separate
+  lookup for an identifier the first tool could have accepted directly.
+- **Dead end.** The agent could not complete the task with available tools.
+- **Clarified.** The agent asked for a choice only the operator could make.
+  This is appropriate when the tools could not supply the answer.
+- **Model error.** The agent had the needed tool information and went wrong.
+- **Clean.** The agent followed the expected path on the first try.
+
 ### Telling a surface defect from a model error
 
 This is the judgement the whole exercise rests on, so it gets a rule rather
