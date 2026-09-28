@@ -91,7 +91,7 @@ class WorkflowContractTests(unittest.TestCase):
         for tool in ('GITLEAKS', 'SYFT'):
             self.assertRegex(image, rf'{tool}_IMAGE: [\w./-]+:v[\d.]+@sha256:[a-f0-9]{{64}}')
         self.assertIn('git archive HEAD', image)
-        self.assertIn('--redact=100', image)
+        self.assertIn('dir --no-banner /scan > /dev/null 2>&1', image)
         self.assertIn('scripts/check_build_context.py', image)
         self.assertEqual(image.count('docker run '), 3)
         self.assertEqual(image.count('--network none --read-only --cap-drop ALL'), 3)

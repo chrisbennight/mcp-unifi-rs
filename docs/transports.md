@@ -11,33 +11,22 @@ Choose a client that supports this revision. HTTP+SSE and the older HTTP
 session protocol are not supported by independent HTTP mode. Gateway mode
 retains its existing SDK compatibility behavior.
 
-## Permissions
+## Access and limits
 
 Stdio trusts the operating-system user who starts the process. Direct HTTP
-requires a dedicated bearer configured by that operator. Each process has
-one fixed set of grants; all clients of that process share those grants.
-Use separate processes and credentials when clients need different authority.
+requires a dedicated bearer configured by that operator. Gateway mode checks
+its bearer and verified identity; gateway policy classifies tools and controls
+caller access. Tool responses contain the selected controller values.
 
 | Setting | Default | Effect in stdio and direct HTTP |
 |---|---|---|
-| `UNIFI_MCP_ALLOW_WRITES` | `false` | `true` permits mutation tools, including their previews |
-| `UNIFI_MCP_ALLOW_SECRET_DISCLOSURE` | `false` | `true` permits the `networks.read` secret opt-in |
 | `UNIFI_MCP_MAX_BODY_BYTES` | `1048576` | Request limit, from 1024 to 4194304 bytes; includes the newline in stdio |
 | `UNIFI_MCP_MAX_CONCURRENT_REQUESTS` | `32` | Concurrent work limit, from 1 to 256 |
 | `UNIFI_MCP_REQUEST_TIMEOUT_SECONDS` | `30` | Tool deadline, from 1 to 120 seconds |
 | `UNIFI_MCP_LOG_LEVEL` | `info` | Log filter; logs go to stderr |
 
-Permission flags accept exactly `true` or `false`. Neither `confirm=true`,
-tool annotations, nor a caller-supplied identity header grants permission.
-Granting writes still leaves each mutation in preview mode until its call
-explicitly confirms. A timed-out confirmed mutation may have taken effect:
-inspect controller state before deciding whether to act again.
-
-Secret disclosure is separate from write permission. Write permission can
-produce voucher codes as part of the authorized creation result. Voucher reads
-also return codes and require the independent mode's secret-disclosure grant.
-Keep those results private. Redaction and rejection of redaction
-markers in writes remain enabled in all modes.
+Mutations preview until a call explicitly confirms. A timed-out confirmed
+mutation may have taken effect: inspect controller state before acting again.
 
 ## Stdio
 
@@ -142,9 +131,8 @@ the controller. It does not prove that credentials or permissions work.
 
 `--transport gateway` requires the existing rotating gateway bearer and verified
 gateway identity JWT described in [configuration](configuration.md).
-The gateway continues to own group authorization and rate limiting. Its
-administrator group controls the secret-disclosure opt-in. Independent-mode
-permission flags do not alter gateway policy.
+The gateway owns group authorization and rate limiting. Tool metadata marks
+actions and sensitive results so gateway policy can make those decisions.
 
 ## Troubleshooting
 
@@ -156,10 +144,10 @@ permission flags do not alter gateway policy.
 | HTTP 403 | Check Host and Origin against the explicit allowlists |
 | HTTP 400 HeaderMismatch | Use a current client and matching method, name, and version headers/body metadata |
 | HTTP 405 on GET or DELETE | Use current Streamable HTTP POST requests, without legacy session setup |
-| Write or disclosure denied | Grant the corresponding process permission; confirmation alone is insufficient |
+| Gateway denies a tool call | Check the gateway's tool classification and caller policy |
 | Empty inventory | Check the selected site and filters; unsupported API generations return an explicit error |
 | Stdio closes immediately | Inspect stderr and check newline framing, valid JSON-RPC, and the message-size limit |
 
 Source tests in `crates/unifi-server/tests/portable.rs` exercise both transports
 against loopback controller fakes, including successful inventory reads and
-denied privileged calls. They do not require access to a real controller.
+mutation previews. They do not require access to a real controller.

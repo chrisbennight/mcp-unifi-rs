@@ -10,13 +10,12 @@ For a non-security problem, open a
 - Server version or image digest, OS, and client/version.
 - Network or Protect application version and whether it runs on UniFi OS.
 - Connection mode: stdio, direct HTTP, or gateway.
-- The tool name and a minimal redacted call, expected result, and actual error.
+- The tool name and a minimal synthetic call, expected result, and actual error.
 - Whether the problem began after a server, client, or controller upgrade.
 
 Never attach `.env`, bearer headers, controller keys, local account passwords,
-Wi-Fi credentials, or voucher codes. Redact controller names, IPs, MACs and
-camera locations when they are not needed to reproduce the issue. A synthetic
-fixture is more useful than an unfiltered controller export.
+Wi-Fi credentials, or voucher codes. Use synthetic controller names, IPs, MACs, and camera locations in public
+reports. A synthetic fixture is more useful than a controller export.
 
 For suspected vulnerabilities, follow [SECURITY.md](SECURITY.md) before posting
 details. Do not put an exploitable issue or credential value in a public report.

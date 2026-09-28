@@ -5,8 +5,8 @@
 //! that reject unknown fields, normalized bounded response models, the
 //! executable tool registry with MCP behavior annotations, and dispatch. The
 //! tool surface is a curated set of workflow tools, never a raw mapping of
-//! `UniFi` API endpoints. Mutations preview by default and redact secret
-//! material in responses. They verify writes by reading back and report
+//! `UniFi` API endpoints. Mutations preview by default, verify writes by
+//! reading back, and report
 //! incomplete verification alongside the controller's response.
 
 pub mod handler;
@@ -15,19 +15,14 @@ pub mod registry;
 pub mod tools;
 
 pub use handler::UnifiMcp;
-pub use mutation::survives_its_own_redaction;
 pub use registry::{
     TOOL_REGISTRY, ToolBehavior, ToolKind, ToolSpec, ToolSurface, tools_for_surface,
 };
 
 /// Verified caller identity propagated by the gateway ingress into request
-/// extensions; the group gate for privileged tool options reads it here.
+/// extensions.
 #[derive(Debug, Clone)]
 pub struct IdentityPrincipal {
     pub subject: String,
     pub groups: Vec<String>,
 }
-
-/// Group whose members may use privileged tool options such as secret
-/// disclosure opt-ins.
-pub const MCP_ADMIN_GROUP: &str = "mcp-admins";

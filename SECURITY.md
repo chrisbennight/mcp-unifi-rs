@@ -21,14 +21,13 @@ window yet. Fixes identify the affected behavior and source revision.
 ## Boundary summary
 
 - Gateway mode requires a rotating gateway bearer and a verified identity JWT.
-  Direct HTTP requires its own rotating bearer; remote deployments require
-  HTTPS at a reverse proxy. Stdio trusts the process owner. Independent modes
-  default to read access and enforce separate write and disclosure grants.
-  See [transport permissions](docs/transports.md#permissions).
-- Controller credentials are environment-injected and
-  are never model-visible, logged, or caller-selectable.
-- Secret material in controller responses (Wi-Fi passphrases, PSKs, VPN keys,
-  SNMP strings) is redacted by default.
+  Its policy controls caller access. Direct HTTP requires its own rotating
+  bearer; remote deployments require HTTPS at a reverse proxy. Stdio trusts
+  the process owner. See [transport access](docs/transports.md#access-and-limits).
+- Controller credentials are environment-injected, never logged or selected by
+  caller input. The server does not manufacture result fields from them.
+- Selected controller response fields and upstream error details are returned
+  faithfully. Tool metadata identifies sensitive results for gateway policy.
 - Mutations preview by default and verify persistence by read-back; they are
   never retried after an ambiguous transport result.
 - The container runs as a non-root distroless image with a digest-pinned,
@@ -43,25 +42,23 @@ server uses typed operations and does not run this text as code. Clients must
 keep tool results separate from trusted instructions and ask for the intended
 action before confirming a mutation.
 
-Read access can disclose network inventory and usage even when credentials are
-redacted. Grant it only to trusted clients. Independent modes have separate
-write and secret-disclosure flags; enabling writes does not enable Wi-Fi secret
-reads. Voucher creation deliberately returns newly issued guest credentials.
-Do not log or publish those results. SDK payload logging is disabled even when
-the application log filter requests verbose SDK logs.
+Tool results can contain network inventory, configuration, and working
+credentials. The gateway must grant access according to its policy. Operators
+of direct HTTP and stdio must restrict who can connect and must protect stored
+results. SDK payload logging is disabled even when the application log filter
+requests verbose SDK logs.
 
 A timeout or broken connection after a confirmed write is an ambiguous outcome,
 not proof that the write failed. Inspect controller state before another action.
 Voucher codes can be recovered through the bounded voucher list and detail
-tools; those read results are sensitive credentials too. Independent modes
-require their operator secret-disclosure grant for these reads.
-Read-back checks describe observable persistence, not an upstream transaction;
-see [mutation contracts](docs/tool-surface.md).
+tools. Read-back checks describe observable persistence, not an upstream
+transaction; see [mutation contracts](docs/tool-surface.md).
 
 ## Source and image checks
 
-CI scans the tracked source snapshot with pinned Gitleaks, redacts scanner
-output, and checks Docker's actual exclusion of local environment and key files.
+CI scans the tracked source snapshot with pinned Gitleaks, keeps scanner
+findings out of build logs, and checks Docker's actual exclusion of local
+environment and key files.
 It also produces source and image software inventories. These checks do not
 prove that arbitrary private data is absent or that dependencies are free of
 vulnerabilities. Review new fixtures and dependency changes before merging.

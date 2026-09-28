@@ -65,16 +65,6 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    /// Existing voucher codes and camera stream handles require the
-    /// independent transport's operator secret-disclosure grant. Gateway
-    /// authorization uses the catalog risk and sensitivity labels instead.
-    pub(crate) const fn discloses_existing_credentials(self) -> bool {
-        matches!(
-            self,
-            Self::VouchersSearch | Self::VouchersStatus | Self::CamerasStreamsList
-        )
-    }
-
     /// Explicit authorization classification, independent of advisory annotations.
     #[must_use]
     pub const fn requires_write_access(self) -> bool {
@@ -235,7 +225,7 @@ pub struct ToolSpec {
 }
 
 /// A read whose bounded output carries network configuration worth treating
-/// as sensitive even with secrets redacted.
+/// as sensitive because the returned values can include credentials.
 const fn sensitive_read_spec(
     kind: ToolKind,
     name: &'static str,
@@ -445,9 +435,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::NetworksRead,
         "networks.read",
         "Configured networks and wireless networks: VLANs, subnets, DHCP \
-         scopes, SSIDs, and security modes. Passphrases are redacted by \
-         default; includeSecrets discloses them and requires the mcp-admins \
-         group.",
+         scopes, SSIDs, security modes, and controller-reported passphrases. \
+         The result is sensitive and the gateway decides who can read it.",
     ),
     write_spec(
         ToolKind::WlansUpdate,
@@ -549,8 +538,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Mint hotspot vouchers for the guest network. Previews the batch and \
          its consequences unless confirm is true. A confirmed call returns the \
          created codes and reads each identified voucher back to verify its code. \
-         Codes remain available through vouchers.search and vouchers.status. \
-         A code containing a configured controller credential is redacted.",
+         Codes remain available through vouchers.search and vouchers.status.",
         // Not idempotent: each call mints another batch. The result carries
         // credentials, which is why it exists.
         ToolBehavior::write(false).result_sensitive(),

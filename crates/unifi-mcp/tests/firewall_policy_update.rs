@@ -59,13 +59,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![Zeroizing::new(PASSWORD.to_owned())],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn update(arguments: &serde_json::Value) -> CallToolRequestParams {

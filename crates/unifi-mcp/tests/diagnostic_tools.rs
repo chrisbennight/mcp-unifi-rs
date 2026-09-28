@@ -60,16 +60,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![
-            Zeroizing::new(API_KEY.to_owned()),
-            Zeroizing::new(PASSWORD.to_owned()),
-        ],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -388,7 +379,7 @@ async fn events_search_windows_filters_and_paginates() {
 }
 
 #[tokio::test]
-async fn system_log_failure_names_the_operation_without_echoing_controller_text() {
+async fn system_log_failure_preserves_controller_code() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     Mock::given(method("POST"))
@@ -406,7 +397,7 @@ async fn system_log_failure_names_the_operation_without_echoing_controller_text(
         .expect_err("missing endpoint must fail");
     assert_eq!(
         error.message,
-        "Network system-log read failed: controller rejected the request"
+        "Network system-log read failed: controller rejected the request (api.err.NotFound): the controller rejected the request"
     );
 }
 
@@ -631,7 +622,7 @@ async fn dpi_permission_errors_remain_errors_and_are_not_reported_as_disabled() 
         .await
         .expect_err("permission error");
     assert!(error.message.contains("403"));
-    assert!(!error.message.contains("private upstream"));
+    assert!(error.message.contains("private upstream"));
 }
 
 #[tokio::test]

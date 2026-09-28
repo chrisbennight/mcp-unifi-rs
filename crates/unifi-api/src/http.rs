@@ -29,6 +29,16 @@ pub(crate) async fn read_bounded_body(mut response: Response) -> Result<Vec<u8>,
     Ok(body)
 }
 
+/// Retain the body of a rate-limit response along with its retry timing.
+pub(crate) async fn rate_limited(response: Response) -> Result<ApiError, ApiError> {
+    let retry_after = retry_after(&response);
+    let bytes = read_bounded_body(response).await?;
+    Ok(ApiError::RateLimited {
+        retry_after,
+        message: BoundedMessage::new(&String::from_utf8_lossy(&bytes)),
+    })
+}
+
 /// Assemble a request URL from percent-encoded path segments. A segment that
 /// is empty or a dot segment is rejected outright: those are never valid
 /// controller identifiers and would otherwise be interpreted structurally by

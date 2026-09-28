@@ -308,15 +308,15 @@ async fn middleware_attaches_the_verified_principal_to_the_request() {
     assert_eq!(bytes.as_ref(), b"user:wire-test:unifi");
 }
 
-/// One sessionless `tools/call` for `networks.read` with the secret opt-in.
-fn secrets_call_body() -> String {
+/// One sessionless `tools/call` for `networks.read`.
+fn network_call_body() -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
         "params": {
             "name": "networks.read",
-            "arguments": {"includeSecrets": true},
+            "arguments": {},
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientCapabilities": {}
@@ -327,20 +327,13 @@ fn secrets_call_body() -> String {
 }
 
 #[tokio::test]
-async fn the_verified_group_set_reaches_tool_authorization_decisions() {
+async fn verified_identities_reach_dispatch_without_a_local_group_gate() {
     let signing = signing_key();
     let jwks = jwks_server(&signing).await;
     let cancellation = CancellationToken::new();
     let router = build_router(&settings(&jwks), handler(), &cancellation).expect("router");
 
-    // The two callers differ only in their verified group set. The non-admin
-    // is refused by the group gate; the admin passes it and fails later on
-    // the unreachable controller — distinct errors that prove the verified
-    // principal traversed the transport into the tool decision.
-    for (groups, expected) in [
-        (vec!["unifi"], "mcp-admins"),
-        (vec!["unifi", "mcp-admins"], "controller"),
-    ] {
+    for groups in [vec!["unifi"], vec!["operations"]] {
         let token = identity_token_with_groups(&signing, &groups);
         let request = Request::builder()
             .method("POST")
@@ -357,7 +350,7 @@ async fn the_verified_group_set_reaches_tool_authorization_decisions() {
             .clone()
             .oneshot(
                 request
-                    .body(Body::from(secrets_call_body()))
+                    .body(Body::from(network_call_body()))
                     .expect("request"),
             )
             .await
@@ -367,6 +360,9 @@ async fn the_verified_group_set_reaches_tool_authorization_decisions() {
             .expect("body");
         let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         let message = payload["error"]["message"].as_str().expect("error message");
-        assert!(message.contains(expected), "{groups:?}: {payload}");
+        assert!(
+            message.contains("transport failure"),
+            "{groups:?}: {payload}"
+        );
     }
 }

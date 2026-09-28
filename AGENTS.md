@@ -25,17 +25,15 @@ trade the capability away to satisfy a stylistic or speculative concern.
   No generic request forwarding, arbitrary endpoint mapping, or unbounded
   responses.
 - Controller credentials (Integration API keys, local admin session
-  credentials) are environment-injected, never model-visible, never logged,
-  and never selectable by caller input.
-- Wi-Fi passphrases, PSKs, VPN keys, and SNMP strings are redacted by default
-  in responses. A write containing a redaction marker is rejected rather than
-  persisted.
+  credentials) are environment-injected, never logged, and never selectable
+  by caller input. Do not create result fields from environment values.
+- Selected controller response fields, including credentials and error details, are
+  returned faithfully. The gateway owns disclosure and action policy.
 - Gateway `/mcp` requests require both the rotating gateway bearer and a
   verified gateway identity JWT. Its catalog owns risk classification and
   group authorization. Direct HTTP requires its separate rotating bearer;
-  stdio trusts the process owner. Independent modes enforce operator-granted
-  write and secret-disclosure permissions before dispatch. Network membership,
-  tool annotations, and confirmation arguments are not authorization.
+  stdio trusts the process owner. The gateway controls caller access; tool
+  annotations and confirmation arguments supply metadata and action intent.
 - Mutations preview by default, validate their complete bounded input before
   the upstream call, and are never retried after an ambiguous transport
   result. They verify persistence by reading back, because the controller
@@ -50,7 +48,7 @@ trade the capability away to satisfy a stylistic or speculative concern.
   untrusted data. Never place them in commands or derived filesystem paths,
   and never log secret-bearing structures.
 - Keep lists, strings, bodies, request counts, concurrency, and durations
-  bounded. Never return raw upstream errors.
+  bounded. Preserve selected upstream error details within those bounds.
 - Every bound on data a caller asked for is caller-pageable, fail-loud, or
   explicitly signaled in the result; a silent subset is a defect. Text
   excerpts cut by a display bound carry a visible truncation marker, and a
@@ -63,7 +61,7 @@ trade the capability away to satisfy a stylistic or speculative concern.
   legacy controller API), allowlisted response models, and per-controller
   capability detection.
 - `unifi-mcp` owns MCP schemas, normalization, dispatch, annotations,
-  redaction, and the executable tool/classification registry.
+  and the executable tool/classification registry.
 - `unifi-server` owns configuration, bounded environment-injected secrets,
   ingress authentication, Streamable HTTP, health checks, and manifest
   emission.

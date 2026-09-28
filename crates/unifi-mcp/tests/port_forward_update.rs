@@ -56,13 +56,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![Zeroizing::new(PASSWORD.to_owned())],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn update(arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -182,6 +176,7 @@ async fn a_confirmed_change_sends_only_the_named_fields_and_reads_the_result_bac
         serde_json::json!([{
             "field": "enabled",
             "status": "persisted",
+            "previous": false,
             "requested": true,
             "observed": true,
         }])
@@ -339,31 +334,6 @@ async fn a_request_that_changes_nothing_is_refused_before_any_controller_call() 
         unknown.message.contains("destinationPort") && unknown.message.contains("name, enabled"),
         "{}",
         unknown.message
-    );
-}
-
-#[tokio::test]
-async fn a_name_carrying_the_redaction_marker_is_refused_before_any_controller_call() {
-    let server = MockServer::start().await;
-    // Nothing is mounted: the refusal is decided from the request alone.
-    // Every returned string is scrubbed of configured credential material, so
-    // a name read back can carry the marker; writing it over the real name is
-    // what this refuses.
-    let error = handler_for(&server)
-        .call(
-            &update(&serde_json::json!({
-                "portForward": FORWARD,
-                "changes": {"name": "[redacted]"},
-                "confirm": true,
-            })),
-            None,
-        )
-        .await
-        .expect_err("redaction marker");
-    assert!(
-        error.message.contains("redaction marker"),
-        "{}",
-        error.message
     );
 }
 

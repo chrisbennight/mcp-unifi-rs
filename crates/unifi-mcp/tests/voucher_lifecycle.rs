@@ -10,7 +10,7 @@ use std::{
 
 use rmcp::model::CallToolRequestParams;
 use unifi_api::{ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, TlsMode};
-use unifi_mcp::{UnifiMcp, handler::LocalAccess};
+use unifi_mcp::UnifiMcp;
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -40,13 +40,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![Zeroizing::new("test-integration-key".to_owned())],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -131,25 +125,8 @@ async fn search_pages_redeemable_codes_and_detail_reads_the_same_code() {
 }
 
 #[tokio::test]
-async fn independent_transport_requires_its_secret_grant_for_existing_codes() {
+async fn independent_transport_returns_existing_codes() {
     let server = MockServer::start().await;
-    let denied = handler_for(&server).with_local_access(LocalAccess {
-        writes: false,
-        secrets: false,
-    });
-    for (tool, arguments) in [
-        ("vouchers.search", serde_json::json!({})),
-        ("vouchers.status", serde_json::json!({"voucherId": "v1"})),
-    ] {
-        let error = denied
-            .call(&call(tool, &arguments), None)
-            .await
-            .expect_err("secret disclosure is disabled");
-        assert!(error.message.contains("secret disclosure"), "{tool}");
-    }
-    // No controller endpoint was mounted, so a denial after a controller
-    // request would fail with an upstream error instead.
-
     mount_site(&server).await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers")))
@@ -166,24 +143,21 @@ async fn independent_transport_requires_its_secret_grant_for_existing_codes() {
         .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
         .mount(&server)
         .await;
-    let allowed = handler_for(&server).with_local_access(LocalAccess {
-        writes: false,
-        secrets: true,
-    });
-    let list = allowed
+    let handler = handler_for(&server).with_local_transport();
+    let list = handler
         .call(&call("vouchers.search", &serde_json::json!({})), None)
         .await
-        .expect("credential read granted")
+        .expect("voucher search")
         .structured_content
         .expect("structured");
     assert_eq!(list["vouchers"][0]["code"], "111-222");
-    let detail = allowed
+    let detail = handler
         .call(
             &call("vouchers.status", &serde_json::json!({"voucherId": "v1"})),
             None,
         )
         .await
-        .expect("credential read granted")
+        .expect("voucher status")
         .structured_content
         .expect("structured");
     assert_eq!(detail["code"], "111-222");

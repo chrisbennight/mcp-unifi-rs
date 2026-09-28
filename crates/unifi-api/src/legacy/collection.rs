@@ -105,7 +105,6 @@ impl LegacyClient {
                 site,
                 &["stat", "report", "hourly.site"],
                 Some(body),
-                &[],
             )
             .await?;
         if let Some(rejected) = super::envelope_rejection(&bytes) {

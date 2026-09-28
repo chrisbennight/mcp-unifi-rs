@@ -83,21 +83,6 @@ pub struct LegacyConfig {
     pub timeout: Duration,
 }
 
-/// The password must never reach diagnostic output, so the formatter is
-/// written by hand instead of derived through the zeroizing container.
-impl std::fmt::Debug for LegacyConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("LegacyConfig")
-            .field("name", &self.name)
-            .field("base_url", &self.base_url.as_str())
-            .field("username", &self.username)
-            .field("password", &"<redacted>")
-            .field("timeout", &self.timeout)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Which console family the controller runs, resolved at first login.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConsoleKind {
@@ -224,15 +209,6 @@ pub struct LegacyClient {
     session: Mutex<SessionState>,
 }
 
-impl std::fmt::Debug for LegacyClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("LegacyClient")
-            .field("base", &self.base.as_str())
-            .finish_non_exhaustive()
-    }
-}
-
 impl LegacyClient {
     /// Build a client for one controller. No network traffic occurs until
     /// the first call needs a session.
@@ -327,7 +303,7 @@ impl LegacyClient {
     }
 
     /// Configured wireless networks from `rest/wlanconf`. Rows carry secret
-    /// passphrase material; callers own redaction and must never log them.
+    /// passphrase material; callers must never log them.
     ///
     /// # Errors
     ///
@@ -432,17 +408,12 @@ impl LegacyClient {
         let body = serde_json::to_value(patch).map_err(|_| {
             ApiError::Config("wireless network patch is not serializable".to_owned())
         })?;
-        // The controller can echo a submitted value back in a rejection, so
-        // the passphrase this request carries is scrubbed from any resulting
-        // error exactly as the login password is.
-        let sent_passphrase = patch.x_passphrase.as_ref().map(|value| value.as_str());
-        self.request_carrying_secrets::<serde_json::Value>(
+        self.request_with_reauth::<serde_json::Value>(
             RequestClass::Mutation,
             Method::PUT,
             site,
             &["rest", "wlanconf", id],
             Some(body),
-            sent_passphrase.as_slice(),
         )
         .await?;
         Ok(())
@@ -685,6 +656,7 @@ impl LegacyClient {
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.execute_protect_bootstrap::<T>().await
@@ -710,6 +682,7 @@ impl LegacyClient {
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.execute_dpi(site).await
@@ -727,7 +700,6 @@ impl LegacyClient {
                 site,
                 &["stat", "sitedpi"],
                 Some(&body),
-                &[],
             )
             .await;
         let availability = match result {
@@ -847,27 +819,6 @@ impl LegacyClient {
         Ok(())
     }
 
-    /// Execute one request, re-authenticating exactly once when the
-    /// controller reports the session gone.
-    ///
-    /// The refreshed session benefits the caller's next attempt either way,
-    /// but only an idempotent read is reissued. An expiry report is not proof
-    /// that a write never reached the controller, and a configuration change
-    /// applied twice is worse than a failure the caller can retry, so a
-    /// mutation surfaces the error instead. Every other failure surfaces
-    /// as-is.
-    async fn request_with_reauth<T: DeserializeOwned>(
-        &self,
-        class: RequestClass,
-        method: Method,
-        site: &str,
-        tail: &[&str],
-        body: Option<serde_json::Value>,
-    ) -> Result<Vec<T>, ApiError> {
-        self.request_carrying_secrets(class, method, site, tail, body, &[])
-            .await
-    }
-
     async fn protect_events_with_reauth(
         &self,
         start: u64,
@@ -883,6 +834,7 @@ impl LegacyClient {
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.execute_protect_events(start, end, limit).await
@@ -981,15 +933,6 @@ impl LegacyClient {
     ) -> Result<T, ApiError> {
         self.capture_csrf(&response).await;
         let status = response.status();
-        if status == StatusCode::UNAUTHORIZED {
-            warn!(
-                endpoint,
-                status = 401,
-                error_kind = "unauthorized",
-                "Protect request failed"
-            );
-            return Err(login_required_error());
-        }
         if status == StatusCode::TOO_MANY_REQUESTS {
             warn!(
                 endpoint,
@@ -997,9 +940,7 @@ impl LegacyClient {
                 error_kind = "rate_limited",
                 "Protect request failed"
             );
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         let status_code = status.as_u16();
         let bytes = http::read_bounded_body(response)
@@ -1016,7 +957,6 @@ impl LegacyClient {
             return Err(translate_failure(
                 status_code,
                 &bytes,
-                &[self.password.as_str()],
                 RequestClass::IdempotentRead,
             ));
         }
@@ -1031,23 +971,19 @@ impl LegacyClient {
         })
     }
 
-    /// As [`Self::request_with_reauth`], for a request whose body carries
-    /// secret material. The controller can reflect a submitted value in its
-    /// rejection message, so every value named here is scrubbed out of the
-    /// resulting error alongside the login password. A caller that sends a
-    /// secret and omits it here leaks it into diagnostics.
-    async fn request_carrying_secrets<T: DeserializeOwned>(
+    /// Execute one request, re-authenticating exactly once when the
+    /// controller reports the session gone. Only idempotent reads are reissued.
+    async fn request_with_reauth<T: DeserializeOwned>(
         &self,
         class: RequestClass,
         method: Method,
         site: &str,
         tail: &[&str],
         body: Option<serde_json::Value>,
-        secrets: &[&str],
     ) -> Result<Vec<T>, ApiError> {
         let generation = self.ensure_session().await?;
         let first = self
-            .execute(class, method.clone(), site, tail, body.as_ref(), secrets)
+            .execute(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
             // Only a read is reissued. The session is refreshed either way so
@@ -1061,25 +997,17 @@ impl LegacyClient {
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
-                self.execute(class, method, site, tail, body.as_ref(), secrets)
-                    .await
+                self.execute(class, method, site, tail, body.as_ref()).await
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if class == RequestClass::IdempotentRead && delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
-                self.execute(class, method, site, tail, body.as_ref(), secrets)
-                    .await
+                self.execute(class, method, site, tail, body.as_ref()).await
             }
             other => other,
         }
-    }
-
-    /// The login password plus whatever secret material this request sent.
-    fn request_secrets<'a>(&'a self, extra: &[&'a str]) -> Vec<&'a str> {
-        let mut secrets = vec![self.password.as_str()];
-        secrets.extend_from_slice(extra);
-        secrets
     }
 
     async fn execute<T: DeserializeOwned>(
@@ -1089,34 +1017,19 @@ impl LegacyClient {
         site: &str,
         tail: &[&str],
         body: Option<&serde_json::Value>,
-        secrets: &[&str],
     ) -> Result<Vec<T>, ApiError> {
-        let bytes = self
-            .execute_bytes(class, method, site, tail, body, secrets)
-            .await?;
+        let bytes = self.execute_bytes(class, method, site, tail, body).await?;
         let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
             .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
         if envelope.meta.rc == "ok" {
             Ok(envelope.data)
         } else {
             let raw = envelope.meta.msg.as_deref();
-            // Session expiry read out of the controller's message text is
-            // trusted only for reads. The text can echo a value the caller
-            // submitted, so for a mutation it could be made to look like
-            // expiry and earn a resend; a mutation therefore learns about
-            // expiry only from the 401 status, which reflected content
-            // cannot forge. Classification precedes the scrub so a secret
-            // that merely resembles the token cannot disguise a real expiry
-            // on the read path.
+            // A mutation is never resent based on an error in its response body.
             if class == RequestClass::IdempotentRead && raw == Some(LOGIN_REQUIRED_CODE) {
                 return Err(login_required_error());
             }
-            // The decoded msg carries a reflected credential literally, so
-            // the scrub applies here exactly as on the failure path, over the
-            // login password and anything secret this request just sent.
-            let secrets = self.request_secrets(secrets);
-            let scrubbed = raw.map(|msg| scrub(msg, &secrets));
-            Err(rejection(scrubbed.as_deref()))
+            Err(rejection(raw))
         }
     }
 
@@ -1127,7 +1040,6 @@ impl LegacyClient {
         site: &str,
         tail: &[&str],
         body: Option<&serde_json::Value>,
-        secrets: &[&str],
     ) -> Result<Vec<u8>, ApiError> {
         let (kind, csrf) = {
             let session = self.session.lock().await;
@@ -1161,22 +1073,12 @@ impl LegacyClient {
         })?;
         self.capture_csrf(&response).await;
         let status = response.status();
-        if status == StatusCode::UNAUTHORIZED {
-            return Err(login_required_error());
-        }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         let bytes = http::read_bounded_body(response).await?;
         if !status.is_success() {
-            return Err(translate_failure(
-                status.as_u16(),
-                &bytes,
-                &self.request_secrets(secrets),
-                class,
-            ));
+            return Err(translate_failure(status.as_u16(), &bytes, class));
         }
         Ok(bytes)
     }
@@ -1281,16 +1183,13 @@ impl LegacyClient {
         if status == StatusCode::TOO_MANY_REQUESTS {
             // Hammering a rate-limited login triggers the controller's
             // account lockout; this always surfaces and is never retried.
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         let bytes = http::read_bounded_body(response).await?;
         if !status.is_success() {
             return Err(translate_failure(
                 status.as_u16(),
                 &bytes,
-                &[self.password.as_str()],
                 RequestClass::IdempotentRead,
             ));
         }
@@ -1298,10 +1197,7 @@ impl LegacyClient {
         // session is authenticated only when no such rejection is present,
         // whether or not the rejection names a code.
         if let Some(rejected) = envelope_rejection(&bytes) {
-            let scrubbed = rejected
-                .code
-                .map(|value| scrub(&value, &[self.password.as_str()]));
-            return Err(rejection(scrubbed.as_deref()));
+            return Err(rejection(rejected.code.as_deref()));
         }
         session.authenticated = true;
         session.generation += 1;
@@ -1346,8 +1242,11 @@ fn backoff_window(error: &ApiError) -> Duration {
     match error {
         ApiError::RateLimited {
             retry_after: Some(delay),
+            ..
         } => (*delay).clamp(Duration::from_secs(1), Duration::from_mins(1)),
-        ApiError::RateLimited { retry_after: None } => Duration::from_secs(5),
+        ApiError::RateLimited {
+            retry_after: None, ..
+        } => Duration::from_secs(5),
         _ => Duration::from_secs(1),
     }
 }
@@ -1433,6 +1332,7 @@ fn header_value(response: &Response, name: &str) -> Option<String> {
 
 fn is_login_required(error: &ApiError) -> bool {
     matches!(error, ApiError::Rejected { code, .. } if code.as_str() == LOGIN_REQUIRED_CODE)
+        || matches!(error, ApiError::Status { status: 401, .. })
 }
 
 fn login_required_error() -> ApiError {
@@ -1442,31 +1342,26 @@ fn login_required_error() -> ApiError {
     }
 }
 
-/// Translate a non-success HTTP response whose body may carry the legacy
-/// envelope. A login endpoint or intermediary that reflects the submitted
-/// credential must not leak it through the error surface: the envelope `msg`
-/// is scrubbed after JSON decoding (where a reflected credential appears
-/// literally), and a body without a recognizable envelope forwards no
-/// upstream content at all, because literal scrubbing cannot match a
-/// credential hidden behind serialization escapes.
-fn translate_failure(status: u16, bytes: &[u8], secrets: &[&str], class: RequestClass) -> ApiError {
+/// Translate a non-success HTTP response while retaining its controller detail.
+fn translate_failure(status: u16, bytes: &[u8], class: RequestClass) -> ApiError {
+    if status == 401 {
+        return ApiError::Status {
+            status,
+            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+        };
+    }
     match envelope_rejection(bytes) {
         Some(rejected) => {
-            // Same rule as the 2xx rejection path: message text decides
-            // expiry for a read only, and it is read before the scrub.
             if class == RequestClass::IdempotentRead
                 && rejected.code.as_deref() == Some(LOGIN_REQUIRED_CODE)
             {
                 return login_required_error();
             }
-            let scrubbed = rejected.code.map(|value| scrub(&value, secrets));
-            rejection(scrubbed.as_deref())
+            rejection(rejected.code.as_deref())
         }
         None => ApiError::Status {
             status,
-            message: BoundedMessage::new(
-                "no recognizable error envelope in the controller response",
-            ),
+            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
         },
     }
 }
@@ -1495,49 +1390,6 @@ fn envelope_rejection(bytes: &[u8]) -> Option<EnvelopeRejection> {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
     })
-}
-
-/// Replace every occurrence of every secret with the marker.
-///
-/// Occurrences are located first and their ranges merged, then the text is
-/// rebuilt once. Replacing secrets one after another instead would let the
-/// first replacement consume part of a longer secret's match and leave the
-/// remainder of that secret in the text; the result here does not depend on
-/// the order the secrets arrive in, or on one containing another.
-fn scrub(text: &str, secrets: &[&str]) -> String {
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for secret in secrets {
-        if secret.is_empty() {
-            continue;
-        }
-        let mut from = 0;
-        while let Some(offset) = text[from..].find(secret) {
-            let start = from + offset;
-            ranges.push((start, start + secret.len()));
-            from = start + 1;
-            while from < text.len() && !text.is_char_boundary(from) {
-                from += 1;
-            }
-        }
-    }
-    if ranges.is_empty() {
-        return text.to_owned();
-    }
-    ranges.sort_unstable();
-    let mut scrubbed = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for (start, end) in ranges {
-        if start >= cursor {
-            scrubbed.push_str(&text[cursor..start]);
-            scrubbed.push_str("<redacted>");
-            cursor = end;
-        } else if end > cursor {
-            // An overlapping match simply extends the redacted span.
-            cursor = end;
-        }
-    }
-    scrubbed.push_str(&text[cursor..]);
-    scrubbed
 }
 
 /// Map a legacy `api.err.*` code to a typed rejection with actionable

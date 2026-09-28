@@ -46,7 +46,7 @@ jobs:
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             -v "${RUNNER_TEMP}/source-scan:/scan:ro" \
-            "$GITLEAKS_IMAGE" dir --redact=100 --no-banner /scan
+            "$GITLEAKS_IMAGE" dir --no-banner /scan > /dev/null 2>&1
 
       - name: Verify build-context isolation
         run: python3 scripts/check_build_context.py

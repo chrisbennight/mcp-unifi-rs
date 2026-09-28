@@ -107,8 +107,8 @@ List the tools, then call **`clients.search` with `{}`** for Network, or
 An empty list means no matches; unsupported APIs and failed requests return
 explicit errors. Neither call changes your controller.
 
-Writes and secret disclosure are disabled in independent modes until the
-operator grants them. See [permissions and troubleshooting](docs/transports.md).
+The gateway classifies tools and controls caller access. Direct HTTP uses its
+separate bearer; stdio trusts the process owner. See [connecting a client](docs/transports.md).
 Keep `--transport stdio` explicit: omitting it selects gateway mode.
 
 ## How it connects
@@ -141,7 +141,7 @@ Package visibility and pull permissions are separate from repository visibility.
 Follow [CONTRIBUTING.md](CONTRIBUTING.md) to build, test, and propose a change.
 Tests use loopback fakes and require no controller or private infrastructure.
 Useful reports include the application version, transport, tool call, and
-redacted result. See [support](SUPPORT.md) and [private security reporting](SECURITY.md).
+relevant tool result. See [support](SUPPORT.md) and [private security reporting](SECURITY.md).
 
 The [visual identity guide](docs/branding/README.md) covers artwork and writing.
 

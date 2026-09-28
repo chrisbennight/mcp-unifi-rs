@@ -74,16 +74,6 @@ impl GatewayBearers {
     }
 }
 
-impl std::fmt::Debug for GatewayBearers {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("GatewayBearers")
-            .field("current", &"[REDACTED]")
-            .field("previous", &self.previous.as_ref().map(|_| "[REDACTED]"))
-            .finish()
-    }
-}
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AuthConfigError {
     #[error("gateway bearer must contain at least 32 bytes and no whitespace")]
@@ -680,23 +670,21 @@ mod tests {
     }
 
     #[test]
-    fn bearer_rotation_is_constant_contract_and_redacted() {
+    fn bearer_rotation_accepts_both_values() {
         let bearers = GatewayBearers::new(CURRENT_BEARER.into(), Some(PREVIOUS_BEARER.into()))
             .expect("valid");
         assert!(bearers.accepts(CURRENT_BEARER.as_bytes()));
         assert!(bearers.accepts(PREVIOUS_BEARER.as_bytes()));
         assert!(!bearers.accepts(b"wrong"));
         assert!(!bearers.accepts(&CURRENT_BEARER.as_bytes()[..31]));
-        let debug = format!("{bearers:?}");
-        assert!(!debug.contains(CURRENT_BEARER));
-        assert!(!debug.contains(PREVIOUS_BEARER));
-        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]
     fn weak_or_duplicate_bearers_are_rejected() {
         assert_eq!(
-            GatewayBearers::new("short".into(), None).expect_err("weak bearer"),
+            GatewayBearers::new("short".into(), None)
+                .err()
+                .expect("weak bearer"),
             AuthConfigError::InvalidBearer
         );
         for weak in [
@@ -704,13 +692,17 @@ mod tests {
             "0123456789abcdef 123456789abcdef",
         ] {
             assert_eq!(
-                GatewayBearers::new(weak.into(), None).expect_err("invalid bearer"),
+                GatewayBearers::new(weak.into(), None)
+                    .err()
+                    .expect("invalid bearer"),
                 AuthConfigError::InvalidBearer
             );
         }
         let value = CURRENT_BEARER;
         assert_eq!(
-            GatewayBearers::new(value.into(), Some(value.into())).expect_err("duplicate"),
+            GatewayBearers::new(value.into(), Some(value.into()))
+                .err()
+                .expect("duplicate"),
             AuthConfigError::DuplicateBearers
         );
     }

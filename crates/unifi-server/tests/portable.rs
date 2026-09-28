@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 use unifi_api::TlsMode;
-use unifi_mcp::{UnifiMcp, handler::LocalAccess};
+use unifi_mcp::UnifiMcp;
 use unifi_server::{
     auth::GatewayBearers,
     config::{ControllerSettings, ProtectSettings, RuntimeSettings},
@@ -41,10 +41,8 @@ fn binary() -> tokio::process::Command {
 }
 
 #[tokio::test]
-async fn binary_validates_permissions_without_printing_secret_configuration() {
+async fn binary_validates_limits_without_printing_secret_configuration() {
     for (variable, value) in [
-        ("UNIFI_MCP_ALLOW_WRITES", "yes"),
-        ("UNIFI_MCP_ALLOW_SECRET_DISCLOSURE", "1"),
         ("UNIFI_MCP_MAX_BODY_BYTES", "99999999"),
         ("UNIFI_MCP_MAX_CONCURRENT_REQUESTS", "0"),
         ("UNIFI_MCP_REQUEST_TIMEOUT_SECONDS", "121"),
@@ -167,7 +165,6 @@ async fn stdio_exits_on_sigint_with_stdin_still_open() {
 
 fn settings() -> PortableSettings {
     PortableSettings {
-        access: LocalAccess::default(),
         max_body_bytes: 65536,
         max_concurrent_requests: 4,
         request_timeout: Duration::from_secs(5),
@@ -272,7 +269,7 @@ async fn camera_mock(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn operator_grants_enable_preview_and_disclosure_independently() {
+async fn direct_transport_previews_writes_and_returns_wifi_passphrase() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
@@ -299,48 +296,37 @@ async fn operator_grants_enable_preview_and_disclosure_independently() {
             .mount(&server)
             .await;
     }
-    for (writes, secrets) in [(true, false), (false, true)] {
-        let mut settings = settings();
-        settings.access = LocalAccess { writes, secrets };
-        let router = router(&settings, handler(&server, false));
-        let (_, preview) = json_response(router.clone(), request(&message("tools/call", json!({"name":"wlans.update","arguments":{"wlan":"wlan-1","changes":{"enabled":false}}})))).await;
-        if writes {
-            assert_eq!(
-                preview["result"]["structuredContent"]["applied"], false,
-                "{preview}"
-            );
-        } else {
-            assert!(
-                preview["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("write access")
-            );
-        }
-        let (_, response) = json_response(
-            router,
-            request(&message(
-                "tools/call",
-                json!({"name":"networks.read","arguments":{"includeSecrets":true}}),
-            )),
-        )
-        .await;
-        if secrets {
-            assert!(
-                response["result"]["structuredContent"]
-                    .to_string()
-                    .contains("synthetic-wifi-passphrase"),
-                "{response}"
-            );
-        } else {
-            assert!(
-                response["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("secret disclosure")
-            );
-        }
-    }
+    let router = router(&settings(), handler(&server, false));
+    let (_, preview) = json_response(
+        router.clone(),
+        request(&message(
+            "tools/call",
+            json!({
+                "name":"wlans.update",
+                "arguments":{"wlan":"wlan-1","changes":{"enabled":false}}
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(
+        preview["result"]["structuredContent"]["applied"], false,
+        "{preview}"
+    );
+    let (_, response) = json_response(
+        router,
+        request(&message(
+            "tools/call",
+            json!({
+                "name":"networks.read","arguments":{}
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(
+        response["result"]["structuredContent"]["wlans"][0]["passphrase"],
+        "synthetic-wifi-passphrase",
+        "{response}"
+    );
     assert!(
         !server
             .received_requests()
@@ -478,37 +464,6 @@ async fn http_enforces_current_protocol_headers_versions_methods_and_body_limits
 }
 
 #[tokio::test]
-async fn direct_calls_cannot_grant_themselves_writes_or_secrets() {
-    let server = MockServer::start().await;
-    let router = router(&settings(), handler(&server, false));
-    for (tool, arguments, expected) in [
-        ("wlans.update", json!({"confirm":true}), "write access"),
-        ("vouchers.create", json!({"confirm":false}), "write access"),
-        (
-            "networks.read",
-            json!({"includeSecrets":true}),
-            "secret disclosure",
-        ),
-    ] {
-        let mut req = request(&message(
-            "tools/call",
-            json!({"name":tool,"arguments":arguments}),
-        ));
-        req.headers_mut()
-            .insert("x-mcp-identity", "forged-admin".parse().unwrap());
-        let (_, body) = json_response(router.clone(), req).await;
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
-            "{body}"
-        );
-    }
-    assert!(server.received_requests().await.unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn stdio_accepts_fragmented_current_messages_lists_and_reads_with_no_http_listener() {
     let server = MockServer::start().await;
     camera_mock(&server).await;
@@ -566,52 +521,4 @@ async fn serve_stdio_owned<R, W>(
     serve_stdio(&settings, handler, reader, writer, CancellationToken::new())
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn stdio_denies_confirmed_writes_and_disclosure_before_controller_io() {
-    let server = MockServer::start().await;
-    let (client, stream) = tokio::io::duplex(65536);
-    let (reader, writer) = tokio::io::split(stream);
-    let task = tokio::spawn(serve_stdio_owned(
-        settings(),
-        handler(&server, false),
-        reader,
-        writer,
-    ));
-    let (read, mut write) = tokio::io::split(client);
-    let mut read = BufReader::new(read);
-    for (name, arguments, expected) in [
-        ("wlans.update", json!({"confirm":true}), "write access"),
-        (
-            "networks.read",
-            json!({"includeSecrets":true}),
-            "secret disclosure",
-        ),
-    ] {
-        let body = message("tools/call", json!({"name":name,"arguments":arguments}));
-        write
-            .write_all(format!("{body}\n").as_bytes())
-            .await
-            .unwrap();
-        let mut line = String::new();
-        tokio::time::timeout(Duration::from_secs(5), read.read_line(&mut line))
-            .await
-            .unwrap()
-            .unwrap();
-        let body: Value = serde_json::from_str(&line).unwrap();
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
-            "{body}"
-        );
-    }
-    write.shutdown().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(server.received_requests().await.unwrap().is_empty());
 }

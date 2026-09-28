@@ -4,25 +4,30 @@ use thiserror::Error;
 
 /// Longest upstream-derived detail carried by any error variant.
 const MAXIMUM_MESSAGE_BYTES: usize = 512;
+const TRUNCATION_MARKER: &str = " [truncated]";
 
-/// An upstream-derived message that is bounded and control-character free by
-/// construction. Every construction path runs the sanitizer, so no error
-/// variant can carry raw upstream detail regardless of who builds it.
+/// An upstream-derived message kept within the error string budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundedMessage(String);
 
 impl BoundedMessage {
-    /// Sanitize one message: drop control characters, then truncate on a
-    /// character boundary within the byte budget so a multi-byte message can
-    /// never split mid-character.
+    /// Keep the original characters and signal any byte-budget truncation.
     #[must_use]
     pub fn new(raw: &str) -> Self {
         let mut message = String::new();
-        for character in raw.chars().filter(|value| !value.is_control()) {
+        let mut truncated = false;
+        for character in raw.chars() {
             if message.len() + character.len_utf8() > MAXIMUM_MESSAGE_BYTES {
+                truncated = true;
                 break;
             }
             message.push(character);
+        }
+        if truncated {
+            while message.len() + TRUNCATION_MARKER.len() > MAXIMUM_MESSAGE_BYTES {
+                message.pop();
+            }
+            message.push_str(TRUNCATION_MARKER);
         }
         Self(message)
     }
@@ -52,9 +57,8 @@ impl From<String> for BoundedMessage {
 }
 
 /// A failure talking to a controller. Upstream-derived detail always travels
-/// as a [`BoundedMessage`], so it is bounded and stripped of control
-/// characters before it can reach a caller; credentials never appear in any
-/// variant.
+/// as a [`BoundedMessage`]. Controller-provided values remain present in the
+/// selected error detail, with an explicit marker if the budget is reached.
 #[derive(Debug, Clone, Error)]
 pub enum ApiError {
     /// Locally produced configuration diagnostics; carries no upstream data.
@@ -69,8 +73,11 @@ pub enum ApiError {
     },
     /// The controller rate limited the request and the client did not (or
     /// must not) retry it.
-    #[error("controller rate limited the request")]
-    RateLimited { retry_after: Option<Duration> },
+    #[error("controller rate limited the request: {message}")]
+    RateLimited {
+        retry_after: Option<Duration>,
+        message: BoundedMessage,
+    },
     /// The legacy controller API accepted the transport but rejected the
     /// operation with one of its `api.err.*` codes. `code` is the upstream
     /// token; `message` is actionable guidance for the caller.
@@ -112,16 +119,23 @@ mod tests {
         let bounded = BoundedMessage::new(&"é".repeat(600));
         assert!(bounded.as_str().len() <= 512);
         assert_eq!(bounded.as_str().len(), 512);
-        assert!(bounded.as_str().chars().all(|character| character == 'é'));
+        assert!(bounded.as_str().ends_with(" [truncated]"));
+        assert!(
+            bounded
+                .as_str()
+                .trim_end_matches(" [truncated]")
+                .chars()
+                .all(|character| character == 'é')
+        );
     }
 
     #[test]
-    fn control_characters_are_dropped_before_bounding() {
-        assert_eq!(BoundedMessage::new("a\u{7}b\r\nc").as_str(), "abc");
+    fn control_characters_are_preserved() {
+        assert_eq!(BoundedMessage::new("a\u{7}b\r\nc").as_str(), "a\u{7}b\r\nc");
     }
 
     #[test]
-    fn every_construction_path_sanitizes() {
+    fn every_construction_path_respects_the_budget() {
         let oversized = "x".repeat(4096);
         assert!(BoundedMessage::from(oversized.as_str()).as_str().len() <= 512);
         assert!(BoundedMessage::from(oversized).as_str().len() <= 512);

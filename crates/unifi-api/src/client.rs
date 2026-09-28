@@ -35,15 +35,6 @@ pub struct IntegrationClient {
     api_key: Zeroizing<String>,
 }
 
-impl std::fmt::Debug for IntegrationClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("IntegrationClient")
-            .field("base", &self.base.as_str())
-            .finish_non_exhaustive()
-    }
-}
-
 impl IntegrationClient {
     /// Build a client for one controller.
     ///
@@ -420,6 +411,7 @@ impl IntegrationClient {
             Ok(response) => response,
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.send(self.request_with_query(Method::GET, segments, query)?)
@@ -558,13 +550,11 @@ impl IntegrationClient {
             return Ok(response);
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         Err(ApiError::Status {
             status: status.as_u16(),
-            message: bounded_error_message(response, &self.api_key).await,
+            message: bounded_error_message(response).await?,
         })
     }
 }
@@ -603,22 +593,14 @@ async fn decode<T: DeserializeOwned>(response: Response) -> Result<T, ApiError> 
         .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))
 }
 
-/// Extract a bounded, human-oriented message from an upstream error body
-/// without ever forwarding the raw payload. A controller that echoes the
-/// submitted credential back in an error body must not leak it through the
-/// error surface, so any occurrence of the key is redacted before bounding.
-pub(crate) async fn bounded_error_message(response: Response, api_key: &str) -> BoundedMessage {
-    let Ok(bytes) = http::read_bounded_body(response).await else {
-        return BoundedMessage::new("no error detail");
-    };
-    bounded_error_message_from_bytes(&bytes, api_key)
+/// Keep the controller's error body within the error message budget.
+pub(crate) async fn bounded_error_message(response: Response) -> Result<BoundedMessage, ApiError> {
+    let bytes = http::read_bounded_body(response).await?;
+    Ok(bounded_error_message_from_bytes(&bytes))
 }
 
-/// Extract a bounded, credential-redacted message from an error body that a
-/// caller already read in order to retain structural diagnostics such as its
-/// byte count.
-pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8], api_key: &str) -> BoundedMessage {
-    let extracted = serde_json::from_slice::<serde_json::Value>(bytes)
+pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8]) -> BoundedMessage {
+    let message = serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|value| {
             value
@@ -627,10 +609,5 @@ pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8], api_key: &str) -> B
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
-    let redacted = if api_key.is_empty() {
-        extracted
-    } else {
-        extracted.replace(api_key, "<redacted>")
-    };
-    BoundedMessage::new(&redacted)
+    BoundedMessage::new(&message)
 }

@@ -39,13 +39,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![Zeroizing::new(PASSWORD.to_owned())],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -243,7 +237,7 @@ async fn a_property_this_server_does_not_model_cannot_be_cleared_unnoticed() {
 }
 
 #[tokio::test]
-async fn a_passphrase_change_reports_its_outcome_without_either_value() {
+async fn a_passphrase_change_reports_requested_and_observed_values() {
     let server = MockServer::start().await;
     logged_in(&server).await;
     let mut after = wlan_row("Home", true, false);
@@ -266,8 +260,11 @@ async fn a_passphrase_change_reports_its_outcome_without_either_value() {
         .expect("structured");
     assert_eq!(output["fields"][0]["status"], "persisted");
     let rendered = output.to_string();
-    assert!(!rendered.contains("brand-new-secret"), "{rendered}");
-    assert!(!rendered.contains("current-wifi-secret"), "{rendered}");
+    assert!(rendered.contains("brand-new-secret"), "{rendered}");
+    assert_eq!(
+        output["fields"][0]["previous"], "current-wifi-secret",
+        "{output}"
+    );
 }
 
 #[tokio::test]
@@ -358,30 +355,8 @@ async fn encryption_and_its_key_travel_in_one_request() {
         .expect("structured");
     assert_eq!(output["verified"], true, "{output}");
     assert!(
-        !output.to_string().contains("stated-by-the-caller"),
+        output.to_string().contains("stated-by-the-caller"),
         "{output}"
-    );
-}
-
-#[tokio::test]
-async fn a_redacted_read_written_back_is_refused_before_any_controller_call() {
-    let server = MockServer::start().await;
-    // Nothing is mounted: the guard must fire before the network is read.
-    let error = handler_for(&server)
-        .call(
-            &update(&serde_json::json!({
-                "wlan": WLAN_ID,
-                "changes": {"passphrase": "[redacted]"},
-                "confirm": true,
-            })),
-            None,
-        )
-        .await
-        .expect_err("marker refused");
-    assert!(
-        error.message.contains("redaction marker"),
-        "{}",
-        error.message
     );
 }
 
@@ -403,11 +378,10 @@ async fn a_change_set_naming_nothing_is_refused_before_any_controller_call() {
 }
 
 #[tokio::test]
-async fn a_secret_reused_as_a_visible_value_is_still_kept_out_of_the_result() {
+async fn a_reused_controller_value_is_returned_in_the_result() {
     let server = MockServer::start().await;
     logged_in(&server).await;
-    // The caller sets the ssid to the same bytes as the passphrase. Omitting
-    // the field named passphrase would still return the secret as an ssid.
+    // The same controller value can appear in multiple selected fields.
     mount_reads(
         &server,
         &wlan_row("Home", true, false),
@@ -428,7 +402,7 @@ async fn a_secret_reused_as_a_visible_value_is_still_kept_out_of_the_result() {
         .structured_content
         .expect("structured");
     assert!(
-        !output.to_string().contains("shared-secret-value"),
+        output.to_string().contains("shared-secret-value"),
         "{output}"
     );
 }
@@ -450,12 +424,10 @@ async fn a_misspelled_change_field_is_named_along_with_the_accepted_ones() {
 }
 
 #[tokio::test]
-async fn overlapping_secrets_leave_no_fragment_in_a_result() {
+async fn overlapping_controller_values_are_returned_in_a_result() {
     let server = MockServer::start().await;
     logged_in(&server).await;
-    // The stored key contains the submitted one. Replacing them one at a time
-    // consumes the shorter match first and leaves the rest of the longer key
-    // in the text.
+    // Both values retain their original bytes in the preview.
     let mut current = wlan_row("Home", true, false);
     current["x_passphrase"] = serde_json::json!("prefix-inner-suffix");
     let mut after = current.clone();
@@ -475,23 +447,18 @@ async fn overlapping_secrets_leave_no_fragment_in_a_result() {
         .structured_content
         .expect("structured");
     let rendered = output.to_string();
-    assert!(!rendered.contains("prefix-"), "{rendered}");
-    assert!(!rendered.contains("-suffix"), "{rendered}");
-    assert!(!rendered.contains("inner"), "{rendered}");
+    assert!(rendered.contains("prefix-"), "{rendered}");
+    assert!(rendered.contains("-suffix"), "{rendered}");
+    assert!(rendered.contains("inner"), "{rendered}");
 }
 
 #[tokio::test]
-async fn a_secret_the_marker_would_reintroduce_withholds_the_result() {
+async fn preview_returns_the_current_controller_value() {
     let server = MockServer::start().await;
     logged_in(&server).await;
-    // "redact" is a substring of the marker, so substituting the marker puts
-    // the secret back. No replacement scheme survives that, which is why the
-    // result is withheld rather than returned.
-    let mut current = wlan_row("redact", true, false);
-    current["x_passphrase"] = serde_json::json!("redact");
+    let current = wlan_row("bluebird", true, false);
     mount_reads(&server, &current, &current).await;
-
-    let error = handler_for(&server)
+    let output = handler_for(&server)
         .call(
             &update(&serde_json::json!({
                 "wlan": WLAN_ID,
@@ -500,6 +467,8 @@ async fn a_secret_the_marker_would_reintroduce_withholds_the_result() {
             None,
         )
         .await
-        .expect_err("withheld");
-    assert!(error.message.contains("withheld"), "{}", error.message);
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["changes"][0]["from"], "bluebird", "{output}");
 }

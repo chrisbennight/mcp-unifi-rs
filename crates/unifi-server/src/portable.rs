@@ -27,14 +27,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use unifi_mcp::{UnifiMcp, handler::LocalAccess};
+use unifi_mcp::UnifiMcp;
 
 use crate::auth::GatewayBearers;
 
-/// Bounds and fixed authority shared by stdio and independent HTTP.
+/// Bounds shared by stdio and independent HTTP.
 #[derive(Debug)]
 pub struct PortableSettings {
-    pub access: LocalAccess,
     pub max_body_bytes: usize,
     pub max_concurrent_requests: usize,
     pub request_timeout: Duration,
@@ -48,10 +47,6 @@ impl PortableSettings {
     /// Rejects malformed values and out-of-range limits.
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            access: LocalAccess {
-                writes: flag("UNIFI_MCP_ALLOW_WRITES")?,
-                secrets: flag("UNIFI_MCP_ALLOW_SECRET_DISCLOSURE")?,
-            },
             max_body_bytes: number(
                 "UNIFI_MCP_MAX_BODY_BYTES",
                 1024 * 1024,
@@ -72,7 +67,7 @@ impl PortableSettings {
     #[must_use]
     pub fn apply(&self, handler: UnifiMcp) -> UnifiMcp {
         handler
-            .with_local_access(self.access)
+            .with_local_transport()
             .with_request_limits(self.max_concurrent_requests, self.request_timeout)
     }
 }
@@ -82,14 +77,6 @@ fn value(name: &'static str, default: &str) -> Result<String> {
         Ok(value) => Ok(value),
         Err(env::VarError::NotPresent) => Ok(default.to_owned()),
         Err(env::VarError::NotUnicode(_)) => bail!("{name} must be valid Unicode"),
-    }
-}
-
-fn flag(name: &'static str) -> Result<bool> {
-    match value(name, "false")?.as_str() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => bail!("{name} must be true or false"),
     }
 }
 
@@ -105,7 +92,7 @@ fn number(name: &'static str, default: usize, min: usize, max: usize) -> Result<
 }
 
 /// Direct HTTP uses a dedicated rotating bearer, never a controller API key.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DirectHttpSettings {
     pub host: String,
     pub port: u16,

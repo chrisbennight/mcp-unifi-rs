@@ -16,7 +16,6 @@ use rmcp::{
 };
 use tokio::sync::{OnceCell, Semaphore};
 use unifi_api::{IntegrationClient, LegacyClient, ProtectClient, models::PageRequest};
-use zeroize::Zeroizing;
 
 use crate::registry::{ToolSpec, ToolSurface, tools_for_surface};
 
@@ -37,20 +36,9 @@ const SITES_SCAN_CEILING: u64 = 10_000;
 #[derive(Clone)]
 pub struct UnifiMcp {
     runtime: Arc<Runtime>,
-    access: Option<LocalAccess>,
+    local_transport: bool,
     requests: Arc<Semaphore>,
     request_timeout: std::time::Duration,
-    /// Configured secret values retained solely so outgoing results can be
-    /// scrubbed; never serialized, logged, or exposed.
-    redact: Arc<[Zeroizing<String>]>,
-}
-
-/// Operator-granted permissions for a process or authenticated direct client.
-/// These grants are never derived from tool arguments or MCP annotations.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LocalAccess {
-    pub writes: bool,
-    pub secrets: bool,
 }
 
 enum Runtime {
@@ -75,10 +63,9 @@ impl UnifiMcp {
         legacy: Arc<LegacyClient>,
         controller_name: &str,
         legacy_site: &str,
-        redact: Vec<Zeroizing<String>>,
     ) -> Self {
         Self {
-            access: None,
+            local_transport: false,
             requests: Arc::new(Semaphore::new(32)),
             request_timeout: std::time::Duration::from_secs(30),
             runtime: Arc::new(Runtime::Network {
@@ -88,7 +75,6 @@ impl UnifiMcp {
                 legacy_site: legacy_site.into(),
                 site_id: OnceCell::new(),
             }),
-            redact: redact.into(),
         }
     }
 
@@ -98,10 +84,9 @@ impl UnifiMcp {
         name: &str,
         protect: Arc<ProtectClient>,
         protect_events: Option<Arc<LegacyClient>>,
-        redact: Vec<Zeroizing<String>>,
     ) -> Self {
         Self {
-            access: None,
+            local_transport: false,
             requests: Arc::new(Semaphore::new(32)),
             request_timeout: std::time::Duration::from_secs(30),
             runtime: Arc::new(Runtime::Protect {
@@ -109,19 +94,15 @@ impl UnifiMcp {
                 protect_name: name.into(),
                 protect_events,
             }),
-            redact: redact.into(),
         }
     }
 
-    /// Set the fixed authority of a local process or bearer-authenticated client.
+    /// Mark a stdio or direct HTTP transport, which supplies its own ingress
+    /// authentication without a gateway identity extension.
     #[must_use]
-    pub fn with_local_access(mut self, access: LocalAccess) -> Self {
-        self.access = Some(access);
+    pub fn with_local_transport(mut self) -> Self {
+        self.local_transport = true;
         self
-    }
-
-    pub(crate) fn local_access(&self) -> Option<LocalAccess> {
-        self.access
     }
 
     pub(crate) fn request_timeout(&self) -> std::time::Duration {
@@ -134,10 +115,6 @@ impl UnifiMcp {
         self.requests = Arc::new(Semaphore::new(concurrency));
         self.request_timeout = timeout;
         self
-    }
-
-    pub(crate) fn redact(&self) -> &[Zeroizing<String>] {
-        &self.redact
     }
 
     pub(crate) fn integration(&self) -> &IntegrationClient {
@@ -284,7 +261,7 @@ impl ServerHandler for UnifiMcp {
     fn supported_protocol_versions(
         &self,
     ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
-        if self.access.is_some() {
+        if self.local_transport {
             std::borrow::Cow::Owned(vec![rmcp::model::ProtocolVersion::V_2026_07_28])
         } else {
             std::borrow::Cow::Borrowed(rmcp::model::ProtocolVersion::KNOWN_VERSIONS)
@@ -330,22 +307,12 @@ impl ServerHandler for UnifiMcp {
             .get::<http::request::Parts>()
             .and_then(|parts| parts.extensions.get::<crate::IdentityPrincipal>())
             .cloned();
-        if self.access.is_none() && principal.is_none() {
+        if !self.local_transport && principal.is_none() {
             return Err(McpError::invalid_request(
                 "verified caller identity required",
                 None,
             ));
         }
-        let principal = self.access.map_or(principal, |access| {
-            Some(crate::IdentityPrincipal {
-                subject: "local-operator".to_owned(),
-                groups: if access.secrets {
-                    vec![crate::MCP_ADMIN_GROUP.to_owned()]
-                } else {
-                    vec![]
-                },
-            })
-        });
         let _permit = self.requests.try_acquire().map_err(|_| {
             McpError::internal_error("server is busy; no tool action was started", None)
         })?;

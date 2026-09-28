@@ -1,6 +1,6 @@
 //! End-to-end fixture tests for the firewall and networks audit reads,
-//! covering both console firewall generations and the secret-redaction
-//! contract against loopback fakes.
+//! covering both console firewall generations and response fidelity
+//! against loopback fakes.
 
 use std::{sync::Arc, time::Duration};
 
@@ -45,16 +45,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![
-            Zeroizing::new(API_KEY.to_owned()),
-            Zeroizing::new(PASSWORD.to_owned()),
-        ],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -320,7 +311,7 @@ async fn networks_mocks(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn networks_read_redacts_passphrases_by_default() {
+async fn networks_read_returns_passphrases() {
     let server = MockServer::start().await;
     networks_mocks(&server).await;
     let handler = handler_for(&server);
@@ -334,8 +325,8 @@ async fn networks_read_redacts_passphrases_by_default() {
     assert_eq!(output["networks"][0]["dhcpStart"], "192.168.10.100");
     assert_eq!(output["wlans"][0]["ssid"], "HomeNet");
     assert_eq!(output["wlans"][0]["network"], "LAN");
-    assert_eq!(output["wlans"][0]["passphrase"], "[redacted]");
-    assert!(!output.to_string().contains(WIFI_PASSPHRASE));
+    assert_eq!(output["wlans"][0]["passphrase"], WIFI_PASSPHRASE);
+    assert!(output.to_string().contains(WIFI_PASSPHRASE));
 }
 
 #[tokio::test]
@@ -369,31 +360,21 @@ async fn the_section_filter_narrows_the_response() {
 }
 
 #[tokio::test]
-async fn secret_disclosure_requires_the_admin_group() {
+async fn network_values_do_not_depend_on_identity_groups() {
     let server = MockServer::start().await;
     networks_mocks(&server).await;
     let handler = handler_for(&server);
-    let request = call(
-        "networks.read",
-        &serde_json::json!({"includeSecrets": true}),
-    );
-
-    // No principal and a non-admin principal are both refused.
-    let error = handler.call(&request, None).await.expect_err("no identity");
-    assert!(error.message.contains("mcp-admins"));
-    let error = handler
-        .call(&request, Some(&principal(&["unifi"])))
-        .await
-        .expect_err("non-admin");
-    assert!(error.message.contains("mcp-admins"));
-
-    // An admin explicitly opting in receives the configured passphrase.
-    let result = handler
-        .call(&request, Some(&principal(&["unifi", "mcp-admins"])))
-        .await
-        .expect("admin disclosure");
-    let output = result.structured_content.expect("structured");
-    assert_eq!(output["wlans"][0]["passphrase"], WIFI_PASSPHRASE);
+    for identity in [None, Some(principal(&["unifi"]))] {
+        let result = handler
+            .call(
+                &call("networks.read", &serde_json::json!({})),
+                identity.as_ref(),
+            )
+            .await
+            .expect("network values");
+        let output = result.structured_content.expect("structured");
+        assert_eq!(output["wlans"][0]["passphrase"], WIFI_PASSPHRASE);
+    }
 }
 
 #[tokio::test]

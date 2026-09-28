@@ -17,7 +17,7 @@ pub struct WanMeta {
 }
 
 /// One complete response from a fixed traffic-report source. No Debug implementation:
-/// the archive contains unredacted report data and must not enter diagnostic logs.
+/// the archive contains complete report data and must not enter diagnostic logs.
 #[derive(Serialize, Deserialize)]
 pub struct SourceReport {
     pub status: SourceStatus,
