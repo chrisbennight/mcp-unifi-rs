@@ -44,6 +44,9 @@ pub enum ToolKind {
     ProtectDevicesList,
     ProtectDevicesStatus,
     ProtectDevicesAction,
+    ProtectArmProfilesList,
+    ProtectArmProfilesConfigure,
+    ProtectAlarmsAction,
     ProtectUsersList,
     ProtectUsersStatus,
     CamerasPosTransaction,
@@ -101,6 +104,8 @@ impl ToolKind {
             | Self::CamerasTalkbackStart
             | Self::CamerasPosTransaction
             | Self::ProtectDevicesAction
+            | Self::ProtectArmProfilesConfigure
+            | Self::ProtectAlarmsAction
             | Self::ProtectViewersSettingsUpdate
             | Self::ProtectLiveviewsConfigure
             | Self::VouchersCreate => true,
@@ -119,6 +124,7 @@ impl ToolKind {
             | Self::CamerasStatus
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
+            | Self::ProtectArmProfilesList
             | Self::ProtectUsersList
             | Self::ProtectUsersStatus
             | Self::ProtectViewersList
@@ -147,6 +153,9 @@ impl ToolKind {
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
             | Self::ProtectDevicesAction
+            | Self::ProtectArmProfilesList
+            | Self::ProtectArmProfilesConfigure
+            | Self::ProtectAlarmsAction
             | Self::ProtectUsersList
             | Self::ProtectUsersStatus
             | Self::ProtectViewersList
@@ -418,6 +427,27 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::ProtectDevicesAction,
         "protect.devices.action",
         "Preview or invoke a documented siren, relay, speaker, or alarm-hub action by exact device id; return the accepted status and any controller body.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectArmProfilesList,
+        "protect.arm_profiles.list",
+        "Page through complete arm-profile records reported by Protect, including schedules, automations, and current configuration fields.",
+    ),
+    write_spec(
+        ToolKind::ProtectArmProfilesConfigure,
+        "protect.arm_profiles.configure",
+        "Preview or create, update, delete, or select a documented Protect arm profile. Returns the controller's accepted status and complete bounded response body.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::ProtectAlarmsAction,
+        "protect.alarms.action",
+        "Preview or enable or disable the arm alarm, or trigger an alarm-manager webhook by its exact trigger id. Returns the controller's accepted status and complete bounded response body.",
         ToolBehavior::write(false)
             .input_sensitive()
             .result_sensitive(),
@@ -726,6 +756,9 @@ mod tests {
         ToolKind::ProtectDevicesList,
         ToolKind::ProtectDevicesStatus,
         ToolKind::ProtectDevicesAction,
+        ToolKind::ProtectArmProfilesList,
+        ToolKind::ProtectArmProfilesConfigure,
+        ToolKind::ProtectAlarmsAction,
         ToolKind::ProtectUsersList,
         ToolKind::ProtectUsersStatus,
         ToolKind::CamerasPosTransaction,
@@ -835,6 +868,9 @@ mod tests {
                 | ToolKind::ProtectDevicesList
                 | ToolKind::ProtectDevicesStatus
                 | ToolKind::ProtectDevicesAction
+                | ToolKind::ProtectArmProfilesList
+                | ToolKind::ProtectArmProfilesConfigure
+                | ToolKind::ProtectAlarmsAction
                 | ToolKind::ProtectUsersList
                 | ToolKind::ProtectUsersStatus
                 | ToolKind::CamerasPosTransaction
@@ -904,6 +940,9 @@ mod tests {
                 "protect.devices.list",
                 "protect.devices.status",
                 "protect.devices.action",
+                "protect.arm_profiles.list",
+                "protect.arm_profiles.configure",
+                "protect.alarms.action",
                 "protect.users.list",
                 "protect.users.status",
                 "cameras.pos.transaction",

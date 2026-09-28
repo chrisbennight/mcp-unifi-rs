@@ -298,6 +298,31 @@ confirms that the controller accepted the action; it does not prove a physical
 effect. Errors retain the controller's complete bounded body. Large accepted
 bodies move to labeled content. The gateway decides access to these actions.
 
+### `protect.arm_profiles.list`, `protect.arm_profiles.configure`, and `protect.alarms.action`
+
+The list tool pages the complete arm-profile records from Protect's documented
+`arm-profiles` endpoint. It accepts `offset` and `limit` (1-200, default 50)
+and returns `totalCount` and `nextOffset` with each page. If the selected page
+exceeds the structured-result budget, `profilesInContent` points to the
+complete page in labeled content, including when one record alone is large.
+
+The configuration tool previews or creates, updates, deletes, or selects an arm
+profile. Create requires `name`, `automations`, `schedules`,
+`recordEverything`, and `activationDelay` in `changes`. Update sends only
+fields named in `changes`; delete and select use `profileId`. Activation delay
+is one of 0, 60000, 300000, or 600000 milliseconds. The alarm action tool
+previews or enables or disables the arm alarm, or invokes an alarm-manager
+webhook with its exact `triggerId`.
+
+Neither write tool sends a write request until `confirm: true`. Each confirmed
+call sends one write and returns the controller's accepted status and complete
+bounded body when present. Create, update, and delete read the arm-profile list
+back when an id is available and report the observed record and verification
+result. Select and alarm actions report acceptance without claiming a physical
+effect. Large request previews, accepted bodies, and readback detail move to
+labeled content. Controller errors retain their complete bounded body. The
+gateway decides access.
+
 ### `protect.users.list` and `protect.users.status`
 
 These tools read the Protect `users` and UniFi Identity `ulp-users` resources

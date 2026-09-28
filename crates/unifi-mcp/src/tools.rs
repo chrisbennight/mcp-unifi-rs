@@ -30,11 +30,12 @@ use unifi_api::{
         Voucher, VoucherCreate, VoucherDetails, WlanConf, WlanPatch,
     },
     protect::{
-        ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectCameraSettingsPatch,
-        ProtectDeviceActionRoute, ProtectDeviceFamily, ProtectEventContinuation,
-        ProtectLedSettings, ProtectLocalCamera, ProtectLocalNvr, ProtectNvr, ProtectOsdSettings,
-        ProtectPatrolState, ProtectPtzCommand, ProtectSmartDetectSettings, ProtectStreamQuality,
-        ProtectStreamUrls, ProtectTalkbackSession, ProtectUserFamily,
+        ProtectArmRoute, ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags,
+        ProtectCameraSettingsPatch, ProtectDeviceActionRoute, ProtectDeviceFamily,
+        ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera, ProtectLocalNvr,
+        ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
+        ProtectSmartDetectSettings, ProtectStreamQuality, ProtectStreamUrls,
+        ProtectTalkbackSession, ProtectUserFamily,
     },
 };
 use zeroize::Zeroizing;
@@ -595,6 +596,116 @@ struct ProtectDevicesActionOutput {
     response_body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_body_in_content: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectArmProfilesListInput {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectArmProfilesListOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles_in_content: Option<bool>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectArmConfigureOperation {
+    Create,
+    Update,
+    Delete,
+    Select,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectArmSchedule {
+    start: String,
+    end: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectArmProfileChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automations: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedules: Option<Vec<ProtectArmSchedule>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_everything: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activation_delay: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectArmProfilesConfigureInput {
+    operation: ProtectArmConfigureOperation,
+    profile_id: Option<String>,
+    changes: Option<ProtectArmProfileChanges>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectAlarmAction {
+    Enable,
+    Disable,
+    Webhook,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectAlarmsActionInput {
+    action: ProtectAlarmAction,
+    trigger_id: Option<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectArmOperationOutput {
+    operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_in_content: Option<bool>,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
 }
 
 /// Protect users and `UniFi` Identity users are separate documented resources.
@@ -2888,6 +2999,7 @@ struct StatsSourceError {
 // ---------------------------------------------------------------------------
 
 impl ToolSpec {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn catalog_tool(&self) -> Tool {
         match self.kind {
             ToolKind::NetworkOverview => tool::<EmptyInput, NetworkOverviewOutput>(self),
@@ -2916,6 +3028,15 @@ impl ToolSpec {
             }
             ToolKind::ProtectDevicesAction => {
                 tool::<ProtectDevicesActionInput, ProtectDevicesActionOutput>(self)
+            }
+            ToolKind::ProtectArmProfilesList => {
+                tool::<ProtectArmProfilesListInput, ProtectArmProfilesListOutput>(self)
+            }
+            ToolKind::ProtectArmProfilesConfigure => {
+                tool::<ProtectArmProfilesConfigureInput, ProtectArmOperationOutput>(self)
+            }
+            ToolKind::ProtectAlarmsAction => {
+                tool::<ProtectAlarmsActionInput, ProtectArmOperationOutput>(self)
             }
             ToolKind::ProtectUsersList => {
                 tool::<ProtectUsersListInput, ProtectUsersListOutput>(self)
@@ -3209,6 +3330,11 @@ impl UnifiMcp {
             ToolKind::ProtectDevicesList => self.protect_devices_list(params).await,
             ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
             ToolKind::ProtectDevicesAction => self.protect_devices_action(params).await,
+            ToolKind::ProtectArmProfilesList => self.protect_arm_profiles_list(params).await,
+            ToolKind::ProtectArmProfilesConfigure => {
+                self.protect_arm_profiles_configure(params).await
+            }
+            ToolKind::ProtectAlarmsAction => self.protect_alarms_action(params).await,
             ToolKind::ProtectUsersList => self.protect_users_list(params).await,
             ToolKind::ProtectUsersStatus => self.protect_users_status(params).await,
             ToolKind::CamerasPosTransaction => self.cameras_pos_transaction(params).await,
@@ -3908,6 +4034,264 @@ impl UnifiMcp {
                 Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
         }
         protect_action_result(output)
+    }
+
+    async fn protect_arm_profiles_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectArmProfilesListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let profiles = self.protect().arm_profiles().await.map_err(api_error)?;
+        let total_count = profiles.len();
+        let page = profiles
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect::<Vec<_>>();
+        let next = input.offset.saturating_add(page.len());
+        arm_profiles_list_result(ProtectArmProfilesListOutput {
+            profiles: Some(page),
+            profiles_in_content: None,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn protect_arm_profiles_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<ProtectArmProfilesConfigureInput>(params)?;
+        let profile_id = input.profile_id.as_deref();
+        let changes = input.changes.as_ref();
+        let (route, requested, operation) = match input.operation {
+            ProtectArmConfigureOperation::Create => {
+                if profile_id.is_some() {
+                    return Err(McpError::invalid_params(
+                        "create does not use profileId",
+                        None,
+                    ));
+                }
+                let changes = changes
+                    .ok_or_else(|| McpError::invalid_params("create requires changes", None))?;
+                if changes.name.is_none()
+                    || changes.automations.is_none()
+                    || changes.schedules.is_none()
+                    || changes.record_everything.is_none()
+                    || changes.activation_delay.is_none()
+                {
+                    return Err(McpError::invalid_params(
+                        "create requires name, automations, schedules, recordEverything, and activationDelay",
+                        None,
+                    ));
+                }
+                validate_arm_changes(changes)?;
+                (
+                    ProtectArmRoute::Create,
+                    Some(arm_changes_json(changes)?),
+                    "create",
+                )
+            }
+            ProtectArmConfigureOperation::Update => {
+                let id = profile_id
+                    .ok_or_else(|| McpError::invalid_params("update requires profileId", None))?;
+                validate_protect_action_id("profileId", id)?;
+                let changes = changes
+                    .ok_or_else(|| McpError::invalid_params("update requires changes", None))?;
+                validate_arm_changes(changes)?;
+                if changes.name.is_none()
+                    && changes.automations.is_none()
+                    && changes.schedules.is_none()
+                    && changes.record_everything.is_none()
+                    && changes.activation_delay.is_none()
+                {
+                    return Err(McpError::invalid_params(
+                        "changes names no field to change",
+                        None,
+                    ));
+                }
+                (
+                    ProtectArmRoute::Update { profile_id: id },
+                    Some(arm_changes_json(changes)?),
+                    "update",
+                )
+            }
+            ProtectArmConfigureOperation::Delete => {
+                let id = profile_id
+                    .ok_or_else(|| McpError::invalid_params("delete requires profileId", None))?;
+                validate_protect_action_id("profileId", id)?;
+                if changes.is_some() {
+                    return Err(McpError::invalid_params(
+                        "delete does not use changes",
+                        None,
+                    ));
+                }
+                (ProtectArmRoute::Delete { profile_id: id }, None, "delete")
+            }
+            ProtectArmConfigureOperation::Select => {
+                let id = profile_id
+                    .ok_or_else(|| McpError::invalid_params("select requires profileId", None))?;
+                validate_protect_action_id("profileId", id)?;
+                if changes.is_some() {
+                    return Err(McpError::invalid_params(
+                        "select does not use changes",
+                        None,
+                    ));
+                }
+                (
+                    ProtectArmRoute::Select,
+                    Some(json!({"armProfileId":id})),
+                    "select",
+                )
+            }
+        };
+        let mut output = ProtectArmOperationOutput {
+            operation: operation.to_owned(),
+            profile_id: input.profile_id.clone(),
+            trigger_id: None,
+            requested,
+            requested_in_content: None,
+            submitted: false,
+            accepted_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            observed: None,
+            observed_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return protect_arm_operation_result(output);
+        }
+        let response = self
+            .protect()
+            .arm_operation(route, output.requested.as_ref())
+            .await
+            .map_err(api_error)?;
+        let response_id = serde_json::from_slice::<Value>(&response.body)
+            .ok()
+            .and_then(|value| value.get("id")?.as_str().map(str::to_owned));
+        output.submitted = true;
+        output.accepted_status = Some(response.status);
+        if !response.body.is_empty() {
+            output.response_body =
+                Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
+        }
+        let readback_id = match input.operation {
+            ProtectArmConfigureOperation::Create => response_id,
+            ProtectArmConfigureOperation::Update | ProtectArmConfigureOperation::Delete => {
+                output.profile_id.clone()
+            }
+            ProtectArmConfigureOperation::Select => None,
+        };
+        if let Some(id) = readback_id {
+            let budget = self
+                .request_timeout()
+                .saturating_sub(started.elapsed())
+                .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+                .min(CAMERA_SETTINGS_READBACK_BUDGET);
+            if budget.is_zero() {
+                output.readback_error = Some(
+                    "arm-profile readback skipped because the request deadline was near".to_owned(),
+                );
+            } else {
+                match tokio::time::timeout(budget, self.protect().arm_profiles()).await {
+                    Ok(Ok(profiles)) => {
+                        let observed = profiles.into_iter().find(|profile| {
+                            profile.get("id").and_then(Value::as_str) == Some(id.as_str())
+                        });
+                        output.verified = Some(match input.operation {
+                            ProtectArmConfigureOperation::Delete => observed.is_none(),
+                            ProtectArmConfigureOperation::Create
+                            | ProtectArmConfigureOperation::Update => {
+                                observed.as_ref().is_some_and(|profile| {
+                                    output
+                                        .requested
+                                        .as_ref()
+                                        .and_then(Value::as_object)
+                                        .is_some_and(|requested| {
+                                            requested
+                                                .iter()
+                                                .all(|(key, value)| profile.get(key) == Some(value))
+                                        })
+                                })
+                            }
+                            ProtectArmConfigureOperation::Select => {
+                                unreachable!("select has no readback id")
+                            }
+                        });
+                        output.observed = observed;
+                    }
+                    Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                    Err(_) => {
+                        output.readback_error = Some("arm-profile readback timed out".to_owned());
+                    }
+                }
+            }
+        }
+        protect_arm_operation_result(output)
+    }
+
+    async fn protect_alarms_action(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectAlarmsActionInput>(params)?;
+        let (route, operation) = match input.action {
+            ProtectAlarmAction::Enable => (ProtectArmRoute::Enable, "enable"),
+            ProtectAlarmAction::Disable => (ProtectArmRoute::Disable, "disable"),
+            ProtectAlarmAction::Webhook => {
+                let id = input
+                    .trigger_id
+                    .as_deref()
+                    .ok_or_else(|| McpError::invalid_params("webhook requires triggerId", None))?;
+                validate_protect_action_id("triggerId", id)?;
+                (ProtectArmRoute::Webhook { trigger_id: id }, "webhook")
+            }
+        };
+        if !matches!(input.action, ProtectAlarmAction::Webhook) && input.trigger_id.is_some() {
+            return Err(McpError::invalid_params(
+                "triggerId is only used by webhook",
+                None,
+            ));
+        }
+        let mut output = ProtectArmOperationOutput {
+            operation: operation.to_owned(),
+            profile_id: None,
+            trigger_id: input.trigger_id.clone(),
+            requested: None,
+            requested_in_content: None,
+            submitted: false,
+            accepted_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            observed: None,
+            observed_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return protect_arm_operation_result(output);
+        }
+        let response = self
+            .protect()
+            .arm_operation(route, None)
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.accepted_status = Some(response.status);
+        if !response.body.is_empty() {
+            output.response_body =
+                Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
+        }
+        protect_arm_operation_result(output)
     }
 
     async fn protect_users_list(
@@ -9686,6 +10070,107 @@ fn protect_action_result(
     Ok(full)
 }
 
+fn validate_arm_changes(changes: &ProtectArmProfileChanges) -> Result<(), McpError> {
+    if changes
+        .name
+        .as_ref()
+        .is_some_and(|name| name.is_empty() || name.chars().count() > 255)
+    {
+        return Err(McpError::invalid_params(
+            "name must contain 1-255 characters",
+            None,
+        ));
+    }
+    if changes
+        .activation_delay
+        .is_some_and(|delay| !matches!(delay, 0 | 60_000 | 300_000 | 600_000))
+    {
+        return Err(McpError::invalid_params(
+            "activationDelay must be 0, 60000, 300000, or 600000 milliseconds",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn arm_changes_json(changes: &ProtectArmProfileChanges) -> Result<Value, McpError> {
+    let value = serde_json::to_value(changes)
+        .map_err(|_| McpError::internal_error("arm-profile changes could not be encoded", None))?;
+    if value.to_string().len() > 1024 * 1024 {
+        return Err(McpError::invalid_params(
+            "arm-profile request exceeds 1 MiB",
+            None,
+        ));
+    }
+    Ok(value)
+}
+
+fn protect_arm_operation_result(
+    mut output: ProtectArmOperationOutput,
+) -> Result<CallToolResult, McpError> {
+    let mut extra = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(requested) = output.requested.take()
+    {
+        output.requested_in_content = Some(true);
+        extra.push(ContentBlock::text(format!("requested: {requested}")));
+    }
+    if structured(&output)?
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        extra.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if structured(&output)?
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(observed) = output.observed.take()
+    {
+        output.observed_in_content = Some(true);
+        extra.push(ContentBlock::text(format!("observed: {observed}")));
+    }
+    if structured(&output)?
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        extra.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(extra);
+    Ok(result)
+}
+
+fn arm_profiles_list_result(
+    mut output: ProtectArmProfilesListOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+    {
+        let profiles = output.profiles.take().expect("page records exist");
+        output.profiles_in_content = Some(true);
+        let mut result = structured(output)?;
+        result.content.push(ContentBlock::text(format!(
+            "profiles: {}",
+            Value::Array(profiles)
+        )));
+        return Ok(result);
+    }
+    Ok(full)
+}
+
 fn viewer_settings_result(
     mut output: ProtectViewerSettingsUpdateOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -10311,6 +10796,12 @@ mod tests {
         // Siren, relay, speaker, and alarm-hub actions can have another effect
         // when repeated; device identities and responses can be sensitive.
         ("protect.devices.action", false, true, true),
+        // Profile creation and deletion can have another effect on repetition;
+        // configuration and returned records may be sensitive.
+        ("protect.arm_profiles.configure", false, true, true),
+        // Alarm enablement and webhook triggers can have another effect when
+        // repeated, and trigger identities and responses may be sensitive.
+        ("protect.alarms.action", false, true, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.
