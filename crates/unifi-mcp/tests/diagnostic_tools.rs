@@ -403,6 +403,33 @@ async fn system_log_failure_preserves_controller_code() {
 }
 
 #[tokio::test]
+async fn system_log_pagination_failure_forwards_the_controller_response() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let detail = format!("{}pagination-response-tail", "x".repeat(700));
+    let mut response = network_logs::page(
+        serde_json::json!([{
+            "timestamp": 1000,
+            "key": "CLIENT_CONNECTED",
+            "rawDetail": detail,
+        }]),
+        1,
+    );
+    response["page_number"] = serde_json::json!(1);
+    Mock::given(method("POST"))
+        .and(path(network_logs::ROUTE))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(&call("events.search", &serde_json::json!({})), None)
+        .await
+        .expect_err("inconsistent page");
+    assert!(error.message.contains(&response.to_string()));
+    assert!(error.message.contains("pagination did not match"));
+}
+
+#[tokio::test]
 async fn stats_query_serves_bounded_wan_and_dpi_reports() {
     let server = MockServer::start().await;
     login_mock(&server).await;

@@ -114,7 +114,9 @@ impl LegacyClient {
         }
         let page: SystemLogPage = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
-        query.validate_response(&page)?;
+        query
+            .validate_response(&page)
+            .map_err(|error| error.with_controller_response(&bytes))?;
         Ok(page)
     }
 }

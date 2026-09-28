@@ -202,6 +202,35 @@ async fn inconsistent_pages_and_invalid_records_fail_loudly() {
 }
 
 #[tokio::test]
+async fn inconsistent_page_retains_the_complete_controller_response() {
+    let server = MockServer::start().await;
+    login(&server, 1).await;
+    let mut response = page();
+    response["page_number"] = serde_json::json!(1);
+    let detail = format!("{}pagination-response-tail", "x".repeat(700));
+    response["data"][0]["rawDetail"] = serde_json::json!(detail);
+    Mock::given(method("POST"))
+        .and(path(ROUTE))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
+        .mount(&server)
+        .await;
+    let error = client(&server)
+        .system_log("default", &SystemLogQuery::new(0, 2000, 1).unwrap())
+        .await
+        .expect_err("inconsistent page");
+    let ApiError::DecodeResponse {
+        response: body,
+        diagnostic,
+    } = error
+    else {
+        panic!("expected DecodeResponse");
+    };
+    assert_eq!(body.as_str(), response.to_string());
+    assert!(body.as_str().contains("pagination-response-tail"));
+    assert!(diagnostic.as_str().contains("pagination did not match"));
+}
+
+#[tokio::test]
 async fn reads_retry_session_expiry_or_a_short_rate_limit_once() {
     for (status, logins) in [(401, 2), (429, 1)] {
         let server = MockServer::start().await;
