@@ -650,14 +650,16 @@ impl LegacyClient {
     /// session or request fails, required camera or recorder fields cannot be
     /// decoded, or the camera count exceeds the hard inventory ceiling.
     pub async fn protect_bootstrap(&self) -> Result<ProtectBootstrap, ApiError> {
-        let bootstrap = self.protect_bootstrap_projection().await?;
-        validate_protect_bootstrap(&bootstrap).inspect_err(|_error| {
-            warn!(
-                endpoint = "protect.bootstrap",
-                error_kind = "schema_mismatch",
-                "Protect response validation failed"
-            );
-        })?;
+        let (bootstrap, bytes) = self.protect_bootstrap_projection().await?;
+        validate_protect_bootstrap(&bootstrap)
+            .inspect_err(|_error| {
+                warn!(
+                    endpoint = "protect.bootstrap",
+                    error_kind = "schema_mismatch",
+                    "Protect response validation failed"
+                );
+            })
+            .map_err(|error| error.with_controller_response(&bytes))?;
         Ok(bootstrap)
     }
 
@@ -671,20 +673,25 @@ impl LegacyClient {
     /// session or request fails, the camera projection is invalid, or the
     /// camera count exceeds the hard inventory ceiling.
     pub async fn protect_camera_inventory(&self) -> Result<Vec<ProtectLocalCamera>, ApiError> {
-        let bootstrap: ProtectCameraBootstrap = self.protect_bootstrap_projection().await?;
-        validate_protect_cameras(&bootstrap.cameras).inspect_err(|_error| {
-            warn!(
-                endpoint = "protect.bootstrap",
-                error_kind = "schema_mismatch",
-                "Protect response validation failed"
-            );
-        })?;
+        let (bootstrap, bytes): (ProtectCameraBootstrap, Vec<u8>) =
+            self.protect_bootstrap_projection().await?;
+        validate_protect_cameras(&bootstrap.cameras)
+            .inspect_err(|_error| {
+                warn!(
+                    endpoint = "protect.bootstrap",
+                    error_kind = "schema_mismatch",
+                    "Protect response validation failed"
+                );
+            })
+            .map_err(|error| error.with_controller_response(&bytes))?;
         Ok(bootstrap.cameras)
     }
 
-    async fn protect_bootstrap_projection<T: DeserializeOwned>(&self) -> Result<T, ApiError> {
+    async fn protect_bootstrap_projection<T: DeserializeOwned>(
+        &self,
+    ) -> Result<(T, Vec<u8>), ApiError> {
         let generation = self.ensure_session().await?;
-        let first: Result<T, ApiError> = self.execute_protect_bootstrap::<T>().await;
+        let first = self.execute_protect_bootstrap::<T>().await;
         match first {
             Err(error) if is_login_required(&error) => {
                 self.refresh_session(generation).await?;
@@ -972,7 +979,9 @@ impl LegacyClient {
         crate::protect::read_jpeg(response).await
     }
 
-    async fn execute_protect_bootstrap<T: DeserializeOwned>(&self) -> Result<T, ApiError> {
+    async fn execute_protect_bootstrap<T: DeserializeOwned>(
+        &self,
+    ) -> Result<(T, Vec<u8>), ApiError> {
         let kind = {
             let session = self.session.lock().await;
             session.kind.ok_or_else(|| {
@@ -1001,7 +1010,7 @@ impl LegacyClient {
                     "Protect request failed"
                 );
             })?;
-        self.decode_protect_response(response, "protect.bootstrap")
+        self.decode_protect_response_with_bytes(response, "protect.bootstrap")
             .await
     }
 
@@ -1010,6 +1019,16 @@ impl LegacyClient {
         response: Response,
         endpoint: &'static str,
     ) -> Result<T, ApiError> {
+        self.decode_protect_response_with_bytes(response, endpoint)
+            .await
+            .map(|(value, _)| value)
+    }
+
+    async fn decode_protect_response_with_bytes<T: DeserializeOwned>(
+        &self,
+        response: Response,
+        endpoint: &'static str,
+    ) -> Result<(T, Vec<u8>), ApiError> {
         self.capture_csrf(&response).await;
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
@@ -1045,9 +1064,10 @@ impl LegacyClient {
             response_bytes = bytes.len(),
             "Protect response received"
         );
-        crate::protect::decode_json(endpoint, &bytes).inspect_err(|error| {
+        let decoded = crate::protect::decode_json(endpoint, &bytes).inspect_err(|error| {
             crate::protect::log_decode_failure(endpoint, status_code, bytes.len(), error);
-        })
+        })?;
+        Ok((decoded, bytes))
     }
 
     /// Execute one request, re-authenticating exactly once when the

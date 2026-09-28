@@ -1586,6 +1586,45 @@ async fn protect_bootstrap_rejects_wrong_resource_discriminators() {
 }
 
 #[tokio::test]
+async fn protect_bootstrap_validation_keeps_the_exact_controller_body() {
+    let server = logged_in_server().await;
+    let body = serde_json::json!({
+        "cameras": [{"id": "cam-a", "modelKey": "nvr"}],
+        "nvr": {"id": "nvr-a", "modelKey": "nvr"},
+        "padding": "x".repeat(700),
+        "z_controller_field": "controller-bootstrap-tail",
+    })
+    .to_string();
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/bootstrap"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+        .mount(&server)
+        .await;
+
+    for error in [
+        client_for(&server)
+            .protect_bootstrap()
+            .await
+            .expect_err("invalid bootstrap camera"),
+        client_for(&server)
+            .protect_camera_inventory()
+            .await
+            .expect_err("invalid camera inventory"),
+    ] {
+        let ApiError::SchemaMismatch {
+            path,
+            response: Some(response),
+            ..
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(path.as_str(), "cameras.modelKey");
+        assert_eq!(response.as_str(), body);
+    }
+}
+
+#[tokio::test]
 async fn protect_camera_inventory_does_not_depend_on_the_recorder_projection() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

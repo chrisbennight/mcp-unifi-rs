@@ -240,6 +240,8 @@ If the optional local inventory read fails, `cameras.search` and
 `protect.overview` include the controller error in
 `capabilities.localUnavailableReason`, and `cameras.status` includes it in
 `localError`. Requests that need the missing local data return that error.
+If the local bootstrap fails camera or recorder validation, that error includes
+the complete accepted bootstrap body and the field that failed validation.
 
 `cameras.snapshot` fetches a JPEG from the official Protect API by camera id
 or exact reported name. It returns MCP image content plus small structured
