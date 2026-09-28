@@ -11,14 +11,13 @@
 //! The models here are deliberately narrower than either API. Official wire
 //! fields are kept separate from the local application's richer operational
 //! fields, and the local bootstrap has an allowlisted camera/NVR projection
-//! rather than a model of the full response. Accounts and streams,
-//! network names, disk identifiers, and unrelated application state never
-//! enter these types.
+//! rather than a model of the full response. Accounts, network names, disk
+//! identifiers, and unrelated application state never enter these types.
 
 use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::error::Category;
 use tracing::{debug, warn};
 use url::Url;
@@ -88,6 +87,47 @@ pub enum ProtectPtzCommand {
     GotoPreset(i32),
     StartPatrol(u8),
     StopPatrol,
+}
+
+/// One quality accepted by the official camera RTSPS stream endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtectStreamQuality {
+    High,
+    Medium,
+    Low,
+    Package,
+}
+
+impl ProtectStreamQuality {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+            Self::Package => "package",
+        }
+    }
+}
+
+/// Existing or newly created stream handles. The URLs grant access to a
+/// camera feed and must be disclosed only through the authorized tool result.
+#[derive(Deserialize, Serialize)]
+pub struct ProtectStreamUrls {
+    pub high: Option<String>,
+    pub medium: Option<String>,
+    pub low: Option<String>,
+    pub package: Option<String>,
+}
+
+/// Audio parameters and transport handle for one talkback session.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectTalkbackSession {
+    pub url: String,
+    pub codec: String,
+    pub sampling_rate: u32,
+    pub bits_per_sample: u16,
 }
 
 /// The recorder as the official Integration API reports it.
@@ -498,6 +538,76 @@ impl ProtectClient {
         Ok(())
     }
 
+    /// Get the existing RTSPS stream handles for one camera.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or bounded response fails.
+    pub async fn camera_streams(&self, camera_id: &str) -> Result<ProtectStreamUrls, ApiError> {
+        validate_identifier("cameras.streams", camera_id)?;
+        self.get_json(&["cameras", camera_id, "rtsps-stream"]).await
+    }
+
+    /// Create RTSPS stream handles for selected camera qualities. This write
+    /// is never retried after an ambiguous transport result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid qualities or an upstream failure.
+    pub async fn camera_streams_create(
+        &self,
+        camera_id: &str,
+        qualities: &[ProtectStreamQuality],
+    ) -> Result<ProtectStreamUrls, ApiError> {
+        validate_identifier("cameras.streams.create", camera_id)?;
+        validate_stream_qualities(qualities)?;
+        let request = self
+            .request(Method::POST, &["cameras", camera_id, "rtsps-stream"])?
+            .json(&serde_json::json!({"qualities": qualities}));
+        self.send_json_once(request, "cameras.streams.create").await
+    }
+
+    /// Remove RTSPS stream handles for selected camera qualities. This write
+    /// is never retried after an ambiguous transport result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid qualities or an upstream failure.
+    pub async fn camera_streams_delete(
+        &self,
+        camera_id: &str,
+        qualities: &[ProtectStreamQuality],
+    ) -> Result<(), ApiError> {
+        validate_identifier("cameras.streams.delete", camera_id)?;
+        validate_stream_qualities(qualities)?;
+        let query: Vec<(&str, String)> = qualities
+            .iter()
+            .map(|quality| ("qualities", quality.as_str().to_owned()))
+            .collect();
+        let request = self.request_with_query(
+            Method::DELETE,
+            &["cameras", camera_id, "rtsps-stream"],
+            &query,
+        )?;
+        self.send(request, "cameras.streams.delete").await?;
+        Ok(())
+    }
+
+    /// Create a talkback session and return its audio parameters and handle.
+    /// This write is never retried after an ambiguous transport result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or bounded response fails.
+    pub async fn camera_talkback_session(
+        &self,
+        camera_id: &str,
+    ) -> Result<ProtectTalkbackSession, ApiError> {
+        validate_identifier("cameras.talkback", camera_id)?;
+        let request = self.request(Method::POST, &["cameras", camera_id, "talkback-session"])?;
+        self.send_json_once(request, "cameras.talkback").await
+    }
+
     /// A bounded JPEG snapshot from the official camera endpoint.
     ///
     /// # Errors
@@ -649,10 +759,40 @@ impl ProtectClient {
             })
     }
 
+    async fn send_json_once<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        endpoint: &'static str,
+    ) -> Result<T, ApiError> {
+        let response = self.send(request, endpoint).await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| log_response_rejection(endpoint, status, error))?;
+        debug!(
+            endpoint,
+            status,
+            response_bytes = bytes.len(),
+            "Protect response received"
+        );
+        decode_json(endpoint, &bytes).inspect_err(|error| {
+            log_decode_failure(endpoint, status, bytes.len(), error);
+        })
+    }
+
     fn request(&self, method: Method, segments: &[&str]) -> Result<RequestBuilder, ApiError> {
+        self.request_with_query(method, segments, &[])
+    }
+
+    fn request_with_query(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, String)],
+    ) -> Result<RequestBuilder, ApiError> {
         let mut all: Vec<&str> = PREFIX.to_vec();
         all.extend_from_slice(segments);
-        let url = http::build_url(&self.base, &all, &[])?;
+        let url = http::build_url(&self.base, &all, query)?;
         Ok(self
             .http
             .request(method, url)
@@ -778,6 +918,30 @@ fn validate_identifier(endpoint: &'static str, id: &str) -> Result<(), ApiError>
             path: BoundedMessage::new("id"),
         })
     }
+}
+
+fn validate_stream_qualities(qualities: &[ProtectStreamQuality]) -> Result<(), ApiError> {
+    if qualities.is_empty() || qualities.len() > 4 {
+        return Err(ApiError::Config(
+            "select one to four stream qualities".to_owned(),
+        ));
+    }
+    let mut seen = [false; 4];
+    for quality in qualities {
+        let index = match quality {
+            ProtectStreamQuality::High => 0,
+            ProtectStreamQuality::Medium => 1,
+            ProtectStreamQuality::Low => 2,
+            ProtectStreamQuality::Package => 3,
+        };
+        if seen[index] {
+            return Err(ApiError::Config(
+                "stream qualities must be distinct".to_owned(),
+            ));
+        }
+        seen[index] = true;
+    }
+    Ok(())
 }
 
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>

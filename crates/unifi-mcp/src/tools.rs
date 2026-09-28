@@ -32,6 +32,7 @@ use unifi_api::{
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
         ProtectLocalCamera, ProtectLocalNvr, ProtectNvr, ProtectPatrolState, ProtectPtzCommand,
+        ProtectStreamQuality, ProtectStreamUrls, ProtectTalkbackSession,
     },
 };
 use zeroize::Zeroizing;
@@ -525,6 +526,110 @@ struct CameraPtzOutput {
 enum PatrolSlotView {
     Running(u8),
     Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum StreamQuality {
+    High,
+    Medium,
+    Low,
+    Package,
+}
+
+impl From<StreamQuality> for ProtectStreamQuality {
+    fn from(value: StreamQuality) -> Self {
+        match value {
+            StreamQuality::High => Self::High,
+            StreamQuality::Medium => Self::Medium,
+            StreamQuality::Low => Self::Low,
+            StreamQuality::Package => Self::Package,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraStreamHandle {
+    quality: StreamQuality,
+    /// This URL grants access to the camera feed.
+    url: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraStreamsListInput {
+    /// Camera id or exact reported name from `cameras.search`.
+    camera: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraStreamsListOutput {
+    camera_id: String,
+    streams: Vec<CameraStreamHandle>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum CameraStreamsAction {
+    Create,
+    Remove,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraStreamsUpdateInput {
+    camera: String,
+    action: CameraStreamsAction,
+    /// One or more distinct qualities: high, medium, low, or package.
+    qualities: Vec<StreamQuality>,
+    /// Run the operation. Absent or false previews it.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraStreamsUpdateOutput {
+    camera_id: String,
+    action: CameraStreamsAction,
+    qualities: Vec<StreamQuality>,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    /// Created stream handles are retained even if readback fails.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    streams: Vec<CameraStreamHandle>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraTalkbackInput {
+    camera: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraTalkbackSessionView {
+    /// Transport handle for this one audio session.
+    url: String,
+    codec: String,
+    sampling_rate: u32,
+    bits_per_sample: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraTalkbackOutput {
+    camera_id: String,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<CameraTalkbackSessionView>,
 }
 
 /// One camera as this surface reports it.
@@ -1898,6 +2003,15 @@ impl ToolSpec {
             ToolKind::CamerasStatus => tool::<CameraSelectorInput, CameraView>(self),
             ToolKind::CamerasSnapshot => tool::<CameraSnapshotInput, CameraSnapshotOutput>(self),
             ToolKind::CamerasPtzControl => tool::<CameraPtzInput, CameraPtzOutput>(self),
+            ToolKind::CamerasStreamsList => {
+                tool::<CameraStreamsListInput, CameraStreamsListOutput>(self)
+            }
+            ToolKind::CamerasStreamsUpdate => {
+                tool::<CameraStreamsUpdateInput, CameraStreamsUpdateOutput>(self)
+            }
+            ToolKind::CamerasTalkbackStart => {
+                tool::<CameraTalkbackInput, CameraTalkbackOutput>(self)
+            }
             ToolKind::ProtectOverview => tool::<EmptyInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
@@ -2155,6 +2269,9 @@ impl UnifiMcp {
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
             ToolKind::CamerasPtzControl => self.cameras_ptz_control(params).await,
+            ToolKind::CamerasStreamsList => self.cameras_streams_list(params).await,
+            ToolKind::CamerasStreamsUpdate => self.cameras_streams_update(params).await,
+            ToolKind::CamerasTalkbackStart => self.cameras_talkback_start(params).await,
             ToolKind::ProtectOverview => self.protect_overview(params).await,
             ToolKind::ProtectEvents => self.protect_events_search(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
@@ -2817,6 +2934,153 @@ impl UnifiMcp {
             ),
         }
         structured(output)
+    }
+
+    async fn cameras_streams_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraStreamsListInput>(params)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let streams = self
+            .protect()
+            .camera_streams(&camera_id)
+            .await
+            .map_err(api_error)?;
+        structured(CameraStreamsListOutput {
+            camera_id,
+            streams: stream_handles(streams),
+        })
+    }
+
+    async fn cameras_streams_update(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<CameraStreamsUpdateInput>(params)?;
+        validate_stream_quality_selection(&input.qualities)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let mut output = CameraStreamsUpdateOutput {
+            camera_id: camera_id.clone(),
+            action: input.action,
+            qualities: input.qualities.clone(),
+            applied: false,
+            verified: None,
+            streams: Vec::new(),
+            warnings: Vec::new(),
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+
+        let qualities: Vec<ProtectStreamQuality> = input
+            .qualities
+            .iter()
+            .copied()
+            .map(ProtectStreamQuality::from)
+            .collect();
+        match input.action {
+            CameraStreamsAction::Create => {
+                let created = self
+                    .protect()
+                    .camera_streams_create(&camera_id, &qualities)
+                    .await
+                    .map_err(api_error)?;
+                output.applied = true;
+                output.streams = stream_handles(created)
+                    .into_iter()
+                    .filter(|handle| input.qualities.contains(&handle.quality))
+                    .collect();
+                if !input.qualities.iter().all(|quality| {
+                    output
+                        .streams
+                        .iter()
+                        .any(|handle| handle.quality == *quality)
+                }) {
+                    output.warnings.push(
+                        "controller accepted stream creation but omitted a requested handle"
+                            .to_owned(),
+                    );
+                }
+            }
+            CameraStreamsAction::Remove => {
+                self.protect()
+                    .camera_streams_delete(&camera_id, &qualities)
+                    .await
+                    .map_err(api_error)?;
+                output.applied = true;
+            }
+        }
+        // Verification must leave time to return newly created stream handles.
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(STREAM_RESPONSE_RESERVE)
+            .min(STREAM_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            None
+        } else {
+            tokio::time::timeout(budget, self.protect().camera_streams(&camera_id))
+                .await
+                .ok()
+        };
+        match readback {
+            Some(Ok(after)) => {
+                output.verified = Some(input.qualities.iter().all(|quality| {
+                    let exists = stream_url_for(&after, *quality).is_some();
+                    match input.action {
+                        CameraStreamsAction::Create => exists,
+                        CameraStreamsAction::Remove => !exists,
+                    }
+                }));
+                if output.verified == Some(false) {
+                    output.warnings.push(
+                        "controller accepted the stream change but readback did not match"
+                            .to_owned(),
+                    );
+                }
+            }
+            None | Some(Err(_)) => output.warnings.push(
+                "controller accepted the stream change but readback was unavailable".to_owned(),
+            ),
+        }
+        structured(output)
+    }
+
+    async fn cameras_talkback_start(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraTalkbackInput>(params)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let session = if input.confirm {
+            Some(
+                self.protect()
+                    .camera_talkback_session(&camera_id)
+                    .await
+                    .map_err(api_error)?,
+            )
+        } else {
+            None
+        };
+        structured(CameraTalkbackOutput {
+            camera_id,
+            applied: session.is_some(),
+            session: session.map(talkback_session_view),
+        })
     }
 
     /// One console snapshot: version, cameras grouped by their reported
@@ -4809,6 +5073,54 @@ fn patrol_slot_view(state: ProtectPatrolState) -> Option<PatrolSlotView> {
     }
 }
 
+fn validate_stream_quality_selection(qualities: &[StreamQuality]) -> Result<(), McpError> {
+    if qualities.is_empty() || qualities.len() > 4 {
+        return Err(McpError::invalid_params(
+            "qualities must contain one to four entries",
+            None,
+        ));
+    }
+    for (index, quality) in qualities.iter().enumerate() {
+        if qualities[..index].contains(quality) {
+            return Err(McpError::invalid_params(
+                "qualities must not contain duplicates",
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn stream_url_for(urls: &ProtectStreamUrls, quality: StreamQuality) -> Option<&str> {
+    match quality {
+        StreamQuality::High => urls.high.as_deref(),
+        StreamQuality::Medium => urls.medium.as_deref(),
+        StreamQuality::Low => urls.low.as_deref(),
+        StreamQuality::Package => urls.package.as_deref(),
+    }
+}
+
+fn stream_handles(urls: ProtectStreamUrls) -> Vec<CameraStreamHandle> {
+    [
+        (StreamQuality::High, urls.high),
+        (StreamQuality::Medium, urls.medium),
+        (StreamQuality::Low, urls.low),
+        (StreamQuality::Package, urls.package),
+    ]
+    .into_iter()
+    .filter_map(|(quality, url)| url.map(|url| CameraStreamHandle { quality, url }))
+    .collect()
+}
+
+fn talkback_session_view(session: ProtectTalkbackSession) -> CameraTalkbackSessionView {
+    CameraTalkbackSessionView {
+        url: session.url,
+        codec: session.codec,
+        sampling_rate: session.sampling_rate,
+        bits_per_sample: session.bits_per_sample,
+    }
+}
+
 /// Trim a filter and reject empty or oversized values instead of silently
 /// matching everything or nothing.
 fn validate_filter(value: Option<&str>) -> Result<Option<String>, McpError> {
@@ -5449,6 +5761,10 @@ const VOUCHER_BATCH_CEILING: u32 = 100;
 const VOUCHER_READBACK_BUDGET: Duration = Duration::from_secs(5);
 /// Leave time for output shaping and transport serialization after readback.
 const VOUCHER_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+/// Bound a post-write stream check so created handles remain returnable.
+const STREAM_READBACK_BUDGET: Duration = Duration::from_secs(5);
+/// Leave time to serialize stream handles after the optional readback.
+const STREAM_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -7051,6 +7367,10 @@ mod tests {
         ("firewall.policies.update", true, false, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
+        // Repeating a stream creation or removal, or opening another audio
+        // session, can have another upstream effect.
+        ("cameras.streams.update", false, false, true),
+        ("cameras.talkback.start", false, false, true),
         // Each call mints another batch; the result carries the credentials.
         ("vouchers.create", false, false, true),
         // Revoking the same voucher again leaves it absent.

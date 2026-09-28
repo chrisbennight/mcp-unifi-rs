@@ -144,6 +144,274 @@ async fn console_with(server: &MockServer, cameras: serde_json::Value) {
 }
 
 #[tokio::test]
+async fn stream_list_returns_handles_and_requires_local_secret_disclosure() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/rtsps-stream")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-feed?enableSrtp",
+            "medium": null, "low": null, "package": null,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let request = call(
+        "cameras.streams.list",
+        &serde_json::json!({"camera": "Front Door"}),
+    );
+    let denied = handler_for(&server)
+        .with_local_access(LocalAccess {
+            writes: true,
+            secrets: false,
+        })
+        .call(&request, None)
+        .await
+        .expect_err("local secret grant required");
+    assert!(denied.message.contains("secret disclosure"));
+    let output = handler_for(&server)
+        .call(&request, None)
+        .await
+        .expect("streams")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["streams"].as_array().expect("array").len(), 1);
+    assert_eq!(output["streams"][0]["quality"], "high");
+    assert!(output["streams"][0]["url"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn stream_update_previews_creates_and_reports_readback() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let route = format!("{PROTECT}/cameras/cam-front/rtsps-stream");
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .and(header("X-API-Key", PROTECT_KEY))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "qualities": ["high", "medium"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp",
+            "medium": "rtsps://192.0.2.1:7441/synthetic-medium?enableSrtp",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp",
+            "medium": "rtsps://192.0.2.1:7441/synthetic-medium?enableSrtp",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    let preview = handler
+        .call(
+            &call(
+                "cameras.streams.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "create",
+                    "qualities": ["high", "medium"]
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["applied"], false);
+    assert!(preview.get("streams").is_none());
+    let output = handler
+        .call(
+            &call(
+                "cameras.streams.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "create",
+                    "qualities": ["high", "medium"], "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("created")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verified"], true);
+    assert_eq!(output["streams"].as_array().expect("array").len(), 2);
+    for qualities in [serde_json::json!([]), serde_json::json!(["high", "high"])] {
+        assert!(
+            handler
+                .call(
+                    &call(
+                        "cameras.streams.update",
+                        &serde_json::json!({
+                            "camera": "cam-front", "action": "create",
+                            "qualities": qualities, "confirm": true
+                        }),
+                    ),
+                    None,
+                )
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn stream_creation_returns_handles_before_a_slow_readback_exhausts_the_deadline() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let route = format!("{PROTECT}/cameras/cam-front/rtsps-stream");
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(3))
+                .set_body_json(serde_json::json!({
+                    "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
+                })),
+        )
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server).with_request_limits(4, Duration::from_secs(2));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &call(
+                "cameras.streams.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "create",
+                    "qualities": ["high"], "confirm": true
+                }),
+            ),
+            None,
+        ),
+    )
+    .await
+    .expect("tool returned before deadline")
+    .expect("created")
+    .structured_content
+    .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verified").is_none());
+    assert_eq!(output["streams"][0]["quality"], "high");
+}
+
+#[tokio::test]
+async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let route = format!("{PROTECT}/cameras/cam-front/rtsps-stream");
+    Mock::given(method("DELETE"))
+        .and(path(&route))
+        .and(wiremock::matchers::query_param("qualities", "high"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": null, "medium": null, "low": null, "package": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/talkback-session"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "url": "rtp://192.0.2.1:7004", "codec": "opus",
+            "samplingRate": 24000, "bitsPerSample": 16
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    let removed = handler
+        .call(
+            &call(
+                "cameras.streams.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "remove",
+                    "qualities": ["high"], "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("remove")
+        .structured_content
+        .expect("structured");
+    assert_eq!(removed["verified"], true);
+    assert!(removed.get("streams").is_none());
+    let preview = handler
+        .call(
+            &call(
+                "cameras.talkback.start",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["applied"], false);
+    let started = handler
+        .call(
+            &call(
+                "cameras.talkback.start",
+                &serde_json::json!({"camera": "cam-front", "confirm": true}),
+            ),
+            None,
+        )
+        .await
+        .expect("talkback")
+        .structured_content
+        .expect("structured");
+    assert_eq!(started["applied"], true);
+    assert_eq!(started["session"]["codec"], "opus");
+    assert_eq!(started["session"]["samplingRate"], 24000);
+    let local = handler_for(&server).with_local_access(LocalAccess {
+        writes: false,
+        secrets: true,
+    });
+    for request in [
+        call(
+            "cameras.streams.update",
+            &serde_json::json!({
+                "camera": "cam-front", "action": "remove", "qualities": ["high"]
+            }),
+        ),
+        call(
+            "cameras.talkback.start",
+            &serde_json::json!({"camera": "cam-front"}),
+        ),
+    ] {
+        let denied = local
+            .call(&request, None)
+            .await
+            .expect_err("local write grant required");
+        assert!(denied.message.contains("write access"));
+    }
+}
+
+#[tokio::test]
 async fn ptz_previews_and_verifies_a_confirmed_patrol() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
