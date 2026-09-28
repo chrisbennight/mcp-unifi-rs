@@ -479,33 +479,34 @@ impl LegacyClient {
         Ok(())
     }
 
-    /// Disconnect one wireless client; it may reconnect immediately. Never
+    /// Disconnect one wireless client; it may reconnect immediately. Returns
+    /// the accepted HTTP status and complete controller envelope. Never
     /// retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn kick_client(&self, site: &str, mac: &str) -> Result<(), ApiError> {
+    pub async fn kick_client(&self, site: &str, mac: &str) -> Result<(u16, Vec<u8>), ApiError> {
         self.station_command(site, "kick-sta", mac).await
     }
 
-    /// Block one client from the network. Never retried after an ambiguous
-    /// transport result.
+    /// Block one client from the network. Returns the accepted HTTP status and
+    /// complete controller envelope. Never retried after an ambiguous result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn block_client(&self, site: &str, mac: &str) -> Result<(), ApiError> {
+    pub async fn block_client(&self, site: &str, mac: &str) -> Result<(u16, Vec<u8>), ApiError> {
         self.station_command(site, "block-sta", mac).await
     }
 
-    /// Lift a client block. Never retried after an ambiguous transport
-    /// result.
+    /// Lift a client block. Returns the accepted HTTP status and complete
+    /// controller envelope. Never retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn unblock_client(&self, site: &str, mac: &str) -> Result<(), ApiError> {
+    pub async fn unblock_client(&self, site: &str, mac: &str) -> Result<(u16, Vec<u8>), ApiError> {
         self.station_command(site, "unblock-sta", mac).await
     }
 
@@ -846,18 +847,19 @@ impl LegacyClient {
         .await
     }
 
-    /// Restart one device by MAC and return the complete controller envelope.
+    /// Restart one device by MAC and return the accepted HTTP status and
+    /// complete controller envelope.
     /// Never retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn restart_device(&self, site: &str, mac: &str) -> Result<Vec<u8>, ApiError> {
+    pub async fn restart_device(&self, site: &str, mac: &str) -> Result<(u16, Vec<u8>), ApiError> {
         self.device_command(site, "restart", mac).await
     }
 
-    /// Toggle one device's locate LED and return the complete controller
-    /// envelope. Never retried after an ambiguous transport result.
+    /// Toggle one device's locate LED and return the accepted HTTP status and
+    /// complete controller envelope. Never retried after an ambiguous result.
     ///
     /// # Errors
     ///
@@ -867,7 +869,7 @@ impl LegacyClient {
         site: &str,
         mac: &str,
         on: bool,
-    ) -> Result<Vec<u8>, ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let command = if on { "set-locate" } else { "unset-locate" };
         self.device_command(site, command, mac).await
     }
@@ -877,11 +879,11 @@ impl LegacyClient {
         site: &str,
         command: &str,
         mac: &str,
-    ) -> Result<Vec<u8>, ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         // The controller stores MACs lowercase and rejects other casings.
         let body = serde_json::json!({ "cmd": command, "mac": mac.to_lowercase() });
-        let (_, response) = self
-            .request_with_reauth_with_bytes::<serde_json::Value>(
+        let (_, status, response) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
                 RequestClass::Mutation,
                 Method::POST,
                 site,
@@ -889,21 +891,27 @@ impl LegacyClient {
                 Some(body),
             )
             .await?;
-        Ok(response)
+        Ok((status, response))
     }
 
-    async fn station_command(&self, site: &str, command: &str, mac: &str) -> Result<(), ApiError> {
+    async fn station_command(
+        &self,
+        site: &str,
+        command: &str,
+        mac: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         // The controller stores MACs lowercase and rejects other casings.
         let body = serde_json::json!({ "cmd": command, "mac": mac.to_lowercase() });
-        self.request_with_reauth::<serde_json::Value>(
-            RequestClass::Mutation,
-            Method::POST,
-            site,
-            &["cmd", "stamgr"],
-            Some(body),
-        )
-        .await?;
-        Ok(())
+        let (_, status, response) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::POST,
+                site,
+                &["cmd", "stamgr"],
+                Some(body),
+            )
+            .await?;
+        Ok((status, response))
     }
 
     async fn protect_events_with_reauth(
@@ -1126,9 +1134,22 @@ impl LegacyClient {
         tail: &[&str],
         body: Option<serde_json::Value>,
     ) -> Result<(Vec<T>, Vec<u8>), ApiError> {
+        self.request_with_reauth_with_status_bytes(class, method, site, tail, body)
+            .await
+            .map(|(rows, _, bytes)| (rows, bytes))
+    }
+
+    async fn request_with_reauth_with_status_bytes<T: DeserializeOwned>(
+        &self,
+        class: RequestClass,
+        method: Method,
+        site: &str,
+        tail: &[&str],
+        body: Option<serde_json::Value>,
+    ) -> Result<(Vec<T>, u16, Vec<u8>), ApiError> {
         let generation = self.ensure_session().await?;
         let first = self
-            .execute_with_bytes(class, method.clone(), site, tail, body.as_ref())
+            .execute_with_status_bytes(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
             // Only a read is reissued. The session is refreshed either way so
@@ -1142,7 +1163,7 @@ impl LegacyClient {
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
-                self.execute_with_bytes(class, method, site, tail, body.as_ref())
+                self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }
             Err(ApiError::RateLimited {
@@ -1150,7 +1171,7 @@ impl LegacyClient {
                 ..
             }) if class == RequestClass::IdempotentRead && delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
-                self.execute_with_bytes(class, method, site, tail, body.as_ref())
+                self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }
             other => other,
@@ -1178,11 +1199,24 @@ impl LegacyClient {
         tail: &[&str],
         body: Option<&serde_json::Value>,
     ) -> Result<(Vec<T>, Vec<u8>), ApiError> {
+        self.execute_with_status_bytes(class, method, site, tail, body)
+            .await
+            .map(|(rows, _, bytes)| (rows, bytes))
+    }
+
+    async fn execute_with_status_bytes<T: DeserializeOwned>(
+        &self,
+        class: RequestClass,
+        method: Method,
+        site: &str,
+        tail: &[&str],
+        body: Option<&serde_json::Value>,
+    ) -> Result<(Vec<T>, u16, Vec<u8>), ApiError> {
         let (status, bytes) = self.execute_bytes(class, method, site, tail, body).await?;
         let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         if envelope.meta.rc == "ok" {
-            Ok((envelope.data, bytes))
+            Ok((envelope.data, status, bytes))
         } else {
             let raw = envelope.meta.msg.as_deref();
             // A mutation is never resent based on an error in its response body.

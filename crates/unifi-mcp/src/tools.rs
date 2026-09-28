@@ -3979,8 +3979,7 @@ struct DevicesControlOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u32>,
     applied: bool,
-    /// Present for official Network actions; the legacy locate API does not
-    /// expose its HTTP status through the session client.
+    /// Accepted HTTP status for a confirmed action.
     #[serde(skip_serializing_if = "Option::is_none")]
     response_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4045,6 +4044,12 @@ struct ClientsControlOutput {
     action: &'static str,
     /// Whether the controller was asked to act. False for a preview.
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// Whether the controller listed the client as connected beforehand.
     /// Absence covers several states — blocked, powered off, out of range —
     /// so it says the client is not currently associated and nothing about
@@ -4055,6 +4060,10 @@ struct ClientsControlOutput {
     /// connected, so this reports an observation rather than a guarantee.
     #[serde(skip_serializing_if = "Option::is_none")]
     connected_after: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -8490,7 +8499,7 @@ impl UnifiMcp {
                         None,
                     )
                 })?;
-                let body = self
+                let (status, body) = self
                     .legacy()
                     .locate_device(
                         self.legacy_site(),
@@ -8499,7 +8508,7 @@ impl UnifiMcp {
                     )
                     .await
                     .map_err(api_error)?;
-                (None, body)
+                (Some(status), body)
             }
         };
         output.applied = true;
@@ -8537,6 +8546,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<ClientsControlInput>(params)?;
         let client = normalize_mac(&input.client);
         if !is_client_address(&client) {
@@ -8549,35 +8559,51 @@ impl UnifiMcp {
         }
         let connected_before = self.client_is_connected(&client).await?;
         let warnings = client_control_warnings(input.action, connected_before);
+        let mut output = ClientsControlOutput {
+            client,
+            action: input.action.word(),
+            applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            connected_before,
+            connected_after: None,
+            readback_error: None,
+            readback_error_in_content: None,
+            warnings,
+        };
 
         if !input.confirm.unwrap_or(false) {
-            return structured(ClientsControlOutput {
-                client,
-                action: input.action.word(),
-                applied: false,
-                connected_before,
-                connected_after: None,
-                warnings,
-            });
+            return structured_with_accepted_response(output);
         }
 
         let legacy = self.legacy();
         let site = self.legacy_site();
-        match input.action {
-            ClientControl::Block => legacy.block_client(site, &client).await,
-            ClientControl::Unblock => legacy.unblock_client(site, &client).await,
-            ClientControl::Reconnect => legacy.kick_client(site, &client).await,
+        let (status, body) = match input.action {
+            ClientControl::Block => legacy.block_client(site, &output.client).await,
+            ClientControl::Unblock => legacy.unblock_client(site, &output.client).await,
+            ClientControl::Reconnect => legacy.kick_client(site, &output.client).await,
         }
         .map_err(api_error)?;
-
-        structured(ClientsControlOutput {
-            client: client.clone(),
-            action: input.action.word(),
-            applied: true,
-            connected_before,
-            connected_after: Some(self.client_is_connected(&client).await?),
-            warnings,
-        })
+        output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_ACTION_RESPONSE_RESERVE)
+            .min(NETWORK_ACTION_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("client readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.client_is_connected(&output.client)).await {
+                Ok(Ok(connected)) => output.connected_after = Some(connected),
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("client readback timed out".to_owned()),
+            }
+        }
+        structured_with_accepted_response(output)
     }
 
     /// Whether one address is in the controller's connected-client list.
@@ -14022,7 +14048,7 @@ mod tests {
         // carries a passphrase and the result reports configuration.
         ("wlans.update", true, true, true),
         // Disconnecting twice disconnects twice; no secret is involved.
-        ("clients.control", false, false, false),
+        ("clients.control", false, false, true),
         // Each restart restarts; no secret is involved.
         ("devices.control", false, false, true),
         ("devices.adopt", false, true, true),

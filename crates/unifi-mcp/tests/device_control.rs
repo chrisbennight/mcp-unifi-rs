@@ -331,6 +331,7 @@ async fn locating_uses_the_hardware_address_the_device_record_carries() {
             .expect("legacy envelope")["controllerExtension"],
             "locate accepted"
         );
+        assert_eq!(output["responseStatus"], 200);
     }
 }
 

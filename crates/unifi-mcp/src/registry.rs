@@ -769,11 +769,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "clients.control",
         "Block, unblock, or disconnect one client by MAC address. Previews \
          the action and its consequences unless confirm is true; a confirmed \
-         action reports whether the client is in the connected list before \
-         and after.",
+         action returns the accepted controller response and reports whether \
+         the client is in the connected list before and after, or its readback error.",
         // Not idempotent: each disconnect disconnects the client again, so a
         // caller must not treat a repeat as harmless.
-        ToolBehavior::write(false),
+        ToolBehavior::write(false).result_sensitive(),
     ),
     write_spec(
         ToolKind::DevicesControl,
