@@ -14,7 +14,7 @@
 
 use std::time::{Duration, Instant};
 
-use reqwest::{Method, Response, StatusCode};
+use reqwest::{Method, Response, StatusCode, header};
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -604,6 +604,40 @@ impl LegacyClient {
         finish_protect_event_page(start, request_end, limit, events)
     }
 
+    /// Fetch the JPEG thumbnail associated with a historical Protect event.
+    /// The event id comes from [`Self::protect_events`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid ids, session or controller failures,
+    /// or a response that is not a bounded decodable JPEG.
+    pub async fn protect_event_thumbnail(&self, event_id: &str) -> Result<Vec<u8>, ApiError> {
+        if event_id.is_empty()
+            || event_id.len() > MAXIMUM_EVENT_IDENTIFIER_BYTES
+            || matches!(event_id, "." | "..")
+        {
+            return Err(ApiError::Config(
+                "event id must be a nonempty, non-dot id of at most 256 bytes".to_owned(),
+            ));
+        }
+        let generation = self.ensure_session().await?;
+        let first = self.execute_protect_event_thumbnail(event_id).await;
+        match first {
+            Err(error) if is_login_required(&error) => {
+                self.refresh_session(generation).await?;
+                self.execute_protect_event_thumbnail(event_id).await
+            }
+            Err(ApiError::RateLimited {
+                retry_after: Some(delay),
+                ..
+            }) if delay <= MAXIMUM_RETRY_AFTER => {
+                tokio::time::sleep(delay).await;
+                self.execute_protect_event_thumbnail(event_id).await
+            }
+            other => other,
+        }
+    }
+
     /// Read the narrow camera and recorder projection from the local Protect
     /// bootstrap. The full bootstrap contains accounts, streams, and other
     /// structures that are deliberately not represented by this type.
@@ -891,6 +925,48 @@ impl LegacyClient {
             })?;
         self.decode_protect_response(response, "protect.events")
             .await
+    }
+
+    async fn execute_protect_event_thumbnail(&self, event_id: &str) -> Result<Vec<u8>, ApiError> {
+        let kind = {
+            let session = self.session.lock().await;
+            session.kind.ok_or_else(|| {
+                ApiError::Config("session used before console detection".to_owned())
+            })?
+        };
+        if kind != ConsoleKind::UnifiOs {
+            return Err(ApiError::Config(
+                "Protect event images require a UniFi OS console".to_owned(),
+            ));
+        }
+        let url = http::build_url(
+            &self.base,
+            &["proxy", "protect", "api", "events", event_id, "thumbnail"],
+            &[],
+        )?;
+        let response = self
+            .http
+            .request(Method::GET, url)
+            .header(header::ACCEPT, "image/jpeg")
+            .send()
+            .await
+            .map_err(|error| {
+                ApiError::Transport(BoundedMessage::new(&error.without_url().to_string()))
+            })?;
+        self.capture_csrf(&response).await;
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(http::rate_limited(response).await?);
+        }
+        if !status.is_success() {
+            let bytes = http::read_bounded_body(response).await?;
+            return Err(translate_failure(
+                status.as_u16(),
+                &bytes,
+                RequestClass::IdempotentRead,
+            ));
+        }
+        crate::protect::read_jpeg(response).await
     }
 
     async fn execute_protect_bootstrap<T: DeserializeOwned>(&self) -> Result<T, ApiError> {

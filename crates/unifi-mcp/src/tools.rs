@@ -607,6 +607,21 @@ struct CameraSnapshotOutput {
     byte_size: usize,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectEventThumbnailInput {
+    /// Event id returned by `protect.events`.
+    event: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectEventThumbnailOutput {
+    event_id: String,
+    mime_type: &'static str,
+    byte_size: usize,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 enum CameraPtzAction {
@@ -2266,6 +2281,9 @@ impl ToolSpec {
             }
             ToolKind::ProtectOverview => tool::<EmptyInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
+            ToolKind::ProtectEventThumbnail => {
+                tool::<ProtectEventThumbnailInput, ProtectEventThumbnailOutput>(self)
+            }
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
@@ -2514,6 +2532,7 @@ impl UnifiMcp {
             ToolKind::CamerasTalkbackStart => self.cameras_talkback_start(params).await,
             ToolKind::ProtectOverview => self.protect_overview(params).await,
             ToolKind::ProtectEvents => self.protect_events_search(params).await,
+            ToolKind::ProtectEventThumbnail => self.protect_event_thumbnail(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
@@ -3182,6 +3201,27 @@ impl UnifiMcp {
         let mut result = structured(CameraSnapshotOutput {
             camera_id,
             channel: channel.to_owned(),
+            mime_type: "image/jpeg",
+            byte_size: bytes.len(),
+        })?;
+        result
+            .content
+            .push(ContentBlock::image(STANDARD.encode(bytes), "image/jpeg"));
+        Ok(result)
+    }
+
+    async fn protect_event_thumbnail(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectEventThumbnailInput>(params)?;
+        let bytes = self
+            .protect_events()?
+            .protect_event_thumbnail(&input.event)
+            .await
+            .map_err(api_error)?;
+        let mut result = structured(ProtectEventThumbnailOutput {
+            event_id: input.event,
             mime_type: "image/jpeg",
             byte_size: bytes.len(),
         })?;

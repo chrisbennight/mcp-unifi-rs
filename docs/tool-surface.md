@@ -168,7 +168,7 @@ See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 ### Protect cameras, streams, talkback, overview, and events
 
 The Protect console, which is a separate console from the network controller
-with its own key and its own certificate. These nine tools are served by their
+with its own key and its own certificate. Its tools are served by their
 own process: a server started with `UNIFI_MCP_SURFACE=protect` advertises and
 dispatches exactly them, and a `network` server does not list them at all, so
 a deployment without cameras simply runs no Protect server.
@@ -247,8 +247,11 @@ because the official integration API exposes only a live WebSocket. It needs a
 dedicated local-session username and password in addition to the integration
 key. Requests name the curated motion, ring, smart-detection, and smart-audio
 event families explicitly because Protect otherwise ignores time bounds on
-this route. The response model is allowlisted and excludes thumbnails, images,
-metadata, and detection-zone payloads.
+this route. The paged response carries compact event facts. Use
+`protect.event.thumbnail` with an event id from the result to fetch its image
+as MCP image content. The thumbnail read uses the same local session, checks
+the JPEG format, and fails explicitly when the controller has no image for
+that event.
 
 The first call accepts `lastHours` (default 24), or an explicit `start` and
 `end` in epoch milliseconds for an older window, plus optional `camera` and

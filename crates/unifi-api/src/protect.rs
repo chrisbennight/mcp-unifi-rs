@@ -395,10 +395,8 @@ pub struct ProtectResolutionDistribution {
 
 /// One historical Protect event from the console's application API.
 ///
-/// This endpoint is undocumented, so the model is intentionally narrow and
-/// tolerant of everything else the console returns. In particular, image,
-/// thumbnail, metadata, and detection-zone payloads never enter the typed
-/// surface.
+/// The paged list carries compact event facts. Event thumbnails are available
+/// separately by id so image bytes do not expand every search result.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectEvent {
@@ -718,39 +716,7 @@ impl ProtectClient {
             .header("X-API-Key", self.api_key.as_str())
             .header(header::ACCEPT, "image/jpeg");
         let response = self.send(request, "cameras.snapshot").await?;
-        let jpeg = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/jpeg"))
-            });
-        if !jpeg {
-            return Err(ApiError::Decode(BoundedMessage::new(
-                "camera snapshot response was not a JPEG",
-            )));
-        }
-        let bytes = http::read_bounded_body(response).await?;
-        tokio::task::spawn_blocking(move || {
-            let mut reader =
-                ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
-            let mut limits = Limits::default();
-            limits.max_image_width = Some(8192);
-            limits.max_image_height = Some(8192);
-            limits.max_alloc = Some(128 * 1024 * 1024);
-            reader.limits(limits);
-            reader.decode().map_err(|_| {
-                ApiError::Decode(BoundedMessage::new(
-                    "camera snapshot was not a decodable JPEG",
-                ))
-            })?;
-            Ok(bytes)
-        })
-        .await
-        .map_err(|_| ApiError::Decode(BoundedMessage::new("camera snapshot validation failed")))?
+        read_jpeg(response).await
     }
 
     /// The recorder this console runs. The official endpoint returns one
@@ -921,6 +887,48 @@ impl ProtectClient {
             message: BoundedMessage::new(&String::from_utf8_lossy(&bytes)),
         })
     }
+}
+
+/// Accept a bounded JPEG and retain textual controller detail when it sends
+/// another media type instead of an image.
+pub(crate) async fn read_jpeg(response: Response) -> Result<Vec<u8>, ApiError> {
+    let jpeg = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/jpeg"))
+        });
+    let bytes = http::read_bounded_body(response).await?;
+    if !jpeg {
+        let message = String::from_utf8_lossy(&bytes);
+        return Err(ApiError::Decode(BoundedMessage::new(
+            if message.is_empty() {
+                "image response was not a JPEG"
+            } else {
+                &message
+            },
+        )));
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut reader = ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(8192);
+        limits.max_image_height = Some(8192);
+        limits.max_alloc = Some(128 * 1024 * 1024);
+        reader.limits(limits);
+        reader.decode().map_err(|_| {
+            ApiError::Decode(BoundedMessage::new(
+                "image response was not a decodable JPEG",
+            ))
+        })?;
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| ApiError::Decode(BoundedMessage::new("image validation failed")))?
 }
 
 fn endpoint_name(segments: &[&str]) -> &'static str {

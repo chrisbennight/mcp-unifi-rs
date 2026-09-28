@@ -46,7 +46,8 @@ The local account is required for Network and optional for Protect enrichment.
 Reads: `network.overview`, `clients.search`, `clients.context`,
 `devices.search`, `devices.status`, `wifi.diagnose`, `firewall.read`,
 `networks.read`, `events.search`, `stats.query`, `cameras.search`,
-`cameras.status`, `cameras.settings.read`, `protect.overview`, `protect.events`.
+`cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
+`protect.overview`, `protect.events`, `protect.event.thumbnail`.
 
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).

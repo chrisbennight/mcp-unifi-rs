@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
 use unifi_api::{ApiError, LegacyClient, LegacyConfig, TlsMode, models::WlanPatch};
 use url::Url;
 use wiremock::{
@@ -49,6 +50,66 @@ fn ok_envelope(data: &serde_json::Value) -> serde_json::Value {
 
 fn login_body() -> serde_json::Value {
     serde_json::json!({"username": USERNAME, "password": PASSWORD})
+}
+
+fn jpeg_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    JpegEncoder::new(&mut bytes)
+        .encode(&[0, 128, 255], 1, 1, ExtendedColorType::Rgb8)
+        .expect("encode synthetic JPEG");
+    bytes
+}
+
+#[tokio::test]
+async fn protect_event_thumbnail_returns_the_authenticated_jpeg() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=protect-session; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let jpeg = jpeg_fixture();
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/events/event-1/thumbnail"))
+        .and(header("cookie", "TOKEN=protect-session"))
+        .and(header("Accept", "image/jpeg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg.clone(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert_eq!(
+        client_for(&server)
+            .protect_event_thumbnail("event-1")
+            .await
+            .expect("event JPEG"),
+        jpeg
+    );
+}
+
+#[tokio::test]
+async fn protect_event_thumbnail_preserves_controller_failure_details() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/protect/api/events/event-1/thumbnail"))
+        .respond_with(ResponseTemplate::new(404).set_body_raw("event media expired", "text/plain"))
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .protect_event_thumbnail("event-1")
+        .await
+        .expect_err("missing image");
+    assert!(error.to_string().contains("event media expired"), "{error}");
 }
 
 #[tokio::test]
