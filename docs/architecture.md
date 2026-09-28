@@ -44,8 +44,9 @@ The local account is required for Network and optional for Protect enrichment.
 ## Tool surface
 
 Reads: `network.overview`, `clients.search`, `clients.context`,
-`devices.search`, `devices.status`, `devices.pending.list`, `wifi.diagnose`, `firewall.read`,
-`networks.read`, `radius_profiles.list`, `wifi.broadcasts.list`,
+`devices.search`, `devices.status`, `devices.pending.list`, `wifi.diagnose`,
+`firewall.read`, `networks.read`, `radius_profiles.list`,
+`network.inventory.list`, `network.switching.detail`, `wifi.broadcasts.list`,
 `wifi.broadcasts.status`, `events.search`, `stats.query`, `cameras.search`,
 `cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
 `protect.overview`, `protect.events`, `protect.event.thumbnail`,

@@ -23,6 +23,26 @@ use crate::{
 /// same way; a second copy of this policy would drift from this one.
 pub(crate) const MAXIMUM_RETRY_AFTER: Duration = Duration::from_secs(10);
 
+/// Documented site inventory families in the Network Integration API.
+#[derive(Debug, Clone, Copy)]
+pub enum SiteInventoryKind {
+    DeviceTags,
+    Lags,
+    McLagDomains,
+    SwitchStacks,
+    WanInterfaces,
+    VpnServers,
+    SiteToSiteVpnTunnels,
+}
+
+/// Switching inventory families with a documented detail endpoint.
+#[derive(Debug, Clone, Copy)]
+pub enum SwitchingDetailKind {
+    Lag,
+    McLagDomain,
+    SwitchStack,
+}
+
 /// Client for one controller's official Network Integration API.
 ///
 /// All paths live under `/proxy/network/integration/v1` on the console
@@ -139,6 +159,83 @@ impl IntegrationClient {
         self.get_json(&["sites"], &page_query(page)).await
     }
 
+    /// Read one bounded page of a documented site inventory, retaining every
+    /// field in each controller record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn site_inventory(
+        &self,
+        site_id: &str,
+        kind: SiteInventoryKind,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut segments = vec!["sites", site_id];
+        match kind {
+            SiteInventoryKind::DeviceTags => segments.push("device-tags"),
+            SiteInventoryKind::Lags => segments.extend(["switching", "lags"]),
+            SiteInventoryKind::McLagDomains => {
+                segments.extend(["switching", "mc-lag-domains"]);
+            }
+            SiteInventoryKind::SwitchStacks => {
+                segments.extend(["switching", "switch-stacks"]);
+            }
+            SiteInventoryKind::WanInterfaces => segments.push("wans"),
+            SiteInventoryKind::VpnServers => segments.extend(["vpn", "servers"]),
+            SiteInventoryKind::SiteToSiteVpnTunnels => {
+                segments.extend(["vpn", "site-to-site-tunnels"]);
+            }
+        }
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&segments, &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Read one page of country definitions reported by the controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn countries(
+        &self,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["countries"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Read one complete LAG, MC-LAG domain, or switch stack record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn switching_detail(
+        &self,
+        site_id: &str,
+        kind: SwitchingDetailKind,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        let collection = match kind {
+            SwitchingDetailKind::Lag => "lags",
+            SwitchingDetailKind::McLagDomain => "mc-lag-domains",
+            SwitchingDetailKind::SwitchStack => "switch-stacks",
+        };
+        self.get_json(&["sites", site_id, "switching", collection, id], &[])
+            .await
+    }
+
     /// Devices available for adoption, with complete controller row fields.
     ///
     /// # Errors
@@ -148,7 +245,7 @@ impl IntegrationClient {
         &self,
         page: PageRequest,
         filter: Option<&str>,
-    ) -> Result<(Page<serde_json::Value>, BoundedMessage), ApiError> {
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
         let mut query = page_query(page).to_vec();
         if let Some(filter) = filter {
             query.push(("filter", filter.to_owned()));
@@ -170,7 +267,7 @@ impl IntegrationClient {
         site_id: &str,
         mac_address: &str,
         ignore_device_limit: bool,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<Value, ApiError> {
         self.post_action_result(
             &["sites", site_id, "devices"],
             &serde_json::json!({
@@ -191,7 +288,7 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         device_id: &str,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<Value, ApiError> {
         self.get_json(&["sites", site_id, "devices", device_id], &[])
             .await
     }
