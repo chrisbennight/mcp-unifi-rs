@@ -734,6 +734,35 @@ impl ProtectClient {
         .await
     }
 
+    /// Patch documented settings for one non-camera device exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid identifiers, transport failure,
+    /// controller rejection, or a response beyond the transport byte budget.
+    pub async fn device_settings_patch(
+        &self,
+        family: ProtectDeviceFamily,
+        device_id: &str,
+        changes: &Value,
+    ) -> Result<ProtectActionResponse, ApiError> {
+        validate_identifier("protect.devices.settings.update", device_id)?;
+        let response = self
+            .send(
+                self.request(Method::PATCH, &[family.path(), device_id])?
+                    .json(changes),
+                "protect.devices.settings.update",
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| {
+                log_response_rejection("protect.devices.settings.update", status, error);
+            })?;
+        Ok(ProtectActionResponse { status, body })
+    }
+
     /// Invoke one documented device action exactly once.
     ///
     /// # Errors
