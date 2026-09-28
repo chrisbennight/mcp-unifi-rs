@@ -83,8 +83,9 @@ which values the controller kept.
 
 ### Why the firewall write resends the whole policy
 
-Every other write here sends a partial update: a request naming `enabled`
-changes `enabled` and leaves every other property alone.
+Some writes send a partial update: a request naming `enabled` changes
+`enabled` and leaves every other property alone. Other official Network
+resources use complete replacement bodies.
 
 The zone-based firewall has no equivalent. Its Integration API offers a `PATCH`
 that accepts only the policy's logging flag — not the operation an operator

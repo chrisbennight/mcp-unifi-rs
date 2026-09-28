@@ -259,6 +259,13 @@ async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], false);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            output["beforeResponse"].as_str().expect("response")
+        )
+        .expect("controller JSON"),
+        record
+    );
     assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
     // A policy's protocol scope is part of what the toggle governs, and the
     // controller names it `ipProtocolScope`. Reading any other key reports an
@@ -323,6 +330,15 @@ async fn policy_update_keeps_a_wrong_id_readback_after_the_write() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "{}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            output["afterResponse"].as_str().expect("response")
+        )
+        .expect("controller JSON"),
+        after
+    );
     assert!(output.get("verified").is_none());
     assert_eq!(output["policy"]["id"], POLICY);
     assert!(
@@ -362,6 +378,64 @@ async fn policy_update_retains_a_large_wrong_id_readback_after_an_accepted_write
     assert!(result.content.iter().any(|item| {
         matches!(item, rmcp::model::ContentBlock::Text(text) if text.text.contains(&after.to_string()))
     }));
+}
+
+#[tokio::test]
+async fn accepted_policy_update_survives_a_failed_readback() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let before = stored(true, "BLOCK");
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_string("specific controller readback failure"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut expected = before.clone();
+    expected["enabled"] = serde_json::json!(false);
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .and(body_json(expected))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("controller accepted the full policy"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("accepted write remains available")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(
+        output["responseBody"],
+        "controller accepted the full policy"
+    );
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("error")
+            .contains("specific controller readback failure")
+    );
+    assert!(output.get("verified").is_none());
 }
 
 #[tokio::test]
@@ -422,7 +496,7 @@ async fn policy_delete_sends_once_and_verifies_absence() {
         .await;
     Mock::given(method("DELETE"))
         .and(path(route))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller deletion accepted"))
         .expect(1)
         .mount(&server)
         .await;
@@ -436,6 +510,8 @@ async fn policy_delete_sends_once_and_verifies_absence() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "controller deletion accepted");
     assert_eq!(output["verifiedAbsent"], true);
     assert_eq!(
         output["readbackError"],
@@ -515,12 +591,11 @@ async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
         .await;
 
     let handler = handler_for(&server);
-    let preview = handler
+    let preview_result = handler
         .call(&delete(&serde_json::json!({"policy": POLICY})), None)
         .await
-        .expect("bounded preview")
-        .structured_content
-        .expect("structured");
+        .expect("bounded preview");
+    let preview = preview_result.structured_content.expect("structured");
     assert_eq!(preview["preview"]["complete"], false);
     assert!(
         preview["preview"]["omittedFields"]
@@ -538,6 +613,10 @@ async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
             .expect("name")
             .ends_with('…')
     );
+    assert_eq!(preview["beforeResponseInContent"], true);
+    assert!(preview_result.content.iter().any(|item| {
+        matches!(item, rmcp::model::ContentBlock::Text(text) if text.text.contains(&record.to_string()))
+    }));
 
     let result = handler
         .call(
@@ -550,6 +629,7 @@ async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
         .expect("structured");
     assert_eq!(result["applied"], true);
     assert_eq!(result["verifiedAbsent"], true);
+    assert_eq!(result["beforeResponseInContent"], true);
 }
 
 #[tokio::test]

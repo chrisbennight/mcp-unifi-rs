@@ -837,6 +837,12 @@ the error includes the complete controller body and the missing field.
 
 ### Rule deletion: `firewall.policies.delete`
 
+`firewall.policies.update` returns the controller's exact `beforeResponse` in
+its preview. A confirmed write also returns the accepted `responseStatus` and
+`responseBody` and, when available, the exact `afterResponse`. Readback
+failure is reported alongside the accepted write. Large response fields move
+to MCP content with explicit markers.
+
 `firewall.policies.delete` removes a zone-based policy by id. It previews the
 policy's match and action, then sends one DELETE when confirmed. A following
 read distinguishes a policy that is absent from one the controller retained.
@@ -848,10 +854,11 @@ The preview shows full source, destination, protocol, connection-state, IPsec,
 and schedule conditions alongside the compact policy summary. It also shows
 the official descriptive and metadata fields when present. It marks whether
 these bounded views cover the controller record and names omitted fields when
-they do not; those fields may change the policy's effect. Large field values
-are omitted with that signal so the preview and deletion result remain within
-the response bound. Selected controller keys and values, including nested
-keys, are returned as received; the gateway governs caller access to sensitive
+they do not; those fields may change the policy's effect. `beforeResponse`
+retains the complete controller record even when the compact preview omits
+fields. A confirmed deletion returns the accepted `responseStatus` and
+`responseBody` alongside readback. Large responses move to MCP content with
+explicit `InContent` markers. The gateway governs caller access to sensitive
 results.
 
 ## Remaining rule workflows

@@ -3352,6 +3352,23 @@ struct FirewallPoliciesUpdateOutput {
     /// The policy as `firewall.read` reports it, read after a confirmed
     /// change and before an unconfirmed one.
     policy: PolicyView,
+    /// Exact policy detail response before the attempted change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response_in_content: Option<bool>,
+    /// Accepted write status and complete response body, if a write was sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    /// Exact policy detail response after an accepted write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response_in_content: Option<bool>,
     /// Whether the controller was written to.
     applied: bool,
     /// What would change. Preview only.
@@ -3397,6 +3414,18 @@ struct FirewallPoliciesDeleteInput {
 struct FirewallPoliciesDeleteOutput {
     policy: PolicyView,
     preview: PolicyPreviewCoverage,
+    /// Exact policy detail response used to build the compact preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response_in_content: Option<bool>,
+    /// Accepted deletion status and complete response body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified_absent: Option<bool>,
@@ -8325,11 +8354,19 @@ impl UnifiMcp {
                 diagnostic: BoundedMessage::new("controller returned a different firewall policy"),
             }));
         }
+        let before_response_text = before_response.to_string();
         let before = policy_projection(&record);
         let warnings = firewall_policy_warnings(wanted, &record);
         if !input.confirm.unwrap_or(false) {
-            return structured(FirewallPoliciesUpdateOutput {
-                policy: policy_view_from_record(&input.policy, &record),
+            return firewall_update_result(FirewallPoliciesUpdateOutput {
+                policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
+                before_response: Some(before_response_text),
+                before_response_in_content: None,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
+                after_response: None,
+                after_response_in_content: None,
                 applied: false,
                 changes: Some(mutation::plan(&requested, &before)),
                 fields: None,
@@ -8347,8 +8384,15 @@ impl UnifiMcp {
         // value costs nothing; this one sends the whole policy, so it is
         // skipped instead.
         if record.get("enabled").and_then(Value::as_bool) == Some(wanted) {
-            return structured(FirewallPoliciesUpdateOutput {
-                policy: policy_view_from_record(&input.policy, &record),
+            return firewall_update_result(FirewallPoliciesUpdateOutput {
+                policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
+                before_response: Some(before_response_text),
+                before_response_in_content: None,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
+                after_response: None,
+                after_response_in_content: None,
                 applied: false,
                 changes: Some(Vec::new()),
                 fields: None,
@@ -8374,27 +8418,30 @@ impl UnifiMcp {
             serde_json::value::RawValue::from_string(wanted.to_string())
                 .expect("a JSON boolean literal is valid JSON"),
         );
-        self.integration()
+        let (response_status, response_body) = self
+            .integration()
             .replace_firewall_policy(&site_id, &input.policy, &sent)
             .await
             .map_err(api_error)?;
 
-        let (after_raw, after_digest, after_response) = self
+        let readback = self
             .integration()
             .firewall_policy_snapshot_with_response(&site_id, &input.policy)
-            .await
-            .map_err(api_error)?;
-        let after_record = parsed_record(&after_raw);
-        if after_record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
-            let error = ApiError::DecodeResponse {
-                response: after_response,
-                diagnostic: BoundedMessage::new(
-                    "controller policy readback returned a different id",
-                ),
-            };
-            return structured_with_mutation_readback_error(
-                FirewallPoliciesUpdateOutput {
+            .await;
+        let (after_raw, after_digest, after_response) = match readback {
+            Ok(readback) => readback,
+            Err(error) => {
+                return firewall_update_result(FirewallPoliciesUpdateOutput {
                     policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
+                    before_response: Some(before_response_text),
+                    before_response_in_content: None,
+                    response_status: Some(response_status),
+                    response_body: Some(
+                        BoundedMessage::from_controller_bytes(&response_body).to_string(),
+                    ),
+                    response_body_in_content: None,
+                    after_response: None,
+                    after_response_in_content: None,
                     applied: true,
                     changes: None,
                     fields: None,
@@ -8403,9 +8450,38 @@ impl UnifiMcp {
                     readback_error: Some(error.to_string()),
                     readback_error_in_content: None,
                     warnings,
-                },
-                Some(&error),
-            );
+                });
+            }
+        };
+        let after_response_text = after_response.to_string();
+        let after_record = parsed_record(&after_raw);
+        if after_record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
+            let error = ApiError::DecodeResponse {
+                response: after_response,
+                diagnostic: BoundedMessage::new(
+                    "controller policy readback returned a different id",
+                ),
+            };
+            return firewall_update_result(FirewallPoliciesUpdateOutput {
+                policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
+                before_response: Some(before_response_text),
+                before_response_in_content: None,
+                response_status: Some(response_status),
+                response_body: Some(
+                    BoundedMessage::from_controller_bytes(&response_body).to_string(),
+                ),
+                response_body_in_content: None,
+                after_response: Some(after_response_text),
+                after_response_in_content: None,
+                applied: true,
+                changes: None,
+                fields: None,
+                unexpected_changes: None,
+                verified: None,
+                readback_error: Some(error.to_string()),
+                readback_error_in_content: None,
+                warnings,
+            });
         }
         let after = policy_projection(&after_record);
         let fields = mutation::verify(&requested, &before, &after);
@@ -8415,8 +8491,15 @@ impl UnifiMcp {
             && fields
                 .iter()
                 .all(|outcome| outcome.status == mutation::FieldStatus::Persisted);
-        structured(FirewallPoliciesUpdateOutput {
-            policy: policy_view_from_record(&input.policy, &after_record),
+        firewall_update_result(FirewallPoliciesUpdateOutput {
+            policy: bounded_policy_view(policy_view_from_record(&input.policy, &after_record)),
+            before_response: Some(before_response_text),
+            before_response_in_content: None,
+            response_status: Some(response_status),
+            response_body: Some(BoundedMessage::from_controller_bytes(&response_body).to_string()),
+            response_body_in_content: None,
+            after_response: Some(after_response_text),
+            after_response_in_content: None,
             applied: true,
             changes: None,
             fields: Some(fields),
@@ -8464,6 +8547,11 @@ impl UnifiMcp {
         let mut output = FirewallPoliciesDeleteOutput {
             policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
             preview: policy_preview_coverage(&record),
+            before_response: Some(response.to_string()),
+            before_response_in_content: None,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             applied: false,
             verified_absent: None,
             readback_error: None,
@@ -8475,12 +8563,12 @@ impl UnifiMcp {
         };
         if !output.preview.complete {
             output.warnings.push(
-                "this bounded preview omits policy fields, so its match description is incomplete"
+                "the compact match description omits fields; inspect beforeResponse for the complete controller record"
                     .to_owned(),
             );
         }
         if !input.confirm {
-            return structured(output);
+            return firewall_delete_result(output);
         }
         // Check the confirmed result shape before the irreversible call.
         let mut final_shape = output.clone();
@@ -8489,12 +8577,18 @@ impl UnifiMcp {
         final_shape.warnings.push(
             "the delete request was accepted, but policy absence was not verified".to_owned(),
         );
-        finalize(structured(final_shape)?, ToolBehavior::write(false))?;
-        self.integration()
+        finalize(
+            firewall_delete_result(final_shape)?,
+            ToolBehavior::write(false),
+        )?;
+        let (status, body) = self
+            .integration()
             .delete_firewall_policy(&site_id, &input.policy)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         let budget = self
             .request_timeout()
             .saturating_sub(started.elapsed())
@@ -8556,7 +8650,7 @@ impl UnifiMcp {
                 "the delete request was accepted, but policy absence was not verified".to_owned(),
             );
         }
-        structured_with_mutation_readback_error(output, upstream_error.as_ref())
+        firewall_delete_result(output)
     }
 
     async fn vouchers_search(
@@ -12513,6 +12607,76 @@ fn network_policy_write_result(
     {
         output.after_in_content = Some(true);
         content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn firewall_update_result(
+    mut output: FirewallPoliciesUpdateOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &FirewallPoliciesUpdateOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(before) = output.before_response.take()
+    {
+        output.before_response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("beforeResponse: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after_response.take()
+    {
+        output.after_response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("afterResponse: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn firewall_delete_result(
+    mut output: FirewallPoliciesDeleteOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &FirewallPoliciesDeleteOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(before) = output.before_response.take()
+    {
+        output.before_response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("beforeResponse: {before}")));
     }
     if exceeds(&output)?
         && let Some(body) = output.response_body.take()

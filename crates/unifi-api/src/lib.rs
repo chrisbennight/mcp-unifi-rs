@@ -14,16 +14,17 @@
 //! Controller error bodies and failed decode bodies remain available as
 //! bounded text.
 //!
-//! The [`collection`] interface also preserves complete fixed traffic reports
-//! for direct export to operator-owned storage. These records are not MCP
-//! responses and must not be logged or returned through interactive tools.
+//! The [`collection`] interface preserves complete fixed traffic reports
+//! for direct export to operator-owned storage. It is not currently wired to
+//! an MCP tool.
 //!
 //! Another deliberate exception: a zone-based firewall policy is read and written
 //! as its raw record, because the upstream interface offers no partial update
 //! and a model can only resend what it understands — including a number model,
 //! so each property keeps its original JSON text rather than being parsed and
 //! re-serialized. That record travels back to the controller without being
-//! interpreted; it is never handed to a caller.
+//! interpreted. The controller's original response can also be returned to a
+//! caller when the tool needs the full policy record.
 
 pub mod capability;
 mod client;
