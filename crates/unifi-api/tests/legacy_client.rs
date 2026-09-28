@@ -5,7 +5,9 @@
 use std::time::Duration;
 
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-use unifi_api::{ApiError, LegacyClient, LegacyConfig, TlsMode, models::WlanPatch};
+use unifi_api::{
+    ApiError, LegacyClient, LegacyConfig, TlsMode, models::WlanPatch, traffic::ActivityWindow,
+};
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -715,6 +717,71 @@ async fn snapshot_conversion_errors_keep_the_original_controller_envelope() {
         );
         assert!(response.as_str().contains(marker));
         assert!(diagnostic.as_str().contains("invalid type"), "{diagnostic}");
+    }
+}
+
+#[tokio::test]
+async fn activity_validation_errors_keep_the_exact_controller_body() {
+    const START: u64 = 1_789_200_000_000;
+    let window = ActivityWindow::new(START, START + 3_600_000).expect("window");
+    let server = logged_in_server().await;
+    let report = serde_json::json!({
+        "client_usage_by_app": [{
+            "client": {"mac": "02:00:00:00:00:01", "name": format!("{}report-tail", "x".repeat(4096))},
+            "usage_by_app": [],
+        }],
+        "total_usage_by_app": [],
+        "controller_extra": "original-report-field",
+    });
+    let report_body = report.to_string();
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/v2/api/site/default/traffic"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(report_body.clone()))
+        .mount(&server)
+        .await;
+    let graph = serde_json::json!([{
+        "timestamp": START,
+        "interval_seconds": 0,
+        "padding": "x".repeat(700),
+        "controller_extra": "original-graph-field",
+    }]);
+    let graph_body = graph.to_string();
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/v2/api/site/default/app-traffic-rate"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(graph_body.clone()))
+        .mount(&server)
+        .await;
+
+    for (error, expected_body, diagnostic_text) in [
+        (
+            client_for(&server)
+                .activity("default", window)
+                .await
+                .expect_err("report bound"),
+            report_body,
+            "activity report exceeds",
+        ),
+        (
+            client_for(&server)
+                .activity_buckets("default", window)
+                .await
+                .expect_err("graph bound"),
+            graph_body,
+            "activity graph exceeds",
+        ),
+    ] {
+        let ApiError::DecodeResponse {
+            response,
+            diagnostic,
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(response.as_str(), expected_body);
+        assert!(
+            diagnostic.as_str().contains(diagnostic_text),
+            "{diagnostic}"
+        );
     }
 }
 
