@@ -25,7 +25,8 @@ changes preview before you confirm them.
 - **Investigate slow Wi-Fi.** Use `wifi.diagnose` to inspect radio load and
   weak-signal clients, then check a device or recent controller events.
 - **Check Protect inventory and images.** Find cameras, inspect their reported state,
-  and fetch a camera JPEG with `cameras.snapshot`.
+  fetch a camera JPEG with `cameras.snapshot`, and control PTZ presets and
+  patrols with `cameras.ptz.control`.
   An optional local account adds recording details, recorder health, and
   historical detections. Event search returns metadata; camera snapshots use
   the dedicated image tool.

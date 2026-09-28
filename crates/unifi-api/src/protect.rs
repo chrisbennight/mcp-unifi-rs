@@ -57,6 +57,37 @@ pub struct ProtectCamera {
     pub mac: Option<String>,
     pub is_mic_enabled: Option<bool>,
     pub mic_volume: Option<u8>,
+    /// Distinguishes an idle patrol from a console that did not report the
+    /// field, so readback never claims a stopped patrol without evidence.
+    #[serde(default, deserialize_with = "patrol_state")]
+    pub active_patrol_slot: ProtectPatrolState,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProtectPatrolState {
+    #[default]
+    Unreported,
+    Stopped,
+    Running(u8),
+}
+
+fn patrol_state<'de, D>(deserializer: D) -> Result<ProtectPatrolState, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<u8>::deserialize(deserializer)? {
+        Some(slot) => ProtectPatrolState::Running(slot),
+        None => ProtectPatrolState::Stopped,
+    })
+}
+
+/// One official PTZ action. The API accepts preset -1 as home and patrol
+/// slots 0-4; other preset slots are controller-defined.
+#[derive(Debug, Clone, Copy)]
+pub enum ProtectPtzCommand {
+    GotoPreset(i32),
+    StartPatrol(u8),
+    StopPatrol,
 }
 
 /// The recorder as the official Integration API reports it.
@@ -428,6 +459,43 @@ impl ProtectClient {
             validate_identifier("cameras.by_id", &camera.id)
         })
         .await
+    }
+
+    /// Execute one PTZ action. POST is never retried after an ambiguous result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid slots or a rejected request.
+    pub async fn camera_ptz(
+        &self,
+        camera_id: &str,
+        command: ProtectPtzCommand,
+    ) -> Result<(), ApiError> {
+        validate_identifier("cameras.ptz", camera_id)?;
+        let slot = match command {
+            ProtectPtzCommand::GotoPreset(value) if value < -1 => {
+                return Err(ApiError::Config(
+                    "preset slot must be -1 or greater".to_owned(),
+                ));
+            }
+            ProtectPtzCommand::StartPatrol(value) if value > 4 => {
+                return Err(ApiError::Config("patrol slot must be 0-4".to_owned()));
+            }
+            ProtectPtzCommand::GotoPreset(value) => value.to_string(),
+            ProtectPtzCommand::StartPatrol(value) => value.to_string(),
+            ProtectPtzCommand::StopPatrol => String::new(),
+        };
+        let mut segments = vec!["cameras", camera_id, "ptz"];
+        match command {
+            ProtectPtzCommand::GotoPreset(_) => segments.extend(["goto", slot.as_str()]),
+            ProtectPtzCommand::StartPatrol(_) => {
+                segments.extend(["patrol", "start", slot.as_str()]);
+            }
+            ProtectPtzCommand::StopPatrol => segments.extend(["patrol", "stop"]),
+        }
+        self.send(self.request(Method::POST, &segments)?, "cameras.ptz")
+            .await?;
+        Ok(())
     }
 
     /// A bounded JPEG snapshot from the official camera endpoint.

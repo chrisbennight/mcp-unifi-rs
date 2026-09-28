@@ -39,6 +39,7 @@ pub enum ToolKind {
     CamerasSearch,
     CamerasStatus,
     CamerasSnapshot,
+    CamerasPtzControl,
     ProtectOverview,
     ProtectEvents,
     WifiDiagnose,
@@ -75,6 +76,7 @@ impl ToolKind {
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
             | Self::VouchersRevoke
+            | Self::CamerasPtzControl
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -102,6 +104,7 @@ impl ToolKind {
             Self::CamerasSearch
             | Self::CamerasStatus
             | Self::CamerasSnapshot
+            | Self::CamerasPtzControl
             | Self::ProtectOverview
             | Self::ProtectEvents => ToolSurface::Protect,
             Self::NetworkOverview
@@ -339,6 +342,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "cameras.snapshot",
         "Fetch one bounded JPEG snapshot from a Protect camera, selected by id or exact reported name. Choose the main or package camera channel and optional high quality. Returns the image as MCP image content with concise metadata.",
     ),
+    write_spec(
+        ToolKind::CamerasPtzControl,
+        "cameras.ptz.control",
+        "Preview or run a Protect PTZ action for one camera: go to a preset (including home), start a patrol slot, or stop the patrol. Confirmed patrol actions read the active slot back; preset movement reports acceptance because the API exposes no position readback.",
+        ToolBehavior::write(false).result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::ProtectOverview,
         "protect.overview",
@@ -515,6 +524,7 @@ mod tests {
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
         ToolKind::CamerasSnapshot,
+        ToolKind::CamerasPtzControl,
         ToolKind::ProtectOverview,
         ToolKind::ProtectEvents,
         ToolKind::WifiDiagnose,
@@ -548,6 +558,7 @@ mod tests {
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
                 | ToolKind::CamerasSnapshot
+                | ToolKind::CamerasPtzControl
                 | ToolKind::ProtectOverview
                 | ToolKind::ProtectEvents
                 | ToolKind::WifiDiagnose
@@ -595,6 +606,7 @@ mod tests {
                 "cameras.search",
                 "cameras.status",
                 "cameras.snapshot",
+                "cameras.ptz.control",
                 "protect.overview",
                 "protect.events"
             ]

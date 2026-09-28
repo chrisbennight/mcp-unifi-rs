@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
+use unifi_api::protect::{ProtectPatrolState, ProtectPtzCommand};
 use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, TlsMode};
 use url::Url;
 use wiremock::{
@@ -123,6 +124,62 @@ async fn a_camera_id_carrying_url_syntax_stays_one_path_segment() {
 
     let camera = client_for(&server).camera("../nvrs").await.expect("camera");
     assert_eq!(camera.id, "../nvrs");
+}
+
+#[tokio::test]
+async fn ptz_posts_typed_actions_once_and_decodes_patrol_state() {
+    let server = MockServer::start().await;
+    for suffix in ["goto/-1", "patrol/start/4", "patrol/stop"] {
+        Mock::given(method("POST"))
+            .and(path(format!("{PREFIX}/cameras/cam-1/ptz/{suffix}")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let client = client_for(&server);
+    client
+        .camera_ptz("cam-1", ProtectPtzCommand::GotoPreset(-1))
+        .await
+        .expect("home preset");
+    client
+        .camera_ptz("cam-1", ProtectPtzCommand::StartPatrol(4))
+        .await
+        .expect("patrol");
+    client
+        .camera_ptz("cam-1", ProtectPtzCommand::StopPatrol)
+        .await
+        .expect("stop");
+    assert!(
+        client
+            .camera_ptz("cam-1", ProtectPtzCommand::StartPatrol(5))
+            .await
+            .is_err()
+    );
+
+    for (reported, state) in [
+        (serde_json::json!({}), ProtectPatrolState::Unreported),
+        (
+            serde_json::json!({"activePatrolSlot": null}),
+            ProtectPatrolState::Stopped,
+        ),
+        (
+            serde_json::json!({"activePatrolSlot": 4}),
+            ProtectPatrolState::Running(4),
+        ),
+    ] {
+        let mut camera = serde_json::json!({
+            "id": "cam-1", "modelKey": "camera", "name": "PTZ", "state": "CONNECTED",
+        });
+        camera
+            .as_object_mut()
+            .expect("camera object")
+            .extend(reported.as_object().expect("state object").clone());
+        let decoded: unifi_api::protect::ProtectCamera =
+            serde_json::from_value(camera).expect("camera shape");
+        assert_eq!(decoded.active_patrol_slot, state);
+    }
 }
 
 #[tokio::test]

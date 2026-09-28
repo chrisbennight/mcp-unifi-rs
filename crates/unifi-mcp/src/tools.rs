@@ -31,7 +31,7 @@ use unifi_api::{
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
-        ProtectLocalCamera, ProtectLocalNvr, ProtectNvr,
+        ProtectLocalCamera, ProtectLocalNvr, ProtectNvr, ProtectPatrolState, ProtectPtzCommand,
     },
 };
 use zeroize::Zeroizing;
@@ -479,6 +479,54 @@ struct CameraSnapshotOutput {
     byte_size: usize,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum CameraPtzAction {
+    GotoPreset,
+    StartPatrol,
+    StopPatrol,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraPtzInput {
+    /// Camera id or exact reported name from `cameras.search`.
+    camera: String,
+    action: CameraPtzAction,
+    /// Preset slot (-1 for home, or a nonnegative slot) or patrol slot (0-4).
+    /// Omit for stopPatrol.
+    slot: Option<i32>,
+    /// Run the action. Absent or false previews the request.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraPtzOutput {
+    camera_id: String,
+    action: CameraPtzAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slot: Option<i32>,
+    applied: bool,
+    /// Present for confirmed patrol actions when the camera reports its
+    /// active slot. A preset move has no position readback in this API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    /// Omitted when the camera does not report patrol state; null means idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_patrol_slot: Option<PatrolSlotView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum PatrolSlotView {
+    Running(u8),
+    Stopped,
+}
+
 /// One camera as this surface reports it.
 ///
 /// Camera images are available through `cameras.snapshot`.
@@ -509,6 +557,10 @@ struct CameraView {
     /// Connection state in the console's own vocabulary, not normalized to a
     /// boolean: the states are not simply on or off.
     state: String,
+    /// Present when the public camera record reports patrol state. Null
+    /// means the patrol is stopped; a number is its running slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_patrol_slot: Option<PatrolSlotView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recording: Option<bool>,
     /// Whether the camera's configured recording mode enables recording,
@@ -1845,6 +1897,7 @@ impl ToolSpec {
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraSelectorInput, CameraView>(self),
             ToolKind::CamerasSnapshot => tool::<CameraSnapshotInput, CameraSnapshotOutput>(self),
+            ToolKind::CamerasPtzControl => tool::<CameraPtzInput, CameraPtzOutput>(self),
             ToolKind::ProtectOverview => tool::<EmptyInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
@@ -2101,6 +2154,7 @@ impl UnifiMcp {
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
+            ToolKind::CamerasPtzControl => self.cameras_ptz_control(params).await,
             ToolKind::ProtectOverview => self.protect_overview(params).await,
             ToolKind::ProtectEvents => self.protect_events_search(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
@@ -2694,6 +2748,75 @@ impl UnifiMcp {
             .content
             .push(ContentBlock::image(STANDARD.encode(bytes), "image/jpeg"));
         Ok(result)
+    }
+
+    async fn cameras_ptz_control(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraPtzInput>(params)?;
+        let command = ptz_command(input.action, input.slot)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let mut output = CameraPtzOutput {
+            camera_id: camera_id.clone(),
+            action: input.action,
+            slot: input.slot,
+            applied: false,
+            verified: None,
+            active_patrol_slot: None,
+            warnings: Vec::new(),
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+
+        self.protect()
+            .camera_ptz(&camera_id, command)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        if matches!(command, ProtectPtzCommand::GotoPreset(_)) {
+            output.warnings.push(
+                "controller accepted preset movement; the integration API does not report camera position"
+                    .to_owned(),
+            );
+            return structured(output);
+        }
+        match self.protect().camera(&camera_id).await {
+            Ok(camera) if camera.id == camera_id => {
+                output.active_patrol_slot = patrol_slot_view(camera.active_patrol_slot);
+                output.verified = match (command, camera.active_patrol_slot) {
+                    (ProtectPtzCommand::StartPatrol(want), ProtectPatrolState::Running(got)) => {
+                        Some(want == got)
+                    }
+                    (ProtectPtzCommand::StartPatrol(_), ProtectPatrolState::Stopped)
+                    | (ProtectPtzCommand::StopPatrol, ProtectPatrolState::Running(_)) => {
+                        Some(false)
+                    }
+                    (ProtectPtzCommand::StopPatrol, ProtectPatrolState::Stopped) => Some(true),
+                    _ => None,
+                };
+                if output.verified == Some(false) {
+                    output.warnings.push(
+                        "controller accepted the PTZ action but the reported patrol slot did not match"
+                            .to_owned(),
+                    );
+                } else if output.verified.is_none() {
+                    output.warnings.push(
+                        "controller accepted the PTZ action but did not report patrol state for verification"
+                            .to_owned(),
+                    );
+                }
+            }
+            Ok(_) | Err(_) => output.warnings.push(
+                "controller accepted the PTZ action but camera readback was unavailable".to_owned(),
+            ),
+        }
+        structured(output)
     }
 
     /// One console snapshot: version, cameras grouped by their reported
@@ -4653,6 +4776,39 @@ fn camera_selector(raw: &str) -> Result<&str, McpError> {
     Ok(selector)
 }
 
+fn ptz_command(action: CameraPtzAction, slot: Option<i32>) -> Result<ProtectPtzCommand, McpError> {
+    match (action, slot) {
+        (CameraPtzAction::GotoPreset, Some(value @ -1..=i32::MAX)) => {
+            Ok(ProtectPtzCommand::GotoPreset(value))
+        }
+        (CameraPtzAction::StartPatrol, Some(value @ 0..=4)) => Ok(ProtectPtzCommand::StartPatrol(
+            u8::try_from(value)
+                .map_err(|_| McpError::invalid_params("startPatrol requires slot 0-4", None))?,
+        )),
+        (CameraPtzAction::StopPatrol, None) => Ok(ProtectPtzCommand::StopPatrol),
+        (CameraPtzAction::GotoPreset, _) => Err(McpError::invalid_params(
+            "gotoPreset requires slot -1 for home or a nonnegative preset slot",
+            None,
+        )),
+        (CameraPtzAction::StartPatrol, _) => Err(McpError::invalid_params(
+            "startPatrol requires slot 0-4",
+            None,
+        )),
+        (CameraPtzAction::StopPatrol, _) => Err(McpError::invalid_params(
+            "stopPatrol does not accept slot",
+            None,
+        )),
+    }
+}
+
+fn patrol_slot_view(state: ProtectPatrolState) -> Option<PatrolSlotView> {
+    match state {
+        ProtectPatrolState::Unreported => None,
+        ProtectPatrolState::Stopped => Some(PatrolSlotView::Stopped),
+        ProtectPatrolState::Running(slot) => Some(PatrolSlotView::Running(slot)),
+    }
+}
+
 /// Trim a filter and reject empty or oversized values instead of silently
 /// matching everything or nothing.
 fn validate_filter(value: Option<&str>) -> Result<Option<String>, McpError> {
@@ -5443,6 +5599,7 @@ fn camera_view(
             .and_then(bounded_nonblank_text),
         classes: camera_classes(flags, local),
         state: bounded_text(camera.state),
+        active_patrol_slot: patrol_slot_view(camera.active_patrol_slot),
         recording: local.and_then(|value| value.is_recording),
         recording_configured,
         recording_enabled: effective_switch(recording_configured, recording_globally_disabled),
@@ -6892,6 +7049,8 @@ mod tests {
         ("port_forwards.update", true, false, true),
         // Same, and the result names the zones and ports a policy governs.
         ("firewall.policies.update", true, false, true),
+        // Repeating a movement or patrol command may trigger another action.
+        ("cameras.ptz.control", false, false, true),
         // Each call mints another batch; the result carries the credentials.
         ("vouchers.create", false, false, true),
         // Revoking the same voucher again leaves it absent.
