@@ -243,6 +243,83 @@ impl IntegrationClient {
             .await
     }
 
+    /// Devices available for adoption, with complete controller row fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn pending_devices(
+        &self,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["pending-devices"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Adopt one pending device by its controller-reported MAC address. A
+    /// transport failure after sending the request is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects the request or its
+    /// accepted response cannot be decoded.
+    pub async fn adopt_device(
+        &self,
+        site_id: &str,
+        mac_address: &str,
+        ignore_device_limit: bool,
+    ) -> Result<Value, ApiError> {
+        self.post_action_result(
+            &["sites", site_id, "devices"],
+            &serde_json::json!({
+                "macAddress": mac_address,
+                "ignoreDeviceLimit": ignore_device_limit,
+            }),
+        )
+        .await
+        .map(|(record, _)| record)
+    }
+
+    /// Read the full adopted device record for mutation readback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn device_detail_raw(
+        &self,
+        site_id: &str,
+        device_id: &str,
+    ) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "devices", device_id], &[])
+            .await
+    }
+
+    /// Remove one adopted device. The accepted HTTP status and body are
+    /// returned even when the upstream API documents no response schema.
+    /// A transport failure after sending the request is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects the request.
+    pub async fn remove_device(
+        &self,
+        site_id: &str,
+        device_id: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(self.request(Method::DELETE, &["sites", site_id, "devices", device_id])?)
+            .await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
+    }
+
     /// Read one page of DNS policies or traffic matching lists, retaining
     /// every field in each controller record.
     ///
