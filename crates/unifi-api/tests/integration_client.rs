@@ -494,6 +494,9 @@ async fn a_long_decode_diagnostic_cannot_hide_the_controller_response() {
         "{rendered}"
     );
     assert!(rendered.contains(" [truncated]"), "{rendered}");
+    assert!(rendered.contains("decode error:"), "{rendered}");
+    assert!(rendered.contains("expected u64"), "{rendered}");
+    assert!(rendered.contains("line 1 column"), "{rendered}");
 }
 
 #[tokio::test]

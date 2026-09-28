@@ -14,17 +14,21 @@ impl BoundedMessage {
     /// Keep the original characters and signal any byte-budget truncation.
     #[must_use]
     pub fn new(raw: &str) -> Self {
+        Self::with_limit(raw, MAXIMUM_MESSAGE_BYTES)
+    }
+
+    fn with_limit(raw: &str, limit: usize) -> Self {
         let mut message = String::new();
         let mut truncated = false;
         for character in raw.chars() {
-            if message.len() + character.len_utf8() > MAXIMUM_MESSAGE_BYTES {
+            if message.len() + character.len_utf8() > limit {
                 truncated = true;
                 break;
             }
             message.push(character);
         }
         if truncated {
-            while message.len() + TRUNCATION_MARKER.len() > MAXIMUM_MESSAGE_BYTES {
+            while message.len() + TRUNCATION_MARKER.len() > limit {
                 message.pop();
             }
             message.push_str(TRUNCATION_MARKER);
@@ -58,10 +62,39 @@ impl From<String> for BoundedMessage {
 
 /// Pair a decoder failure with the controller's bounded response body.
 pub(crate) fn decode_failure(error: &impl std::fmt::Display, bytes: &[u8]) -> ApiError {
+    let body = BoundedMessage::with_limit(&String::from_utf8_lossy(bytes), 280);
+    let diagnostic = bounded_diagnostic(&error.to_string(), 175);
     ApiError::Decode(BoundedMessage::new(&format!(
-        "controller response: {}; decode error: {error}",
-        String::from_utf8_lossy(bytes),
+        "controller response: {body}; decode error: {diagnostic}",
     )))
+}
+
+/// Retain the start and end of a long parser diagnostic. Serde puts the
+/// expected type and line/column near the end, after rejected input text.
+fn bounded_diagnostic(raw: &str, limit: usize) -> String {
+    const MIDDLE_MARKER: &str = " [truncated] ";
+    if raw.len() <= limit {
+        return raw.to_owned();
+    }
+    let head_budget = (limit - MIDDLE_MARKER.len()) / 2;
+    let tail_budget = limit - MIDDLE_MARKER.len() - head_budget;
+    let head_end = raw
+        .char_indices()
+        .take_while(|(index, character)| index + character.len_utf8() <= head_budget)
+        .last()
+        .map_or(0, |(index, character)| index + character.len_utf8());
+    let tail_start = raw
+        .char_indices()
+        .rev()
+        .take_while(|(index, _)| raw.len() - index <= tail_budget)
+        .last()
+        .map_or(raw.len(), |(index, _)| index);
+    format!(
+        "{}{}{}",
+        &raw[..head_end],
+        MIDDLE_MARKER,
+        &raw[tail_start..]
+    )
 }
 
 /// A failure talking to a controller. Upstream-derived detail always travels
