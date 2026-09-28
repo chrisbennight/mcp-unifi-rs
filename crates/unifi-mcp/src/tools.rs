@@ -4578,7 +4578,7 @@ impl UnifiMcp {
         }
         let mut output = FirewallPoliciesDeleteOutput {
             policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
-            preview: policy_preview_coverage(&record, self.redact()),
+            preview: policy_preview_coverage(&record),
             applied: false,
             verified_absent: None,
             warnings: vec![
@@ -4602,11 +4602,7 @@ impl UnifiMcp {
         final_shape.warnings.push(
             "the delete request was accepted, but policy absence was not verified".to_owned(),
         );
-        finalize(
-            structured(final_shape)?,
-            self.redact(),
-            ToolBehavior::write(false),
-        )?;
+        finalize(structured(final_shape)?, ToolBehavior::write(false))?;
         self.integration()
             .delete_firewall_policy(&site_id, &input.policy)
             .await
@@ -6443,10 +6439,7 @@ fn bounded_policy_view(mut policy: PolicyView) -> PolicyView {
 
 /// Include the official policy fields that affect matching or explain the
 /// deletion. Unknown controller fields remain named but are not echoed.
-fn policy_preview_coverage(
-    record: &Map<String, Value>,
-    secrets: &[Zeroizing<String>],
-) -> PolicyPreviewCoverage {
+fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
     const DETAIL_FIELDS: &[&str] = &[
         "source",
         "destination",
@@ -6467,11 +6460,7 @@ fn policy_preview_coverage(
     for name in DETAIL_FIELDS {
         if let Some(value) = record.get(*name) {
             let bytes = name.len() + value.to_string().len();
-            // The shared result redactor handles controller-provided values,
-            // while JSON property names are normally server-owned. A detail
-            // with a controller-provided secret-bearing key cannot cross that
-            // boundary, so omit the whole field and report the omission.
-            if !contains_secret_key(value, secrets) && detail_bytes + bytes <= DETAIL_BUDGET {
+            if detail_bytes + bytes <= DETAIL_BUDGET {
                 detail_bytes += bytes;
                 details.insert((*name).to_owned(), value.clone());
             } else {
@@ -6517,24 +6506,6 @@ fn policy_preview_coverage(
         complete: omitted_fields.is_empty() && !omitted_fields_truncated,
         omitted_fields,
         omitted_fields_truncated,
-    }
-}
-
-fn contains_secret_key(value: &Value, secrets: &[Zeroizing<String>]) -> bool {
-    match value {
-        Value::Object(fields) => {
-            fields.keys().any(|key| {
-                secrets
-                    .iter()
-                    .any(|secret| !secret.is_empty() && key.contains(secret.as_str()))
-            }) || fields
-                .values()
-                .any(|nested| contains_secret_key(nested, secrets))
-        }
-        Value::Array(items) => items
-            .iter()
-            .any(|nested| contains_secret_key(nested, secrets)),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
     }
 }
 

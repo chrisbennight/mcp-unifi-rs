@@ -387,7 +387,7 @@ async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
 }
 
 #[tokio::test]
-async fn policy_delete_omits_details_with_credential_bearing_keys() {
+async fn policy_delete_preserves_controller_detail_keys_and_values() {
     let server = MockServer::start().await;
     mount_site(&server).await;
     let mut record = stored(true, "BLOCK");
@@ -427,21 +427,12 @@ async fn policy_delete_omits_details_with_credential_bearing_keys() {
                 None,
             )
             .await
-            .expect("secret-bearing detail omitted")
+            .expect("controller detail preserved")
             .structured_content
             .expect("structured");
-        assert!(!output.to_string().contains(PASSWORD));
-        assert_eq!(output["preview"]["complete"], false);
-        assert!(
-            output["preview"]["omittedFields"]
-                .to_string()
-                .contains("source")
-        );
-        assert!(
-            output["preview"]["omittedFields"]
-                .to_string()
-                .contains("metadata")
-        );
+        assert_eq!(output["preview"]["details"]["source"], record["source"]);
+        assert_eq!(output["preview"]["details"]["metadata"], record["metadata"]);
+        assert_eq!(output["preview"]["complete"], true);
         assert_eq!(output["applied"], confirm);
     }
 }
