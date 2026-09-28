@@ -1026,10 +1026,7 @@ impl LegacyClient {
         } else {
             let raw = envelope.meta.msg.as_deref();
             // A mutation is never resent based on an error in its response body.
-            if class == RequestClass::IdempotentRead && raw == Some(LOGIN_REQUIRED_CODE) {
-                return Err(login_required_error());
-            }
-            Err(rejection(raw))
+            Err(rejection(raw, &bytes))
         }
     }
 
@@ -1197,7 +1194,7 @@ impl LegacyClient {
         // session is authenticated only when no such rejection is present,
         // whether or not the rejection names a code.
         if let Some(rejected) = envelope_rejection(&bytes) {
-            return Err(rejection(rejected.code.as_deref()));
+            return Err(rejection(rejected.code.as_deref(), &bytes));
         }
         session.authenticated = true;
         session.generation += 1;
@@ -1335,15 +1332,8 @@ fn is_login_required(error: &ApiError) -> bool {
         || matches!(error, ApiError::Status { status: 401, .. })
 }
 
-fn login_required_error() -> ApiError {
-    ApiError::Rejected {
-        code: BoundedMessage::new(LOGIN_REQUIRED_CODE),
-        message: BoundedMessage::new("the controller session is no longer valid"),
-    }
-}
-
 /// Translate a non-success HTTP response while retaining its controller detail.
-fn translate_failure(status: u16, bytes: &[u8], class: RequestClass) -> ApiError {
+fn translate_failure(status: u16, bytes: &[u8], _class: RequestClass) -> ApiError {
     if status == 401 {
         return ApiError::Status {
             status,
@@ -1351,14 +1341,7 @@ fn translate_failure(status: u16, bytes: &[u8], class: RequestClass) -> ApiError
         };
     }
     match envelope_rejection(bytes) {
-        Some(rejected) => {
-            if class == RequestClass::IdempotentRead
-                && rejected.code.as_deref() == Some(LOGIN_REQUIRED_CODE)
-            {
-                return login_required_error();
-            }
-            rejection(rejected.code.as_deref())
-        }
+        Some(rejected) => rejection(rejected.code.as_deref(), bytes),
         None => ApiError::Status {
             status,
             message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
@@ -1392,23 +1375,11 @@ fn envelope_rejection(bytes: &[u8]) -> Option<EnvelopeRejection> {
     })
 }
 
-/// Map a legacy `api.err.*` code to a typed rejection with actionable
-/// guidance.
-fn rejection(code: Option<&str>) -> ApiError {
-    let code = code.unwrap_or("api.err.Unknown");
-    let guidance = match code {
-        "api.err.Ubic2faTokenRequired" => {
-            "the account requires MFA, which the legacy login cannot satisfy; \
-             use a dedicated local administrator without MFA"
-        }
-        "api.err.NoPermission" => "the account lacks permission for this operation",
-        "api.err.Invalid" => "the controller rejected the credentials or arguments",
-        LOGIN_REQUIRED_CODE => "the controller session is no longer valid",
-        _ => "the controller rejected the request",
-    };
+/// Keep the controller's rejection body while retaining its code for session handling.
+fn rejection(code: Option<&str>, bytes: &[u8]) -> ApiError {
     ApiError::Rejected {
-        code: BoundedMessage::new(code),
-        message: BoundedMessage::new(guidance),
+        code: BoundedMessage::new(code.unwrap_or_default()),
+        message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
     }
 }
 

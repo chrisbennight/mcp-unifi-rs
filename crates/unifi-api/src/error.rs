@@ -80,8 +80,8 @@ pub enum ApiError {
     },
     /// The legacy controller API accepted the transport but rejected the
     /// operation with one of its `api.err.*` codes. `code` is the upstream
-    /// token; `message` is actionable guidance for the caller.
-    #[error("controller rejected the request ({code}): {message}")]
+    /// token when present; `message` is the bounded upstream response body.
+    #[error("{message}")]
     Rejected {
         code: BoundedMessage,
         message: BoundedMessage,

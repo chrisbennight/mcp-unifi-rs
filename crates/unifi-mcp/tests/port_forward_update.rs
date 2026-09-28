@@ -359,11 +359,7 @@ async fn an_id_that_names_no_rule_changes_nothing() {
         )
         .await
         .expect_err("unknown id");
-    // The upstream rejection is never echoed: the caller gets the bounded
-    // message, and the absent PUT mock proves nothing was written.
-    assert!(
-        error.message.contains("controller rejected the request"),
-        "{}",
-        error.message
-    );
+    // The missing row is reported directly, and the absent PUT mock proves
+    // nothing was written.
+    assert_eq!(error.message, "no port forward has that id");
 }

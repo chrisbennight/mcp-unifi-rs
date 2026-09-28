@@ -411,12 +411,10 @@ async fn a_2xx_login_carrying_a_rejection_envelope_is_not_a_session() {
 #[tokio::test]
 async fn a_2xx_login_rejection_without_a_code_is_still_not_a_session() {
     let server = MockServer::start().await;
+    let upstream = serde_json::json!({"meta": {"rc": "error"}, "data": []});
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"meta": {"rc": "error"}, "data": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(upstream.clone()))
         .expect(1)
         .mount(&server)
         .await;
@@ -425,7 +423,11 @@ async fn a_2xx_login_rejection_without_a_code_is_still_not_a_session() {
         .site_health("default")
         .await
         .expect_err("rejected login");
-    assert!(matches!(error, ApiError::Rejected { .. }));
+    let ApiError::Rejected { code, message } = error else {
+        panic!("expected Rejected, got {error:?}");
+    };
+    assert_eq!(code.as_str(), "");
+    assert_eq!(message.as_str(), upstream.to_string());
 }
 
 #[tokio::test]
@@ -491,7 +493,7 @@ async fn a_transient_probe_failure_does_not_latch_console_detection() {
 }
 
 #[tokio::test]
-async fn mfa_accounts_fail_with_actionable_guidance() {
+async fn mfa_rejections_preserve_the_controller_response() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
@@ -510,11 +512,12 @@ async fn mfa_accounts_fail_with_actionable_guidance() {
         panic!("expected Rejected, got {error:?}");
     };
     assert_eq!(code.as_str(), "api.err.Ubic2faTokenRequired");
-    assert!(message.as_str().contains("local administrator without MFA"));
+    assert!(message.as_str().contains("api.err.Ubic2faTokenRequired"));
+    assert!(message.as_str().contains("\"rc\":\"error\""));
 }
 
 #[tokio::test]
-async fn envelope_rejections_translate_the_documented_codes() {
+async fn envelope_rejections_preserve_the_documented_codes() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
@@ -542,7 +545,8 @@ async fn envelope_rejections_translate_the_documented_codes() {
         panic!("expected Rejected, got {error:?}");
     };
     assert_eq!(code.as_str(), "api.err.NoPermission");
-    assert!(message.as_str().contains("permission"));
+    assert!(message.as_str().contains("api.err.NoPermission"));
+    assert!(message.as_str().contains("\"rc\":\"error\""));
 }
 
 async fn logged_in_server() -> MockServer {
