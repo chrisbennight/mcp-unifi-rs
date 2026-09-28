@@ -450,7 +450,8 @@ finished.
 Repeating authorization replaces the active grant and resets traffic counters,
 so it is not idempotent. `guests.unauthorize` returns the revoked grant and
 disconnects the client. Both actions mark `verified` true only when a bounded
-read of the connected client reports the expected state. If a disconnected
+read of the connected client reports the expected state and grant metadata.
+The observed grant is returned separately when it can be read. If a disconnected
 client is no longer readable, the action response remains available and the
 result says that verification was unavailable.
 

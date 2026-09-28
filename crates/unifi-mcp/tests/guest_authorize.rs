@@ -238,6 +238,51 @@ async fn repeated_authorization_returns_revoked_and_new_grants() {
 }
 
 #[tokio::test]
+async fn changed_limit_in_readback_is_visible_and_not_verified() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    mount_clients(
+        &server,
+        &serde_json::json!([{"id": CLIENT_ID, "macAddress": MAC}]),
+        1,
+    )
+    .await;
+    let mut observed = grant("2026-09-28T00:00:00Z");
+    observed["dataUsageLimitMBytes"] = serde_json::json!(100);
+    mount_detail(
+        &server,
+        &detail(false, None),
+        &detail(true, Some(&observed)),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}/actions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "action": "AUTHORIZE_GUEST_ACCESS",
+            "grantedAuthorization": grant("2026-09-28T00:00:00Z")
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &authorize(&serde_json::json!({"client": MAC, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("authorize")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], false);
+    assert_eq!(output["grantedAuthorization"]["dataUsageLimitMBytes"], 500);
+    assert_eq!(output["observedAuthorization"]["dataUsageLimitMBytes"], 100);
+    assert!(output["warnings"].to_string().contains("not verified"));
+}
+
+#[tokio::test]
 async fn guest_status_reports_current_grant_and_usage() {
     let server = MockServer::start().await;
     mount_site(&server).await;

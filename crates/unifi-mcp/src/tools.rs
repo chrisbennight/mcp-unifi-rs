@@ -1486,6 +1486,8 @@ struct GuestsAuthorizeOutput {
     granted_authorization: Option<GuestAuthorizationView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     revoked_authorization: Option<GuestAuthorizationView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_authorization: Option<GuestAuthorizationView>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -3726,6 +3728,7 @@ impl UnifiMcp {
             verified: None,
             granted_authorization: None,
             revoked_authorization: None,
+            observed_authorization: None,
             warnings,
         };
         if !input.confirm.unwrap_or(false) {
@@ -3775,6 +3778,7 @@ impl UnifiMcp {
             verified: None,
             granted_authorization: None,
             revoked_authorization: None,
+            observed_authorization: None,
             warnings: vec!["unauthorizing a guest also disconnects the client".to_owned()],
         };
         if !input.confirm.unwrap_or(false) {
@@ -3875,12 +3879,22 @@ impl UnifiMcp {
             {
                 if let Some(access) = detail.access.filter(|access| access.kind == "GUEST") {
                     output.authorized_after = access.authorized;
+                    output.observed_authorization = access
+                        .authorization
+                        .clone()
+                        .map(GuestAuthorizationView::from);
                     output.verified = access.authorized.map(|authorized| {
                         if let Some(grant) = grant {
                             authorized
                                 && access.authorization.as_ref().is_some_and(|observed| {
                                     observed.authorized_at == grant.authorized_at
                                         && observed.expires_at == grant.expires_at
+                                        && observed.authorization_method
+                                            == grant.authorization_method
+                                        && observed.data_usage_limit_m_bytes
+                                            == grant.data_usage_limit_m_bytes
+                                        && observed.rx_rate_limit_kbps == grant.rx_rate_limit_kbps
+                                        && observed.tx_rate_limit_kbps == grant.tx_rate_limit_kbps
                                 })
                         } else {
                             !authorized
