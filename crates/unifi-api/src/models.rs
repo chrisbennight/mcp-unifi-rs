@@ -138,12 +138,31 @@ pub struct ClientSummary {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Voucher {
-    /// Optional because a batch whose row arrives without one must still
-    /// reach the caller: the code it carries exists nowhere else.
+    /// Creation responses can be incomplete; the caller still receives every
+    /// row so it can assess what the controller returned.
     pub id: Option<String>,
     pub code: Option<String>,
     pub name: Option<String>,
     pub created_at: Option<String>,
+}
+
+/// One persisted hotspot voucher from the official list or detail endpoint.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoucherDetails {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub created_at: String,
+    pub expired: bool,
+    pub authorized_guest_count: u64,
+    pub time_limit_minutes: u32,
+    pub activated_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub authorized_guest_limit: Option<u64>,
+    pub data_usage_limit_m_bytes: Option<u64>,
+    pub rx_rate_limit_kbps: Option<u64>,
+    pub tx_rate_limit_kbps: Option<u64>,
 }
 
 /// Request envelope for creating hotspot vouchers.

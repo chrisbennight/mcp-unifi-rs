@@ -6,10 +6,8 @@
 //! executable tool registry with MCP behavior annotations, and dispatch. The
 //! tool surface is a curated set of workflow tools, never a raw mapping of
 //! `UniFi` API endpoints. Mutations preview by default and redact secret
-//! material in responses. They verify writes by reading back, except where no
-//! read reproduces what the write produced — a voucher's code exists only in
-//! the response that created it — in which case the result says what it could
-//! establish instead of claiming verification.
+//! material in responses. They verify writes by reading back and report
+//! incomplete verification alongside the controller's response.
 
 pub mod handler;
 pub mod mutation;

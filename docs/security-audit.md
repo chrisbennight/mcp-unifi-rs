@@ -69,9 +69,8 @@ not an interpreter input. Clients still need to resist instructions embedded
 in tool results; redaction is not a prompt-injection detector.
 
 Mutation tests cover preview, validation before writes, read-back failures,
-ambiguous outcomes, and one-time voucher results. Once a voucher response is
-received, its bounded checks are synchronous and retain the returned codes even
-when those checks fail. A lost response can still lose those codes. Full-policy
+ambiguous outcomes, and voucher lifecycle results. Voucher list and detail reads
+can recover codes after creation, including after an ambiguous creation response. Full-policy
 firewall updates can race an external editor because that upstream API has no
 conditional partial write; the documented warning remains applicable.
 

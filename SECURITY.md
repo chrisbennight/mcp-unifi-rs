@@ -52,7 +52,9 @@ the application log filter requests verbose SDK logs.
 
 A timeout or broken connection after a confirmed write is an ambiguous outcome,
 not proof that the write failed. Inspect controller state before another action.
-Voucher codes cannot be read back, and a lost response can lose the only copy.
+Voucher codes can be recovered through the bounded voucher list and detail
+tools; those read results are sensitive credentials too. Independent modes
+require their operator secret-disclosure grant for these reads.
 Read-back checks describe observable persistence, not an upstream transaction;
 see [mutation contracts](docs/tool-surface.md).
 

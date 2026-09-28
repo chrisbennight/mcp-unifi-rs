@@ -10,7 +10,7 @@ use crate::{
     models::{
         ApplicationInfo, ClientAction, ClientSummary, DeviceAction, DeviceDetail, DeviceStatistics,
         DeviceSummary, FirewallPolicy, FirewallZone, Page, PageRequest, PortAction, SiteSummary,
-        Voucher, VoucherCreate, VoucherCreateResponse,
+        VoucherCreate, VoucherCreateResponse, VoucherDetails,
     },
 };
 
@@ -265,12 +265,26 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         page: PageRequest,
-    ) -> Result<Page<Voucher>, ApiError> {
+    ) -> Result<Page<VoucherDetails>, ApiError> {
         self.get_json(
             &["sites", site_id, "hotspot", "vouchers"],
             &page_query(page),
         )
         .await
+    }
+
+    /// One persisted hotspot voucher, including its retrievable code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn voucher(
+        &self,
+        site_id: &str,
+        voucher_id: &str,
+    ) -> Result<VoucherDetails, ApiError> {
+        self.get_json(&["sites", site_id, "hotspot", "vouchers", voucher_id], &[])
+            .await
     }
 
     /// Create hotspot vouchers. Never retried.

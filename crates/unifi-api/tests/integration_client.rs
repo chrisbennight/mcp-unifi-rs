@@ -260,9 +260,23 @@ async fn vouchers_round_trip_create_list_and_delete() {
         .await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/sites/s1/hotspot/vouchers")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page_body(
-            &serde_json::json!([{"id": "v1", "code": "111-222", "name": "guests"}]),
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page_body(&serde_json::json!([{
+                "id": "v1", "code": "111-222", "name": "guests",
+                "createdAt": "2026-08-16T00:00:00Z", "expired": false,
+                "authorizedGuestCount": 0, "timeLimitMinutes": 1440
+            }]))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/s1/hotspot/vouchers/v1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "v1", "code": "111-222", "name": "guests",
+            "createdAt": "2026-08-16T00:00:00Z", "expired": false,
+            "authorizedGuestCount": 0, "timeLimitMinutes": 1440
+        })))
         .expect(1)
         .mount(&server)
         .await;
@@ -294,7 +308,12 @@ async fn vouchers_round_trip_create_list_and_delete() {
         .vouchers("s1", PageRequest::default())
         .await
         .expect("list");
-    assert_eq!(listed.data[0].id.as_deref(), Some("v1"));
+    assert_eq!(listed.data[0].id, "v1");
+    assert_eq!(listed.data[0].code, "111-222");
+
+    let detail = client.voucher("s1", "v1").await.expect("detail");
+    assert_eq!(detail.code, "111-222");
+    assert!(!detail.expired);
 
     client.delete_voucher("s1", "v1").await.expect("delete");
 }
