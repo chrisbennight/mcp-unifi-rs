@@ -1301,6 +1301,30 @@ async fn camera_snapshot_returns_image_content_and_small_metadata() {
 }
 
 #[tokio::test]
+async fn camera_snapshot_forwards_the_complete_invalid_jpeg_body() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let invalid = vec![0xff; 700];
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(invalid.clone(), "image/jpeg"))
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("invalid JPEG");
+    assert!(error.message.contains(&STANDARD.encode(&invalid)));
+    assert!(error.message.contains("decode error"));
+}
+
+#[tokio::test]
 async fn protect_event_thumbnail_returns_image_content_for_the_event_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
