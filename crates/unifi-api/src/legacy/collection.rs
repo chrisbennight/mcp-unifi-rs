@@ -28,10 +28,10 @@ where
                 error: None,
             }
         }
-        Ok(ActivityRead::Unsupported) => SourceReport {
+        Ok(ActivityRead::Unsupported { response }) => SourceReport {
             status: SourceStatus::Unsupported,
             data: None,
-            error: None,
+            error: response.map(|error| error.to_string()),
         },
         Ok(ActivityRead::Unrecognized) => SourceReport {
             status: SourceStatus::Unrecognized,

@@ -2403,6 +2403,17 @@ struct StatsQueryOutput {
     /// Internet activity totals, temporal evidence, and WAN reconciliation.
     #[serde(skip_serializing_if = "Option::is_none")]
     activity: Option<activity::ActivityDetails>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_errors: Vec<StatsSourceError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_errors_in_content: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StatsSourceError {
+    source: &'static str,
+    error: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -5671,7 +5682,7 @@ impl UnifiMcp {
         let missing = samples
             .iter()
             .any(|row| row.time.is_none() || row.rx_bytes.is_none() || row.tx_bytes.is_none());
-        structured(StatsQueryOutput {
+        structured_stats(StatsQueryOutput {
             report: "wanHourly",
             coverage: TrafficCoverage {
                 status: if samples.is_empty() {
@@ -5689,15 +5700,34 @@ impl UnifiMcp {
             wan_hourly: Some(samples),
             top_applications: None,
             activity: None,
+            source_errors: Vec::new(),
+            source_errors_in_content: None,
         })
     }
 
-    async fn dpi_stats(&self, top: u16) -> Result<CallToolResult, McpError> {
+    async fn dpi_stats(
+        &self,
+        top: u16,
+        activity_response: Option<ApiError>,
+    ) -> Result<CallToolResult, McpError> {
         let report = self
             .legacy()
             .dpi_by_application(self.legacy_site())
             .await
             .map_err(api_error)?;
+        let mut source_errors: Vec<StatsSourceError> = activity_response
+            .into_iter()
+            .map(|error| StatsSourceError {
+                source: "activity",
+                error: error.to_string(),
+            })
+            .collect();
+        if let Some(error) = &report.unsupported_response {
+            source_errors.push(StatsSourceError {
+                source: "dpi",
+                error: error.to_string(),
+            });
+        }
         let unavailable = match report.availability {
             DpiAvailability::Unsupported => Some((
                 CoverageStatus::Unsupported,
@@ -5710,7 +5740,7 @@ impl UnifiMcp {
             DpiAvailability::Reported => None,
         };
         if let Some((status, reason)) = unavailable {
-            return structured(StatsQueryOutput {
+            return structured_stats(StatsQueryOutput {
                 report: "dpiApplications",
                 coverage: TrafficCoverage {
                     status,
@@ -5722,6 +5752,8 @@ impl UnifiMcp {
                 wan_hourly: None,
                 top_applications: Some(Vec::new()),
                 activity: None,
+                source_errors,
+                source_errors_in_content: None,
             });
         }
         let status = match (
@@ -5750,7 +5782,7 @@ impl UnifiMcp {
         });
         let total_applications = applications.len();
         applications.truncate(usize::from(top));
-        structured(StatsQueryOutput {
+        structured_stats(StatsQueryOutput {
             report: "dpiApplications",
             coverage: TrafficCoverage {
                 status,
@@ -5762,6 +5794,8 @@ impl UnifiMcp {
             wan_hourly: None,
             top_applications: Some(applications),
             activity: None,
+            source_errors,
+            source_errors_in_content: None,
         })
     }
 
@@ -8161,6 +8195,25 @@ fn parse<T: DeserializeOwned>(params: &CallToolRequestParams) -> Result<T, McpEr
 pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
     let value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    Ok(CallToolResult::structured(value))
+}
+
+/// Keep a useful traffic report structured when a controller error is too
+/// large to fit beside it. The complete source errors remain in content.
+fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError> {
+    let mut value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(errors) = fields.remove("sourceErrors")
+    {
+        fields.insert("sourceErrorsInContent".to_owned(), Value::Bool(true));
+        let mut result = CallToolResult::structured(value);
+        result
+            .content
+            .push(ContentBlock::text(format!("sourceErrors: {errors}")));
+        return Ok(result);
+    }
     Ok(CallToolResult::structured(value))
 }
 

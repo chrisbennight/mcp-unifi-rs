@@ -85,7 +85,7 @@ impl LegacyClient {
         let csrf = {
             let session = self.session.lock().await;
             if session.kind != Some(ConsoleKind::UnifiOs) {
-                return Ok(ActivityRead::Unsupported);
+                return Ok(ActivityRead::Unsupported { response: None });
             }
             session.csrf.clone()
         };
@@ -119,7 +119,13 @@ impl LegacyClient {
         }
         let bytes = http::read_bounded_body(response).await?;
         if matches!(status.as_u16(), 404 | 405) {
-            return Ok(ActivityRead::Unsupported);
+            return Ok(ActivityRead::Unsupported {
+                response: Some(translate_failure(
+                    status.as_u16(),
+                    &bytes,
+                    RequestClass::IdempotentRead,
+                )),
+            });
         }
         if !status.is_success() {
             return Err(translate_failure(

@@ -304,6 +304,74 @@ async fn explicit_application_window_never_falls_back_to_untimed_counters() {
 }
 
 #[tokio::test]
+async fn unsupported_activity_and_dpi_retain_both_controller_responses() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let activity_body = format!("activity missing: {}activity-tail", "a".repeat(700));
+    let dpi_body = format!("dpi missing: {}dpi-tail", "d".repeat(700));
+    Mock::given(method("GET"))
+        .and(path(TRAFFIC))
+        .respond_with(ResponseTemplate::new(404).set_body_string(activity_body.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/api/s/default/stat/sitedpi"))
+        .respond_with(ResponseTemplate::new(405).set_body_string(dpi_body.clone()))
+        .mount(&server)
+        .await;
+    let output = query(&server, json!({"report":"dpiApplications"})).await;
+    assert_eq!(output["coverage"]["status"], "unsupported");
+    assert_eq!(output["sourceErrors"][0]["source"], "activity");
+    assert_eq!(
+        output["sourceErrors"][0]["error"],
+        format!("controller returned HTTP 404: {activity_body}")
+    );
+    assert_eq!(output["sourceErrors"][1]["source"], "dpi");
+    assert_eq!(
+        output["sourceErrors"][1]["error"],
+        format!("controller returned HTTP 405: {dpi_body}")
+    );
+}
+
+#[tokio::test]
+async fn large_unsupported_graph_response_preserves_activity_and_error() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    activity_mock(&server, fixture()).await;
+    let graph_body = format!("graph route missing: {}graph-tail", "g".repeat(50_000));
+    Mock::given(method("POST"))
+        .and(path(GRAPH))
+        .respond_with(ResponseTemplate::new(405).set_body_string(graph_body.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(WAN))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "meta":{"rc":"ok"}, "data":wan()
+        })))
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(&call("stats.query", &args("clientWanHistory")), None)
+        .await
+        .expect("activity with unsupported graph");
+    let output = result.structured_content.expect("structured activity");
+    assert!(
+        output["activity"]["clients"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    );
+    assert_eq!(
+        output["activity"]["temporalEvidence"]["status"],
+        "unavailable"
+    );
+    assert_eq!(output["sourceErrorsInContent"], true);
+    assert!(result.content.iter().any(|content| {
+        matches!(content, rmcp::model::ContentBlock::Text(text) if text.text.contains(&graph_body))
+    }));
+}
+
+#[tokio::test]
 async fn activity_permission_and_session_errors_do_not_become_missing_data() {
     for status in [401, 403] {
         let server = MockServer::start().await;

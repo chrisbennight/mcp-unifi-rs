@@ -182,6 +182,12 @@ its `counterSemantics` explicitly retain the unverified interval, direction,
 and scope. Authentication failures never trigger that fallback. An unrecognized
 Activity response is reported as such. Record/string/body bounds fail loudly;
 there is no silent scan truncation. Display text uses visible truncation markers.
+`sourceErrors` retains the controller's status and response for Activity,
+graph, and legacy DPI requests that returned 404 or 405. A console-family
+decision with no request has no controller response. If the error text exceeds
+the structured result budget, `sourceErrorsInContent` points to the complete
+errors in an additional content block while the available report remains in
+the structured result.
 
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
