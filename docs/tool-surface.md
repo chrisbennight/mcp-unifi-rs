@@ -497,6 +497,11 @@ policy. So this reads the policy, alters that one field, and sends every other
 property back exactly as it arrived — including properties this server does not
 model, which is the point. A write that sent back only what it understood would
 drop the rest, on the object that decides what the network permits.
+The record must identify the requested policy before the write. A mismatched
+id fails with the complete accepted controller response. If the write is
+accepted but read-back identifies another policy, the result says `applied`
+and carries that complete response in `readbackError` without claiming
+verification.
 
 A classic console is refused by name before anything is read, the same line
 `firewall.read` holds. Without that, the missing endpoint arrives as a generic
@@ -564,7 +569,9 @@ the error includes the complete controller body and the missing field.
 policy's match and action, then sends one DELETE when confirmed. A following
 read distinguishes a policy that is absent from one the controller retained.
 The `readbackError` field carries the controller's response when that read
-fails, including an HTTP 404 response that confirms absence.
+fails or returns an unexpected policy, including an HTTP 404 response that
+confirms absence. A policy identity mismatch during preview returns the
+complete accepted controller response with a separate validation diagnostic.
 The preview shows full source, destination, protocol, connection-state, IPsec,
 and schedule conditions alongside the compact policy summary. It also shows
 the official descriptive and metadata fields when present. It marks whether

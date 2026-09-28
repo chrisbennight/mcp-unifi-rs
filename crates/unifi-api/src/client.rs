@@ -620,16 +620,45 @@ impl IntegrationClient {
         ),
         ApiError,
     > {
+        self.firewall_policy_snapshot_with_response(site_id, policy_id)
+            .await
+            .map(|(record, fingerprint, _)| (record, fingerprint))
+    }
+
+    /// Read a policy record and retain the accepted response for caller-side
+    /// identity validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn firewall_policy_snapshot_with_response(
+        &self,
+        site_id: &str,
+        policy_id: &str,
+    ) -> Result<
+        (
+            std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
+            RecordFingerprint,
+            BoundedMessage,
+        ),
+        ApiError,
+    > {
         let response = self
             .send(self.request(
                 Method::GET,
                 &["sites", site_id, "firewall", "policies", policy_id],
             )?)
             .await?;
+        let bytes = http::read_bounded_body(response).await?;
         let record: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>> =
-            decode(response).await?;
+            serde_json::from_slice(&bytes)
+                .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         let fingerprint = RecordFingerprint::from_raw_record(&record);
-        Ok((record, fingerprint))
+        Ok((
+            record,
+            fingerprint,
+            BoundedMessage::from_controller_bytes(&bytes),
+        ))
     }
 
     /// Replace one zone-based policy with the record given.

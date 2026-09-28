@@ -1810,6 +1810,12 @@ struct FirewallPoliciesUpdateOutput {
     /// True when every requested field persisted and nothing else moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    /// The complete controller response when read-back did not identify the
+    /// policy that was changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     /// Consequences worth knowing before confirming.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -4965,6 +4971,10 @@ impl UnifiMcp {
 
     /// Enable or disable one zone-based firewall policy, previewing unless
     /// the caller confirms.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the policy preview, full-record write, and identity-checked readback form one workflow"
+    )]
     async fn firewall_policies_update(
         &self,
         params: &CallToolRequestParams,
@@ -4990,12 +5000,18 @@ impl UnifiMcp {
         // `raw` is what goes back to the controller, property by property, as
         // the bytes it sent. `record` is the same reading parsed for the few
         // properties this server reads; it is never written.
-        let (raw, before_digest) = self
+        let (raw, before_digest, before_response) = self
             .integration()
-            .firewall_policy_snapshot(&site_id, &input.policy)
+            .firewall_policy_snapshot_with_response(&site_id, &input.policy)
             .await
             .map_err(api_error)?;
         let record = parsed_record(&raw);
+        if record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
+            return Err(api_error(ApiError::DecodeResponse {
+                response: before_response,
+                diagnostic: BoundedMessage::new("controller returned a different firewall policy"),
+            }));
+        }
         let before = policy_projection(&record);
         let warnings = firewall_policy_warnings(wanted, &record);
         if !input.confirm.unwrap_or(false) {
@@ -5006,6 +5022,8 @@ impl UnifiMcp {
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
+                readback_error: None,
+                readback_error_in_content: None,
                 warnings,
             });
         }
@@ -5023,6 +5041,8 @@ impl UnifiMcp {
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
+                readback_error: None,
+                readback_error_in_content: None,
                 warnings: vec![
                     "the policy already holds that value, so nothing was sent".to_owned(),
                 ],
@@ -5046,12 +5066,34 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
 
-        let (after_raw, after_digest) = self
+        let (after_raw, after_digest, after_response) = self
             .integration()
-            .firewall_policy_snapshot(&site_id, &input.policy)
+            .firewall_policy_snapshot_with_response(&site_id, &input.policy)
             .await
             .map_err(api_error)?;
         let after_record = parsed_record(&after_raw);
+        if after_record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
+            let error = ApiError::DecodeResponse {
+                response: after_response,
+                diagnostic: BoundedMessage::new(
+                    "controller policy readback returned a different id",
+                ),
+            };
+            return structured_with_mutation_readback_error(
+                FirewallPoliciesUpdateOutput {
+                    policy: policy_view_from_record(&input.policy, &record),
+                    applied: true,
+                    changes: None,
+                    fields: None,
+                    unexpected_changes: None,
+                    verified: None,
+                    readback_error: Some(error.to_string()),
+                    readback_error_in_content: None,
+                    warnings,
+                },
+                Some(&error),
+            );
+        }
         let after = policy_projection(&after_record);
         let fields = mutation::verify(&requested, &before, &after);
         let unexpected =
@@ -5067,6 +5109,8 @@ impl UnifiMcp {
             fields: Some(fields),
             unexpected_changes: Some(unexpected),
             verified: Some(verified),
+            readback_error: None,
+            readback_error_in_content: None,
             warnings,
         })
     }
@@ -5092,17 +5136,17 @@ impl UnifiMcp {
         }
         self.require_zone_based_firewall().await?;
         let site_id = self.site_id().await?;
-        let (raw, _) = self
+        let (raw, _, response) = self
             .integration()
-            .firewall_policy_snapshot(&site_id, &input.policy)
+            .firewall_policy_snapshot_with_response(&site_id, &input.policy)
             .await
             .map_err(api_error)?;
         let record = parsed_record(&raw);
         if record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
-            return Err(McpError::internal_error(
-                "controller returned a different firewall policy",
-                None,
-            ));
+            return Err(api_error(ApiError::DecodeResponse {
+                response,
+                diagnostic: BoundedMessage::new("controller returned a different firewall policy"),
+            }));
         }
         let mut output = FirewallPoliciesDeleteOutput {
             policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
@@ -5150,7 +5194,7 @@ impl UnifiMcp {
                 tokio::time::timeout(
                     budget,
                     self.integration()
-                        .firewall_policy_snapshot(&site_id, &input.policy),
+                        .firewall_policy_snapshot_with_response(&site_id, &input.policy),
                 )
                 .await,
             )
@@ -5162,7 +5206,22 @@ impl UnifiMcp {
                 upstream_error = Some(error);
                 Some(true)
             }
-            Some(Ok(Ok(_))) => Some(false),
+            Some(Ok(Ok((record, _, response)))) => {
+                let same_policy = parsed_record(&record).get("id").and_then(Value::as_str)
+                    == Some(input.policy.as_str());
+                let diagnostic = if same_policy {
+                    "controller acknowledged deletion but the policy still exists"
+                } else {
+                    "controller policy readback returned a different id"
+                };
+                let error = ApiError::DecodeResponse {
+                    response,
+                    diagnostic: BoundedMessage::new(diagnostic),
+                };
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
+                same_policy.then_some(false)
+            }
             Some(Ok(Err(error))) => {
                 output.readback_error = Some(error.to_string());
                 upstream_error = Some(error);
