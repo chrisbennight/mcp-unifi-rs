@@ -312,12 +312,15 @@ ambiguous transport result is surfaced rather than resent.
 These take a resource id and a `changes` object, and only the named fields are
 sent — an absent field is left alone rather than cleared.
 
-- `wlans.update` — `wlan`, `changes: {ssid, enabled, security, hidden, passphrase}`
+- `wlans.update` — `wlan`, `changes: {ssid, enabled, security, hidden, passphrase, radiusProfileId}`
 - `port_forwards.update` — `portForward`, `changes: {name, enabled}`
 
 `wlans.update` can change the security mode without sending a new passphrase.
 The controller retains or rejects its existing key configuration; the read-back
 reports whether the requested mode persisted.
+Security accepts `open`, `wpapsk`, and `wpaeap`. An enterprise network can
+reference an existing controller RADIUS profile by `radiusProfileId`. The
+profile id is reported by `networks.read` and verified after an update.
 
 A confirmed change is judged by reading the resource back, not by the
 controller's acknowledgement, because a controller acknowledges writes whose

@@ -540,6 +540,7 @@ pub struct WlanConf {
     /// Backing network id, resolvable against `rest/networkconf`.
     pub networkconf_id: Option<String>,
     pub hide_ssid: Option<bool>,
+    pub radius_profile_id: Option<String>,
 }
 
 /// A partial update to one wireless network, sent to the legacy
@@ -568,6 +569,8 @@ pub struct WlanPatch {
     pub x_passphrase: Option<Zeroizing<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_ssid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_profile_id: Option<String>,
 }
 
 /// Write the secret's inner value onto the wire. The zeroizing container has
@@ -598,6 +601,7 @@ impl WlanPatch {
             && self.security.is_none()
             && self.x_passphrase.is_none()
             && self.hide_ssid.is_none()
+            && self.radius_profile_id.is_none()
     }
 }
 

@@ -445,14 +445,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::NetworksRead,
         "networks.read",
         "Configured networks and wireless networks: VLANs, subnets, DHCP \
-         scopes, SSIDs, security modes, and controller-reported passphrases. \
+         scopes, SSIDs, security modes, RADIUS profile ids, and controller-reported passphrases. \
          The result is sensitive and the gateway decides who can read it.",
     ),
     write_spec(
         ToolKind::WlansUpdate,
         "wlans.update",
         "Change one wireless network by id: rename, enable or disable, hide, \
-         set the security mode, or set the passphrase. Previews the change \
+         set the security mode, RADIUS profile id, or passphrase. Previews the change \
          and its consequences unless confirm is true; a confirmed change is \
          read back and each field reported as persisted, dropped, or \
          coerced.",

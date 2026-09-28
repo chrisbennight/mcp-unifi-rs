@@ -305,6 +305,45 @@ async fn selecting_wpapsk_can_retain_the_existing_passphrase() {
 }
 
 #[tokio::test]
+async fn enterprise_security_and_radius_profile_are_sent_and_read_back() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let before = wlan_row("Office", true, false);
+    let mut after = before.clone();
+    after["security"] = serde_json::json!("wpaeap");
+    after["radius_profile_id"] = serde_json::json!("radius-office");
+    mount_reads(&server, &before, &after).await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{LEGACY}/rest/wlanconf/{WLAN_ID}")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "security": "wpaeap",
+            "radius_profile_id": "radius-office",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "wlan": WLAN_ID,
+                "changes": {"security": "wpaeap", "radiusProfileId": "radius-office"},
+                "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("enterprise update")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true, "{output}");
+    assert_eq!(output["fields"][0]["status"], "persisted");
+    assert_eq!(output["fields"][1]["status"], "persisted");
+    assert!(output.to_string().contains("radius-office"), "{output}");
+}
+
+#[tokio::test]
 async fn a_keyless_network_mode_rejected_by_controller_is_reported_as_dropped() {
     let server = MockServer::start().await;
     logged_in(&server).await;
@@ -438,7 +477,14 @@ async fn a_misspelled_change_field_is_named_along_with_the_accepted_ones() {
         .await
         .expect_err("unknown field");
     assert!(error.message.contains("hideSsid"), "{}", error.message);
-    for accepted in ["ssid", "enabled", "security", "hidden", "passphrase"] {
+    for accepted in [
+        "ssid",
+        "enabled",
+        "security",
+        "hidden",
+        "passphrase",
+        "radiusProfileId",
+    ] {
         assert!(error.message.contains(accepted), "{}", error.message);
     }
 }
