@@ -20,6 +20,7 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
 http = "1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 jsonschema = { version = "0.52", default-features = false }
 # Default features are off deliberately. reqwest already selects this same

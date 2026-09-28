@@ -166,10 +166,10 @@ there is no silent scan truncation. Display text uses visible truncation markers
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
 
-### `cameras.search`, `cameras.status`, `protect.overview`, `protect.events`
+### `cameras.search`, `cameras.status`, `cameras.snapshot`, `protect.overview`, `protect.events`
 
 The Protect console, which is a separate console from the network controller
-with its own key and its own certificate. These four tools are served by their
+with its own key and its own certificate. These five tools are served by their
 own process: a server started with `UNIFI_MCP_SURFACE=protect` advertises and
 dispatches exactly them, and a `network` server does not list them at all, so
 a deployment without cameras simply runs no Protect server.
@@ -196,6 +196,13 @@ reported name or display name and refuses an ambiguous name rather than
 resolving it by position. `protect.overview` groups cameras by the state words
 the console itself used and wraps the official single NVR object in its
 recorder list.
+
+`cameras.snapshot` fetches a JPEG from the official Protect API by camera id
+or exact reported name. It returns MCP image content plus small structured
+metadata, so an agent can inspect a frame without receiving a base64 string
+as text. The `channel` input chooses `main` (default) or `package`; the latter
+is for cameras with a package camera. `highQuality` requests 1080p or higher
+when available. A response above 4 MiB fails explicitly.
 
 Search and overview responses include capabilities. Basic public inventory is
 available with only the API key. Hardware model, functional class, recording,
@@ -226,11 +233,8 @@ is larger than the requested page, the call fails loudly and asks for a higher
 limit instead of silently splitting it. The per-page `limit` controls work
 and result size; there is no whole-window row cap or silent truncation.
 
-One absence is deliberate. **No snapshot, stream, or talkback**: a still
-image from inside a house is a different class of data from a device state, and
-if it is ever exposed it will be through a tool a caller reaches for on
-purpose, with its own classification and its own authorized group — not as a
-convenience on the side of a status result.
+Streams and talkback have separate follow-up work; the snapshot tool covers
+still images from cameras.
 
 ## Writes
 
@@ -429,5 +433,4 @@ outcome.
 Creating and deleting rules is out of scope throughout: these tools operate
 configuration an operator already has.
 
-Camera snapshots, RTSPS streams, and talkback are not exposed, for the reasons
-under the Protect tools above.
+RTSPS streams and talkback are not yet exposed.

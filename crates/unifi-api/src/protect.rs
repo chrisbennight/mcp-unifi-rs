@@ -11,11 +11,12 @@
 //! The models here are deliberately narrower than either API. Official wire
 //! fields are kept separate from the local application's richer operational
 //! fields, and the local bootstrap has an allowlisted camera/NVR projection
-//! rather than a model of the full response. Accounts, streams, channels,
+//! rather than a model of the full response. Accounts and streams,
 //! network names, disk identifiers, and unrelated application state never
 //! enter these types.
 
-use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use image::{ImageFormat, ImageReader, Limits};
+use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::error::Category;
@@ -427,6 +428,68 @@ impl ProtectClient {
             validate_identifier("cameras.by_id", &camera.id)
         })
         .await
+    }
+
+    /// A bounded JPEG snapshot from the official camera endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, format, or size failures.
+    pub async fn camera_snapshot(
+        &self,
+        camera_id: &str,
+        channel: &str,
+        high_quality: bool,
+    ) -> Result<Vec<u8>, ApiError> {
+        let mut segments = PREFIX.to_vec();
+        segments.extend(["cameras", camera_id, "snapshot"]);
+        let url = http::build_url(
+            &self.base,
+            &segments,
+            &[
+                ("channel", channel.to_owned()),
+                ("highQuality", high_quality.to_string()),
+            ],
+        )?;
+        let request = self
+            .http
+            .get(url)
+            .header("X-API-Key", self.api_key.as_str())
+            .header(header::ACCEPT, "image/jpeg");
+        let response = self.send(request, "cameras.snapshot").await?;
+        let jpeg = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/jpeg"))
+            });
+        if !jpeg {
+            return Err(ApiError::Decode(BoundedMessage::new(
+                "camera snapshot response was not a JPEG",
+            )));
+        }
+        let bytes = http::read_bounded_body(response).await?;
+        tokio::task::spawn_blocking(move || {
+            let mut reader =
+                ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
+            let mut limits = Limits::default();
+            limits.max_image_width = Some(8192);
+            limits.max_image_height = Some(8192);
+            limits.max_alloc = Some(128 * 1024 * 1024);
+            reader.limits(limits);
+            reader.decode().map_err(|_| {
+                ApiError::Decode(BoundedMessage::new(
+                    "camera snapshot was not a decodable JPEG",
+                ))
+            })?;
+            Ok(bytes)
+        })
+        .await
+        .map_err(|_| ApiError::Decode(BoundedMessage::new("camera snapshot validation failed")))?
     }
 
     /// The recorder this console runs. The official endpoint returns one

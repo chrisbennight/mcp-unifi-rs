@@ -11,7 +11,9 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rmcp::model::CallToolRequestParams;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
+use rmcp::model::{CallToolRequestParams, ContentBlock};
 use unifi_api::{
     ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, ProtectClient, TlsMode,
 };
@@ -28,6 +30,14 @@ const PROTECT_KEY: &str = "test-protect-key";
 const USERNAME: &str = "svc-mcp";
 const PASSWORD: &str = "test-legacy-password";
 const PROTECT: &str = "/proxy/protect/integration/v1";
+
+fn jpeg_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    JpegEncoder::new(&mut bytes)
+        .encode(&[0, 128, 255], 1, 1, ExtendedColorType::Rgb8)
+        .expect("encode synthetic JPEG");
+    bytes
+}
 
 /// A handler with no Protect console, which is a supported deployment.
 fn handler_without_protect(server: &MockServer) -> UnifiMcp {
@@ -479,6 +489,144 @@ async fn cameras_status_selects_by_id_or_exact_name() {
     assert_eq!(output["id"], "cam-front");
     assert_eq!(output["productType"], "G4 Doorbell");
     assert_eq!(output["localEnrichment"], "notConfigured");
+}
+
+#[tokio::test]
+async fn camera_snapshot_returns_image_content_and_small_metadata() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let jpeg = jpeg_fixture();
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .and(query_param("channel", "package"))
+        .and(query_param("highQuality", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg.clone(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "front door", "channel": "package", "highQuality": true}),
+            ),
+            None,
+        )
+        .await
+        .expect("snapshot");
+    assert_eq!(
+        result.structured_content.as_ref().expect("metadata")["cameraId"],
+        "cam-front"
+    );
+    assert_eq!(
+        result.structured_content.as_ref().expect("metadata")["byteSize"],
+        jpeg.len()
+    );
+    let image = result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            ContentBlock::Image(image) => Some(image),
+            _ => None,
+        })
+        .expect("MCP image content");
+    assert_eq!(image.mime_type, "image/jpeg");
+    assert_eq!(STANDARD.decode(&image.data).expect("base64"), jpeg);
+}
+
+#[tokio::test]
+async fn camera_snapshot_accepts_a_display_name_from_local_inventory() {
+    let server = MockServer::start().await;
+    console_with(
+        &server,
+        serde_json::json!([{
+            "id": "cam-front", "modelKey": "camera", "name": null, "state": "CONNECTED"
+        }]),
+    )
+    .await;
+    let mut bootstrap = sample_bootstrap();
+    bootstrap["cameras"]
+        .as_array_mut()
+        .expect("cameras")
+        .truncate(1);
+    local_console_with(&server, bootstrap).await;
+    let jpeg = jpeg_fixture();
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg, "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = handler_with_events(&server)
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "Local Front Door"}),
+            ),
+            None,
+        )
+        .await
+        .expect("snapshot by local display name");
+    assert_eq!(
+        result.structured_content.expect("metadata")["cameraId"],
+        "cam-front"
+    );
+}
+
+#[tokio::test]
+async fn camera_snapshot_refuses_name_when_local_inventory_is_partial() {
+    let server = MockServer::start().await;
+    console_with(
+        &server,
+        serde_json::json!([
+            {"id": "cam-front", "modelKey": "camera", "name": "Side", "state": "CONNECTED"},
+            {"id": "cam-back", "modelKey": "camera", "name": null, "state": "CONNECTED"}
+        ]),
+    )
+    .await;
+    let mut bootstrap = sample_bootstrap();
+    bootstrap["cameras"]
+        .as_array_mut()
+        .expect("cameras")
+        .truncate(1);
+    local_console_with(&server, bootstrap).await;
+    let handler = handler_with_events(&server);
+
+    let error = handler
+        .call(
+            &call("cameras.snapshot", &serde_json::json!({"camera": "Side"})),
+            None,
+        )
+        .await
+        .expect_err("name cannot be proven unique");
+    assert!(
+        error
+            .message
+            .contains("requires complete local Protect inventory")
+    );
+
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg_fixture(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let by_id = handler
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("exact id works with partial inventory");
+    assert_eq!(
+        by_id.structured_content.expect("metadata")["cameraId"],
+        "cam-front"
+    );
 }
 
 #[tokio::test]

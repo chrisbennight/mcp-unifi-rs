@@ -8,6 +8,7 @@ repository.workspace = true
 description = "MCP schemas, tool registry, normalization, and dispatch for the UniFi MCP server"
 
 [dependencies]
+base64.workspace = true
 http.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
@@ -19,6 +20,7 @@ unifi-api = { path = "../unifi-api" }
 zeroize.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 jsonschema.workspace = true
 url.workspace = true
 wiremock.workspace = true
