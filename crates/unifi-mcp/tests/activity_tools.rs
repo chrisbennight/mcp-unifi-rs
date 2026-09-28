@@ -241,6 +241,32 @@ async fn malformed_activity_preserves_the_controller_response() {
 }
 
 #[tokio::test]
+async fn activity_validation_error_reaches_the_tool_caller() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let mut report = fixture();
+    report["client_usage_by_app"][0]["client"]["name"] =
+        json!(format!("{}controller-name-tail", "x".repeat(4096)));
+    report["controller_extra"] = json!("original-controller-field");
+    activity_mock(&server, report.clone()).await;
+
+    let error = handler_for(&server)
+        .call(&call("stats.query", &args("clientWanHistory")), None)
+        .await
+        .expect_err("activity name exceeds typed bound");
+    assert!(
+        error.message.contains(&report.to_string()),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("activity report exceeds"),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn invalid_inputs_make_no_controller_requests() {
     let server = MockServer::start().await;
     for input in [

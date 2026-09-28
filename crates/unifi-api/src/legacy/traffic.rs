@@ -18,12 +18,13 @@ impl LegacyClient {
         site: &str,
         window: ActivityWindow,
     ) -> Result<ActivityRead<ActivityReport>, ApiError> {
-        let result = self.activity_read(site, window, false).await?;
+        let (result, bytes) = self.activity_read_with_bytes(site, window, false).await?;
         match result {
             ActivityRead::Reported(report) if !ActivityReport::validate(&report) => {
                 Err(ApiError::Decode(
                     "activity report exceeds supported record or string bounds".into(),
-                ))
+                )
+                .with_controller_response(&bytes))
             }
             other => Ok(other),
         }
@@ -37,8 +38,8 @@ impl LegacyClient {
         site: &str,
         window: ActivityWindow,
     ) -> Result<ActivityRead<Vec<ActivityBucket>>, ApiError> {
-        let result: ActivityRead<Vec<ActivityBucket>> =
-            self.activity_read(site, window, true).await?;
+        let (result, bytes): (ActivityRead<Vec<ActivityBucket>>, Vec<u8>) =
+            self.activity_read_with_bytes(site, window, true).await?;
         match result {
             ActivityRead::Reported(rows)
                 if rows.len() > 2017
@@ -51,9 +52,10 @@ impl LegacyClient {
                                 .is_none()
                     }) =>
             {
-                Err(ApiError::Decode(
-                    "activity graph exceeds supported bounds".into(),
-                ))
+                Err(
+                    ApiError::Decode("activity graph exceeds supported bounds".into())
+                        .with_controller_response(&bytes),
+                )
             }
             other => Ok(other),
         }
@@ -65,6 +67,17 @@ impl LegacyClient {
         window: ActivityWindow,
         graph: bool,
     ) -> Result<ActivityRead<T>, ApiError> {
+        self.activity_read_with_bytes(site, window, graph)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    async fn activity_read_with_bytes<T: DeserializeOwned>(
+        &self,
+        site: &str,
+        window: ActivityWindow,
+        graph: bool,
+    ) -> Result<(ActivityRead<T>, Vec<u8>), ApiError> {
         ActivityWindow::new(window.start, window.end)?;
         let generation = self.ensure_session().await?;
         match self.execute_activity(site, window, graph).await {
@@ -81,11 +94,11 @@ impl LegacyClient {
         site: &str,
         window: ActivityWindow,
         graph: bool,
-    ) -> Result<ActivityRead<T>, ApiError> {
+    ) -> Result<(ActivityRead<T>, Vec<u8>), ApiError> {
         let csrf = {
             let session = self.session.lock().await;
             if session.kind != Some(ConsoleKind::UnifiOs) {
-                return Ok(ActivityRead::Unsupported { response: None });
+                return Ok((ActivityRead::Unsupported { response: None }, Vec::new()));
             }
             session.csrf.clone()
         };
@@ -119,13 +132,16 @@ impl LegacyClient {
         }
         let bytes = http::read_bounded_body(response).await?;
         if matches!(status.as_u16(), 404 | 405) {
-            return Ok(ActivityRead::Unsupported {
-                response: Some(translate_failure(
-                    status.as_u16(),
-                    &bytes,
-                    RequestClass::IdempotentRead,
-                )),
-            });
+            return Ok((
+                ActivityRead::Unsupported {
+                    response: Some(translate_failure(
+                        status.as_u16(),
+                        &bytes,
+                        RequestClass::IdempotentRead,
+                    )),
+                },
+                Vec::new(),
+            ));
         }
         if !status.is_success() {
             return Err(translate_failure(
@@ -134,8 +150,8 @@ impl LegacyClient {
                 RequestClass::IdempotentRead,
             ));
         }
-        serde_json::from_slice(&bytes)
-            .map(ActivityRead::Reported)
-            .map_err(|error| crate::error::decode_failure(&error, &bytes))
+        let report = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((ActivityRead::Reported(report), bytes))
     }
 }
