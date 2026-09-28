@@ -61,6 +61,7 @@ changes fields, by observation where it does not — see Write safety).
 (enable, disable; zone-based consoles), `firewall.policies.delete`,
 `cameras.pos.transaction` (camera event ingestion),
 `protect.viewers.settings.update` (viewer name and live-view assignment),
+`protect.liveviews.configure` (create or update a live-view layout),
 `vouchers.create` (mint hotspot
 vouchers).
 

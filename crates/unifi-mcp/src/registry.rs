@@ -51,6 +51,7 @@ pub enum ToolKind {
     ProtectViewersSettingsUpdate,
     ProtectLiveviewsList,
     ProtectLiveviewsStatus,
+    ProtectLiveviewsConfigure,
     CamerasSettingsRead,
     CamerasSettingsUpdate,
     CamerasSnapshot,
@@ -99,6 +100,7 @@ impl ToolKind {
             | Self::CamerasTalkbackStart
             | Self::CamerasPosTransaction
             | Self::ProtectViewersSettingsUpdate
+            | Self::ProtectLiveviewsConfigure
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -149,6 +151,7 @@ impl ToolKind {
             | Self::ProtectViewersSettingsUpdate
             | Self::ProtectLiveviewsList
             | Self::ProtectLiveviewsStatus
+            | Self::ProtectLiveviewsConfigure
             | Self::CamerasSettingsRead
             | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
@@ -454,6 +457,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.liveviews.status",
         "Read one complete Protect live-view layout and camera assignment by exact id.",
     ),
+    write_spec(
+        ToolKind::ProtectLiveviewsConfigure,
+        "protect.liveviews.configure",
+        "Preview or create a Protect live view, or patch an existing one by exact id. Changes name, scope, owner, layout, and camera slots; returns the full accepted result and read-back.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
@@ -711,6 +722,7 @@ mod tests {
         ToolKind::ProtectViewersSettingsUpdate,
         ToolKind::ProtectLiveviewsList,
         ToolKind::ProtectLiveviewsStatus,
+        ToolKind::ProtectLiveviewsConfigure,
         ToolKind::CamerasSettingsRead,
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
@@ -765,6 +777,19 @@ mod tests {
     }
 
     #[test]
+    fn liveview_configuration_classifies_creation_and_sensitive_data() {
+        let spec = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.kind == ToolKind::ProtectLiveviewsConfigure)
+            .expect("live-view configuration tool");
+        assert_eq!(spec.risk, "high");
+        assert!(spec.kind.requires_write_access());
+        assert!(!spec.behavior.idempotent);
+        assert!(spec.behavior.input_sensitive);
+        assert!(spec.behavior.result_sensitive);
+    }
+
+    #[test]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
             // Exhaustiveness anchor: a new variant must be added here or the
@@ -792,6 +817,7 @@ mod tests {
                 | ToolKind::ProtectViewersSettingsUpdate
                 | ToolKind::ProtectLiveviewsList
                 | ToolKind::ProtectLiveviewsStatus
+                | ToolKind::ProtectLiveviewsConfigure
                 | ToolKind::CamerasSettingsRead
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
@@ -859,6 +885,7 @@ mod tests {
                 "protect.viewers.settings.update",
                 "protect.liveviews.list",
                 "protect.liveviews.status",
+                "protect.liveviews.configure",
                 "cameras.settings.read",
                 "cameras.settings.update",
                 "cameras.snapshot",

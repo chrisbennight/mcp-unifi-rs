@@ -805,7 +805,7 @@ impl ProtectClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    /// Returns an [`ApiError`] for transport, status, or JSON decoding failures.
     pub async fn viewer_settings_patch(
         &self,
         viewer_id: &str,
@@ -815,12 +815,7 @@ impl ProtectClient {
         let request = self
             .request(Method::PATCH, &["viewers", viewer_id])?
             .json(changes);
-        let (viewer, bytes): (Value, Vec<u8>) = self
-            .send_json_once_with_response(request, "protect.viewers.patch")
-            .await?;
-        validate_resource_record("protect.viewers.patch", &viewer, Some(viewer_id))
-            .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(viewer)
+        self.send_json_once(request, "protect.viewers.patch").await
     }
 
     /// Read complete Protect live-view configuration records.
@@ -849,6 +844,38 @@ impl ProtectClient {
             validate_resource_record("protect.liveviews.by_id", liveview, Some(liveview_id))
         })
         .await
+    }
+
+    /// Create one live view and return the complete accepted controller result.
+    /// The POST is never retried after an ambiguous transport result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or response decoding failures.
+    pub async fn liveview_create(&self, configuration: &Value) -> Result<Value, ApiError> {
+        let request = self
+            .request(Method::POST, &["liveviews"])?
+            .json(configuration);
+        self.send_json_once(request, "protect.liveviews.create")
+            .await
+    }
+
+    /// Patch one live view and return the complete accepted controller result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or JSON decoding failures.
+    pub async fn liveview_patch(
+        &self,
+        liveview_id: &str,
+        changes: &Value,
+    ) -> Result<Value, ApiError> {
+        validate_identifier("protect.liveviews.patch", liveview_id)?;
+        let request = self
+            .request(Method::PATCH, &["liveviews", liveview_id])?
+            .json(changes);
+        self.send_json_once(request, "protect.liveviews.patch")
+            .await
     }
 
     /// Patch one camera's documented settings once. The caller reads back

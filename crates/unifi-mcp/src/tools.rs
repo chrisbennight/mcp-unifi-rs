@@ -20,7 +20,7 @@ use rmcp::{
 };
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Number, Value, json};
 use unifi_api::{
     ApiError, BoundedMessage, ProtectAvailability, RecordFingerprint,
     capability::{self, FirewallGeneration},
@@ -763,6 +763,90 @@ struct ProtectLiveviewStatusInput {
 #[serde(rename_all = "camelCase")]
 struct ProtectLiveviewStatusOutput {
     liveview: Value,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum LiveviewOperation {
+    Create,
+    Update,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum LiveviewCycleMode {
+    Motion,
+    Time,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LiveviewSlot {
+    cameras: Vec<String>,
+    cycle_mode: LiveviewCycleMode,
+    cycle_interval: Number,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LiveviewChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_global: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout: Option<Number>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slots: Option<Vec<LiveviewSlot>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectLiveviewsConfigureInput {
+    operation: LiveviewOperation,
+    liveview_id: Option<String>,
+    changes: LiveviewChanges,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectLiveviewsConfigureOutput {
+    operation: LiveviewOperation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    liveview_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<LiveviewChanges>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_in_content: Option<bool>,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2785,6 +2869,9 @@ impl ToolSpec {
             ToolKind::ProtectLiveviewsStatus => {
                 tool::<ProtectLiveviewStatusInput, ProtectLiveviewStatusOutput>(self)
             }
+            ToolKind::ProtectLiveviewsConfigure => {
+                tool::<ProtectLiveviewsConfigureInput, ProtectLiveviewsConfigureOutput>(self)
+            }
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -3059,6 +3146,7 @@ impl UnifiMcp {
             }
             ToolKind::ProtectLiveviewsList => self.protect_liveviews_list(params).await,
             ToolKind::ProtectLiveviewsStatus => self.protect_liveviews_status(params).await,
+            ToolKind::ProtectLiveviewsConfigure => self.protect_liveviews_configure(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
@@ -4000,6 +4088,106 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
         structured(ProtectLiveviewStatusOutput { liveview })
+    }
+
+    async fn protect_liveviews_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<ProtectLiveviewsConfigureInput>(params)?;
+        let id = match input.operation {
+            LiveviewOperation::Create if input.liveview_id.is_some() => {
+                return Err(McpError::invalid_params(
+                    "create uses changes.id rather than liveviewId",
+                    None,
+                ));
+            }
+            LiveviewOperation::Create => None,
+            LiveviewOperation::Update => {
+                let id = input
+                    .liveview_id
+                    .as_deref()
+                    .ok_or_else(|| McpError::invalid_params("update requires liveviewId", None))?;
+                if id.is_empty() || id.len() > 256 {
+                    return Err(McpError::invalid_params(
+                        "liveviewId must be 1-256 bytes",
+                        None,
+                    ));
+                }
+                Some(id)
+            }
+        };
+        let request = liveview_configuration_request(&input.changes)?;
+        let before = if let Some(id) = id {
+            Some(self.protect().liveview(id).await.map_err(api_error)?)
+        } else {
+            None
+        };
+        let mut output = ProtectLiveviewsConfigureOutput {
+            operation: input.operation,
+            liveview_id: input.liveview_id,
+            requested: Some(input.changes),
+            requested_in_content: None,
+            applied: false,
+            before,
+            before_in_content: None,
+            response: None,
+            response_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return liveview_configure_result(output);
+        }
+        let response = match output.operation {
+            LiveviewOperation::Create => self.protect().liveview_create(&request).await,
+            LiveviewOperation::Update => {
+                self.protect()
+                    .liveview_patch(
+                        output.liveview_id.as_deref().expect("validated id"),
+                        &request,
+                    )
+                    .await
+            }
+        }
+        .map_err(api_error)?;
+        output.applied = true;
+        if matches!(output.operation, LiveviewOperation::Create) {
+            output.liveview_id = response
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        output.response = Some(response);
+        let Some(id) = output.liveview_id.as_deref() else {
+            output.readback_error =
+                Some("accepted create response supplied no live-view id for read-back".to_owned());
+            return liveview_configure_result(output);
+        };
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+            .min(CAMERA_SETTINGS_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error = Some(
+                "live-view read-back skipped because the request deadline was near".to_owned(),
+            );
+            return liveview_configure_result(output);
+        }
+        match tokio::time::timeout(budget, self.protect().liveview(id)).await {
+            Ok(Ok(after)) => {
+                output.verified = Some(liveview_changes_match(&request, &after));
+                output.after = Some(after);
+            }
+            Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+            Err(_) => output.readback_error = Some("live-view read-back timed out".to_owned()),
+        }
+        liveview_configure_result(output)
     }
 
     /// One camera by id or exact name.
@@ -9307,6 +9495,113 @@ fn viewer_settings_result(
     Ok(result)
 }
 
+fn liveview_changes_match(changes: &Value, after: &Value) -> bool {
+    requested_json_matches(changes, after)
+}
+
+fn liveview_configuration_request(changes: &LiveviewChanges) -> Result<Value, McpError> {
+    if changes.layout.as_ref().is_some_and(|layout| {
+        layout
+            .as_f64()
+            .is_none_or(|value| !(1.0..=26.0).contains(&value))
+    }) {
+        return Err(McpError::invalid_params(
+            "layout must be between 1 and 26",
+            None,
+        ));
+    }
+    let request = serde_json::to_value(changes)
+        .map_err(|_| McpError::internal_error("live-view changes could not be encoded", None))?;
+    if request.to_string().len() > 1024 * 1024 {
+        return Err(McpError::invalid_params(
+            "live-view request exceeds the 1 MiB input budget",
+            None,
+        ));
+    }
+    Ok(request)
+}
+
+fn requested_json_matches(requested: &Value, observed: &Value) -> bool {
+    match (requested, observed) {
+        (Value::Number(wanted), Value::Number(actual)) => numbers_equivalent(wanted, actual),
+        (Value::Array(wanted), Value::Array(actual)) => {
+            wanted.len() == actual.len()
+                && wanted
+                    .iter()
+                    .zip(actual)
+                    .all(|(wanted, actual)| requested_json_matches(wanted, actual))
+        }
+        (Value::Object(wanted), Value::Object(actual)) => wanted.iter().all(|(name, value)| {
+            actual
+                .get(name)
+                .is_some_and(|observed| requested_json_matches(value, observed))
+        }),
+        _ => requested == observed,
+    }
+}
+
+fn numbers_equivalent(wanted: &Number, actual: &Number) -> bool {
+    if wanted == actual {
+        return true;
+    }
+    if wanted.is_f64() == actual.is_f64() {
+        return false;
+    }
+    let integer = if wanted.is_f64() { actual } else { wanted };
+    let exactly_representable = integer
+        .as_i64()
+        .is_some_and(|value| value.unsigned_abs() <= (1_u64 << 53))
+        || integer.as_u64().is_some_and(|value| value <= (1_u64 << 53));
+    exactly_representable && wanted.as_f64() == actual.as_f64()
+}
+
+fn liveview_configure_result(
+    mut output: ProtectLiveviewsConfigureOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &ProtectLiveviewsConfigureOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(requested) = output.requested.take()
+    {
+        output.requested_in_content = Some(true);
+        let requested = serde_json::to_value(requested).map_err(|_| {
+            McpError::internal_error("live-view changes could not be encoded", None)
+        })?;
+        content.push(ContentBlock::text(format!("requested: {requested}")));
+    }
+    if exceeds(&output)?
+        && let Some(before) = output.before.take()
+    {
+        output.before_in_content = Some(true);
+        content.push(ContentBlock::text(format!("before: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(response) = output.response.take()
+    {
+        output.response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("response: {response}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn guest_validation_error(response: BoundedMessage, diagnostic: &'static str) -> ApiError {
     ApiError::DecodeResponse {
         response,
@@ -9545,6 +9840,22 @@ mod tests {
     }
 
     #[test]
+    fn liveview_readback_compares_large_integers_exactly() {
+        assert!(super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":10}]}),
+            &json!({"slots":[{"cycleInterval":10.0,"futureField":true}]})
+        ));
+        assert!(!super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_993_u64}]}),
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_992_u64}]})
+        ));
+        assert!(!super::requested_json_matches(
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_993_u64}]}),
+            &json!({"slots":[{"cycleInterval":9_007_199_254_740_992.0}]})
+        ));
+    }
+
+    #[test]
     fn unknown_argument_fields_are_rejected() {
         let mut params = CallToolRequestParams::default();
         params.name = "network.overview".into();
@@ -9775,6 +10086,9 @@ mod tests {
         // A viewer assignment is stable when repeated; device names and
         // returned configuration may be sensitive.
         ("protect.viewers.settings.update", true, true, true),
+        // Creating another view can have another effect; layouts and camera
+        // assignments can contain sensitive configuration.
+        ("protect.liveviews.configure", false, true, true),
         // Repeating a stream creation or removal, or opening another audio
         // session, can have another upstream effect.
         ("cameras.streams.update", false, false, true),
