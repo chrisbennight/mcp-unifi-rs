@@ -1315,6 +1315,36 @@ struct RadiusProfilesListOutput {
     next_offset: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WifiBroadcastsListInput {
+    /// Zero-based offset into the controller's broadcast list.
+    #[serde(default)]
+    offset: u64,
+    /// Broadcasts per page, 1-200.
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct WifiBroadcastsListOutput {
+    broadcasts: Vec<Map<String, Value>>,
+    offset: u64,
+    limit: u64,
+    count: u64,
+    total_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WifiBroadcastsStatusInput {
+    /// Official Wi-Fi broadcast id from `wifi.broadcasts.list`.
+    broadcast_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum NetworksSection {
@@ -2338,6 +2368,12 @@ impl ToolSpec {
             ToolKind::RadiusProfilesList => {
                 tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
             }
+            ToolKind::WifiBroadcastsList => {
+                tool::<WifiBroadcastsListInput, WifiBroadcastsListOutput>(self)
+            }
+            ToolKind::WifiBroadcastsStatus => {
+                tool::<WifiBroadcastsStatusInput, Map<String, Value>>(self)
+            }
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraStatusInput, CameraView>(self),
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
@@ -2598,6 +2634,8 @@ impl UnifiMcp {
             ToolKind::FirewallRead => self.firewall_read(params).await,
             ToolKind::NetworksRead => self.networks_read(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
+            ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
+            ToolKind::WifiBroadcastsStatus => self.wifi_broadcasts_status(params).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
@@ -4120,6 +4158,96 @@ impl UnifiMcp {
             total_count: page.total_count,
             next_offset: (next < page.total_count).then_some(next),
         })
+    }
+
+    async fn wifi_broadcasts_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<WifiBroadcastsListInput>(params)?;
+        if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let site_id = self.site_id().await?;
+        let page = self
+            .integration()
+            .wifi_broadcasts(
+                &site_id,
+                PageRequest {
+                    offset: input.offset,
+                    limit: u32::from(input.limit),
+                },
+            )
+            .await
+            .map_err(api_error)?;
+        let row_count = page.data.len() as u64;
+        if page.offset != input.offset
+            || page.limit == 0
+            || page.limit > u64::from(input.limit)
+            || row_count > page.limit
+            || page.count != row_count
+        {
+            return Err(McpError::internal_error(
+                format!(
+                    "Wi-Fi broadcast page reported offset {}, limit {}, count {}, and {} rows for requested offset {} and limit {}",
+                    page.offset, page.limit, page.count, row_count, input.offset, input.limit
+                ),
+                None,
+            ));
+        }
+        let next = input
+            .offset
+            .checked_add(row_count)
+            .ok_or_else(|| McpError::internal_error("Wi-Fi broadcast offset overflow", None))?;
+        if next > page.total_count {
+            return Err(McpError::internal_error(
+                format!(
+                    "Wi-Fi broadcast page through offset {next} exceeds reported total {}",
+                    page.total_count
+                ),
+                None,
+            ));
+        }
+        if next < page.total_count && page.data.is_empty() {
+            return Err(McpError::internal_error(
+                format!(
+                    "Wi-Fi broadcast page at offset {} returned no rows before reported total {}",
+                    input.offset, page.total_count
+                ),
+                None,
+            ));
+        }
+        structured(WifiBroadcastsListOutput {
+            broadcasts: page.data,
+            offset: page.offset,
+            limit: page.limit,
+            count: page.count,
+            total_count: page.total_count,
+            next_offset: (next < page.total_count).then_some(next),
+        })
+    }
+
+    async fn wifi_broadcasts_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<WifiBroadcastsStatusInput>(params)?;
+        if input.broadcast_id.trim().is_empty()
+            || input.broadcast_id.len() > 256
+            || matches!(input.broadcast_id.as_str(), "." | "..")
+        {
+            return Err(McpError::invalid_params(
+                "broadcastId must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .wifi_broadcast(&site_id, &input.broadcast_id)
+            .await
+            .map_err(api_error)?;
+        structured(record)
     }
 
     /// Authorize one client for guest access, previewing unless the caller

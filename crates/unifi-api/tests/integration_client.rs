@@ -89,6 +89,57 @@ async fn radius_profile_pages_keep_the_controllers_complete_records() {
 }
 
 #[tokio::test]
+async fn wifi_broadcast_list_and_detail_preserve_controller_fields() {
+    let server = MockServer::start().await;
+    let row = serde_json::json!({
+        "id": "wifi-1", "type": "STANDARD", "name": "Studio",
+        "securityConfiguration": {"type": "WPA2_ENTERPRISE", "radiusConfiguration": {"profileId": "radius-1"}},
+        "controllerExtension": {"value": "from-controller"}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/site-1/wifi/broadcasts")))
+        .and(header("X-API-KEY", API_KEY))
+        .and(query_param("offset", "1"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 1, "limit": 1, "count": 1, "totalCount": 2, "data": [row.clone()]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{PREFIX}/sites/site-1/wifi/broadcasts/wifi-1"
+        )))
+        .and(header("X-API-KEY", API_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(row.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let page = client
+        .wifi_broadcasts(
+            "site-1",
+            PageRequest {
+                offset: 1,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("Wi-Fi broadcasts");
+    assert_eq!(
+        page.data[0]["securityConfiguration"]["radiusConfiguration"]["profileId"],
+        "radius-1"
+    );
+    let detail = client
+        .wifi_broadcast("site-1", "wifi-1")
+        .await
+        .expect("Wi-Fi broadcast detail");
+    assert_eq!(detail["controllerExtension"]["value"], "from-controller");
+}
+
+#[tokio::test]
 async fn device_detail_decodes_port_and_radio_tables() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

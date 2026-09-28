@@ -16,7 +16,8 @@ these names, descriptions, and classifications; this page explains them.
 
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read`, `networks.read`, `radius_profiles.list`, and Protect reads.
+`firewall.read`, `networks.read`, `radius_profiles.list`, the official Wi-Fi
+broadcast reads, and Protect reads.
 The gateway decides who can receive these controller values.
 
 ### `network.overview`
@@ -106,6 +107,16 @@ the controller returned, including the id needed for enterprise Wi-Fi setup.
 The result includes the controller's page metadata and `nextOffset` until the
 list is complete. An over-budget result fails explicitly; lower `limit` to
 continue with smaller pages.
+
+### `wifi.broadcasts.list` and `wifi.broadcasts.status`
+
+These tools use the [official Network Wi-Fi broadcast API](https://developer.ui.com/network/v10.4.57/getwifibroadcastpage).
+`wifi.broadcasts.list` accepts `offset` and `limit` (1-200, default 50),
+returns complete controller fields for each selected row, and supplies
+`nextOffset` until the list is complete. `wifi.broadcasts.status` accepts a
+`broadcastId` from that list and returns its complete controller record,
+including security and network configuration. An over-budget list fails
+explicitly; lower `limit` to receive smaller pages.
 
 ### `wifi.diagnose`
 
