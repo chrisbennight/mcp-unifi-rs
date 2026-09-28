@@ -20,7 +20,8 @@ impl BoundedMessage {
 
     /// Preserve an accepted controller body. Non-UTF-8 bodies are encoded so
     /// their original bytes remain available to the caller.
-    pub(crate) fn from_controller_bytes(bytes: &[u8]) -> Self {
+    #[must_use]
+    pub fn from_controller_bytes(bytes: &[u8]) -> Self {
         debug_assert!(bytes.len() <= crate::http::MAXIMUM_RESPONSE_BYTES);
         match std::str::from_utf8(bytes) {
             Ok(text) => Self(text.to_owned()),

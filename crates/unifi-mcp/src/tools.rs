@@ -3205,8 +3205,7 @@ impl UnifiMcp {
                 }));
             }
         };
-        let public = protect.cameras().await.map_err(api_error)?;
-        reject_duplicate_camera_ids(&public)?;
+        let (public, public_response) = protect.cameras_with_response().await.map_err(api_error)?;
 
         let local = if scope == CameraInventoryScope::Public {
             None
@@ -3215,22 +3214,23 @@ impl UnifiMcp {
         };
         let mut local_camera_inventory = None;
         let mut local_error = None;
+        let mut local_response = None;
         let local_bootstrap = if let Some(local) = local {
             match scope {
                 CameraInventoryScope::Public => None,
                 CameraInventoryScope::CameraNames => {
-                    match local.protect_camera_inventory().await {
-                        Ok(cameras) => {
-                            reject_duplicate_local_camera_ids(&cameras)?;
+                    match local.protect_camera_inventory_with_response().await {
+                        Ok((cameras, response)) => {
+                            local_response = Some(response);
                             local_camera_inventory = Some(cameras);
                         }
                         Err(error) => local_error = Some(error),
                     }
                     None
                 }
-                CameraInventoryScope::Full => match local.protect_bootstrap().await {
-                    Ok(bootstrap) => {
-                        reject_duplicate_local_camera_ids(&bootstrap.cameras)?;
+                CameraInventoryScope::Full => match local.protect_bootstrap_with_response().await {
+                    Ok((bootstrap, response)) => {
+                        local_response = Some(response);
                         Some(bootstrap)
                     }
                     Err(error) => {
@@ -3267,12 +3267,27 @@ impl UnifiMcp {
             (None, true) => LocalEnrichmentState::Unavailable,
             (None, false) => LocalEnrichmentState::NotConfigured,
         };
-        reject_conflicting_camera_identity(&public, &local_by_id)?;
+        if let Some(local_response) = local_response.as_deref() {
+            reject_conflicting_camera_identity(
+                &public,
+                &local_by_id,
+                &public_response,
+                local_response,
+            )?;
+        }
         let public_nvr = if scope == CameraInventoryScope::Full
             && let Some(local) = local_bootstrap.as_ref().map(|value| &value.nvr)
         {
-            let public_nvr = protect.nvr().await.map_err(api_error)?;
-            reject_conflicting_recorder_identity(&public_nvr, local)?;
+            let (public_nvr, nvr_response) =
+                protect.nvr_with_response().await.map_err(api_error)?;
+            reject_conflicting_recorder_identity(
+                &public_nvr,
+                local,
+                &nvr_response,
+                local_response
+                    .as_deref()
+                    .expect("local bootstrap response retained"),
+            )?;
             Some(public_nvr)
         } else {
             None
@@ -8116,33 +8131,11 @@ fn protect_capabilities(
     }
 }
 
-fn reject_duplicate_camera_ids(
-    cameras: &[unifi_api::protect::ProtectCamera],
-) -> Result<(), McpError> {
-    let mut seen = std::collections::BTreeSet::new();
-    if cameras.iter().any(|camera| !seen.insert(&camera.id)) {
-        return Err(McpError::internal_error(
-            "Protect public camera inventory contains duplicate ids",
-            None,
-        ));
-    }
-    Ok(())
-}
-
-fn reject_duplicate_local_camera_ids(cameras: &[ProtectLocalCamera]) -> Result<(), McpError> {
-    let mut seen = std::collections::BTreeSet::new();
-    if cameras.iter().any(|camera| !seen.insert(&camera.id)) {
-        return Err(McpError::internal_error(
-            "Protect local camera inventory contains duplicate ids",
-            None,
-        ));
-    }
-    Ok(())
-}
-
 fn reject_conflicting_camera_identity(
     public: &[ProtectCamera],
     local: &BTreeMap<&str, &ProtectLocalCamera>,
+    public_response: &[u8],
+    local_response: &[u8],
 ) -> Result<(), McpError> {
     // One physical device can expose multiple logical camera records, so its
     // GUID or MAC is not an inventory-wide unique key. The documented camera
@@ -8154,13 +8147,28 @@ fn reject_conflicting_camera_identity(
                 || conflicting_optional_identity(camera.mac.as_deref(), local.mac.as_deref())
         })
     }) {
-        return Err(conflicting_camera_identity_error());
+        return Err(conflicting_protect_identity_error(
+            "camera",
+            public_response,
+            local_response,
+        ));
     }
     Ok(())
 }
 
-fn conflicting_camera_identity_error() -> McpError {
-    McpError::internal_error("Protect public and local camera identities conflict", None)
+fn conflicting_protect_identity_error(
+    kind: &str,
+    public_response: &[u8],
+    local_response: &[u8],
+) -> McpError {
+    McpError::internal_error(
+        format!(
+            "public Protect controller response: {}; local Protect controller response: {}; validation error: Protect public and local {kind} identities conflict",
+            BoundedMessage::from_controller_bytes(public_response),
+            BoundedMessage::from_controller_bytes(local_response),
+        ),
+        None,
+    )
 }
 
 fn conflicting_optional_identity(public: Option<&str>, local: Option<&str>) -> bool {
@@ -8186,14 +8194,17 @@ fn local_inventory_error(error: Option<&ApiError>, fallback: &'static str) -> Mc
 fn reject_conflicting_recorder_identity(
     public: &ProtectNvr,
     local: &ProtectLocalNvr,
+    public_response: &[u8],
+    local_response: &[u8],
 ) -> Result<(), McpError> {
     if local.id != public.id
         || conflicting_optional_identity(public.guid.as_deref(), local.guid.as_deref())
         || conflicting_optional_identity(public.mac.as_deref(), local.mac.as_deref())
     {
-        return Err(McpError::internal_error(
-            "Protect public and local recorder identities conflict",
-            None,
+        return Err(conflicting_protect_identity_error(
+            "recorder",
+            public_response,
+            local_response,
         ));
     }
     Ok(())

@@ -248,6 +248,13 @@ If the optional local inventory read fails, `cameras.search` and
 `localError`. Requests that need the missing local data return that error.
 If the local bootstrap fails camera or recorder validation, that error includes
 the complete accepted bootstrap body and the field that failed validation.
+Duplicate public camera ids return the complete accepted inventory response
+with the identity diagnostic. Duplicate local ids leave public inventory
+available and put the complete local response in
+`capabilities.localUnavailableReason`; a request requiring local details
+returns that error directly. If public and local camera or recorder identities
+conflict, the error includes both accepted source responses so the discrepancy
+can be inspected without a second request.
 
 `cameras.snapshot` fetches a JPEG from the official Protect API by camera id
 or exact reported name. It returns MCP image content plus small structured
