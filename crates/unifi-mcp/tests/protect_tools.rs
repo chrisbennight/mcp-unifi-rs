@@ -2391,6 +2391,46 @@ async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_r
 }
 
 #[tokio::test]
+async fn malformed_local_bootstrap_reaches_camera_results_and_errors() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let mut bootstrap = sample_bootstrap();
+    bootstrap["cameras"][0]["modelKey"] = serde_json::json!("nvr");
+    bootstrap["padding"] = serde_json::json!("x".repeat(700));
+    bootstrap["z_controller_field"] = serde_json::json!("original-bootstrap-tail");
+    let original_body = bootstrap.to_string();
+    local_console_with(&server, bootstrap).await;
+    let handler = handler_with_events(&server);
+
+    let output = handler
+        .call(&call("cameras.search", &serde_json::json!({})), None)
+        .await
+        .expect("public camera inventory")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["capabilities"]["localEnrichment"], "unavailable");
+    assert!(
+        output["capabilities"]["localUnavailableReason"]
+            .as_str()
+            .expect("local error")
+            .contains(&original_body)
+    );
+
+    let error = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({"camera": "cam-front", "includeDetails": true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("requested local details");
+    assert!(error.message.contains(&original_body), "{}", error.message);
+    assert!(error.message.contains("cameras.modelKey"));
+}
+
+#[tokio::test]
 async fn a_console_without_the_integration_api_is_refused_by_every_camera_tool() {
     let server = MockServer::start().await;
     // The console answers, and has no integration API at this path.
