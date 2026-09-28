@@ -2407,6 +2407,8 @@ struct StatsQueryOutput {
     source_errors: Vec<StatsSourceError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_errors_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity_in_content: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -5702,6 +5704,7 @@ impl UnifiMcp {
             activity: None,
             source_errors: Vec::new(),
             source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
@@ -5710,11 +5713,18 @@ impl UnifiMcp {
         top: u16,
         activity_response: Option<ApiError>,
     ) -> Result<CallToolResult, McpError> {
-        let report = self
-            .legacy()
-            .dpi_by_application(self.legacy_site())
-            .await
-            .map_err(api_error)?;
+        let report = match self.legacy().dpi_by_application(self.legacy_site()).await {
+            Ok(report) => report,
+            Err(error) => {
+                return Err(match activity_response {
+                    Some(activity) => McpError::internal_error(
+                        format!("activity source: {activity}; dpi source: {error}"),
+                        None,
+                    ),
+                    None => api_error(error),
+                });
+            }
+        };
         let mut source_errors: Vec<StatsSourceError> = activity_response
             .into_iter()
             .map(|error| StatsSourceError {
@@ -5754,6 +5764,7 @@ impl UnifiMcp {
                 activity: None,
                 source_errors,
                 source_errors_in_content: None,
+                activity_in_content: None,
             });
         }
         let status = match (
@@ -5796,6 +5807,7 @@ impl UnifiMcp {
             activity: None,
             source_errors,
             source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
@@ -8198,23 +8210,37 @@ pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpE
     Ok(CallToolResult::structured(value))
 }
 
-/// Keep a useful traffic report structured when a controller error is too
-/// large to fit beside it. The complete source errors remain in content.
+/// Keep the structured traffic summary bounded while preserving complete
+/// source errors and, when necessary, the requested Activity page in content.
 fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    let mut source_errors_text = None;
     if value.to_string().len() > MAXIMUM_RESULT_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("sourceErrors")
     {
         fields.insert("sourceErrorsInContent".to_owned(), Value::Bool(true));
-        let mut result = CallToolResult::structured(value);
-        result
-            .content
-            .push(ContentBlock::text(format!("sourceErrors: {errors}")));
-        return Ok(result);
+        let text = format!("sourceErrors: {errors}");
+        extra_content.push(ContentBlock::text(text.clone()));
+        source_errors_text = Some(text);
     }
-    Ok(CallToolResult::structured(value))
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(activity) = fields.remove("activity")
+    {
+        fields.insert("activityInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("activity: {activity}")));
+    }
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Some(errors) = source_errors_text
+    {
+        return Err(McpError::internal_error(errors, None));
+    }
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Preserve a secondary controller failure when its text cannot fit beside

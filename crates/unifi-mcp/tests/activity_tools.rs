@@ -334,6 +334,37 @@ async fn unsupported_activity_and_dpi_retain_both_controller_responses() {
 }
 
 #[tokio::test]
+async fn failed_dpi_fallback_retains_the_preceding_activity_response() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let activity_body = format!("activity missing: {}activity-tail", "a".repeat(700));
+    let dpi_body = format!("dpi failed: {}dpi-tail", "d".repeat(700));
+    Mock::given(method("GET"))
+        .and(path(TRAFFIC))
+        .respond_with(ResponseTemplate::new(404).set_body_string(activity_body.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/api/s/default/stat/sitedpi"))
+        .respond_with(ResponseTemplate::new(503).set_body_string(dpi_body.clone()))
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call("stats.query", &json!({"report":"dpiApplications"})),
+            None,
+        )
+        .await
+        .expect_err("DPI fallback failure");
+    assert!(error.message.contains(&format!(
+        "activity source: controller returned HTTP 404: {activity_body}"
+    )));
+    assert!(error.message.contains(&format!(
+        "dpi source: controller returned HTTP 503: {dpi_body}"
+    )));
+}
+
+#[tokio::test]
 async fn large_unsupported_graph_response_preserves_activity_and_error() {
     let server = MockServer::start().await;
     login_mock(&server).await;
@@ -366,6 +397,54 @@ async fn large_unsupported_graph_response_preserves_activity_and_error() {
         "unavailable"
     );
     assert_eq!(output["sourceErrorsInContent"], true);
+    assert!(result.content.iter().any(|content| {
+        matches!(content, rmcp::model::ContentBlock::Text(text) if text.text.contains(&graph_body))
+    }));
+}
+
+#[tokio::test]
+async fn large_activity_page_and_graph_error_both_reach_the_caller() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let mut report = fixture();
+    let mut clients = Vec::new();
+    for index in 0..200u16 {
+        let mut row = report["client_usage_by_app"][0].clone();
+        row["client"]["mac"] = json!(format!(
+            "02:00:00:00:{:02x}:{:02x}",
+            index / 256,
+            index % 256
+        ));
+        row["client"]["name"] = json!("n".repeat(240));
+        clients.push(row);
+    }
+    report["client_usage_by_app"] = json!(clients);
+    activity_mock(&server, report).await;
+    let graph_body = format!("graph missing: {}graph-tail", "g".repeat(700));
+    Mock::given(method("POST"))
+        .and(path(GRAPH))
+        .respond_with(ResponseTemplate::new(404).set_body_string(graph_body.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(WAN))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "meta":{"rc":"ok"}, "data":wan()
+        })))
+        .mount(&server)
+        .await;
+    let mut input = args("clientWanHistory");
+    input["limit"] = json!(200);
+    let result = handler_for(&server)
+        .call(&call("stats.query", &input), None)
+        .await
+        .expect("large activity page and graph error");
+    let output = result.structured_content.expect("structured summary");
+    assert_eq!(output["activityInContent"], true);
+    assert_eq!(output["sourceErrorsInContent"], true);
+    assert!(result.content.iter().any(|content| {
+        matches!(content, rmcp::model::ContentBlock::Text(text) if text.text.contains("02:00:00:00:00:c7"))
+    }));
     assert!(result.content.iter().any(|content| {
         matches!(content, rmcp::model::ContentBlock::Text(text) if text.text.contains(&graph_body))
     }));

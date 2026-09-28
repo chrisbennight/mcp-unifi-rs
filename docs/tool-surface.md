@@ -187,7 +187,9 @@ graph, and legacy DPI requests that returned 404 or 405. A console-family
 decision with no request has no controller response. If the error text exceeds
 the structured result budget, `sourceErrorsInContent` points to the complete
 errors in an additional content block while the available report remains in
-the structured result.
+the structured result. When the requested Activity page itself exceeds that
+budget, `activityInContent` points to its complete data in another content
+block; the structured result keeps coverage and source information.
 
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.

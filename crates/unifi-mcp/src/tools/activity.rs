@@ -220,6 +220,7 @@ impl UnifiMcp {
                 })
                 .collect(),
             source_errors_in_content: None,
+            activity_in_content: None,
         })
     }
 
@@ -466,5 +467,6 @@ fn unavailable(
             })
             .collect(),
         source_errors_in_content: None,
+        activity_in_content: None,
     })
 }
