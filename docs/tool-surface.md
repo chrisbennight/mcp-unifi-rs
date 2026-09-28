@@ -267,6 +267,9 @@ the write. The official doorbell LCD message setting requires its own typed
 message and asset workflow and is not accepted by this tool.
 When the read-back fails, `readbackError` carries the controller response
 alongside the accepted patch response.
+If an accepted patch response names another camera or reports a different
+resource type, the error includes the complete controller body and the field
+that did not match.
 
 `cameras.ptz.control` previews or runs a preset move, patrol start, or patrol
 stop for one camera. A preset slot of `-1` means home; patrol slots are `0` to

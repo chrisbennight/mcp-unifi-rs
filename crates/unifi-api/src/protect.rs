@@ -620,16 +620,18 @@ impl ProtectClient {
         let request = self
             .request(Method::PATCH, &["cameras", camera_id])?
             .json(patch);
-        let camera: ProtectCamera = self
-            .send_json_once(request, "cameras.settings.update")
+        let (camera, bytes): (ProtectCamera, Vec<u8>) = self
+            .send_json_once_with_response(request, "cameras.settings.update")
             .await?;
-        validate_model_key("cameras.settings.update", &camera.model_key, "camera")?;
+        validate_model_key("cameras.settings.update", &camera.model_key, "camera")
+            .map_err(|error| error.with_controller_response(&bytes))?;
         if camera.id != camera_id {
             return Err(ApiError::SchemaMismatch {
                 endpoint: "cameras.settings.update",
                 path: BoundedMessage::new("id"),
                 response: None,
-            });
+            }
+            .with_controller_response(&bytes));
         }
         Ok(camera)
     }
@@ -872,6 +874,16 @@ impl ProtectClient {
         request: RequestBuilder,
         endpoint: &'static str,
     ) -> Result<T, ApiError> {
+        self.send_json_once_with_response(request, endpoint)
+            .await
+            .map(|(value, _)| value)
+    }
+
+    async fn send_json_once_with_response<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        endpoint: &'static str,
+    ) -> Result<(T, Vec<u8>), ApiError> {
         let response = self.send(request, endpoint).await?;
         let status = response.status().as_u16();
         let bytes = http::read_bounded_body(response)
@@ -883,9 +895,10 @@ impl ProtectClient {
             response_bytes = bytes.len(),
             "Protect response received"
         );
-        decode_json(endpoint, &bytes).inspect_err(|error| {
+        let value = decode_json(endpoint, &bytes).inspect_err(|error| {
             log_decode_failure(endpoint, status, bytes.len(), error);
-        })
+        })?;
+        Ok((value, bytes))
     }
 
     fn request(&self, method: Method, segments: &[&str]) -> Result<RequestBuilder, ApiError> {
