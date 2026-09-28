@@ -41,6 +41,8 @@ pub enum ToolKind {
     WifiBroadcastsStatus,
     CamerasSearch,
     CamerasStatus,
+    ProtectDevicesList,
+    ProtectDevicesStatus,
     CamerasSettingsRead,
     CamerasSettingsUpdate,
     CamerasSnapshot,
@@ -101,6 +103,8 @@ impl ToolKind {
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::ProtectDevicesList
+            | Self::ProtectDevicesStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSnapshot
             | Self::CamerasStreamsList
@@ -120,6 +124,8 @@ impl ToolKind {
         match self {
             Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::ProtectDevicesList
+            | Self::ProtectDevicesStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
@@ -369,6 +375,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          cameras.snapshot to fetch an image.",
     ),
     sensitive_read_spec(
+        ToolKind::ProtectDevicesList,
+        "protect.devices.list",
+        "Page through full controller records for one documented non-camera Protect device family: lights, sensors, chimes, sirens, fobs, relays, speakers, bridges, link stations, or alarm hubs. Choose kind, offset, and limit.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectDevicesStatus,
+        "protect.devices.status",
+        "Read the complete controller record for one non-camera Protect device by documented family and exact id.",
+    ),
+    sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
         "Read one Protect camera's documented name, overlay, LED, microphone volume, video mode, HDR, and smart detection settings by id or exact name.",
@@ -615,6 +631,8 @@ mod tests {
         ToolKind::WifiBroadcastsStatus,
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
+        ToolKind::ProtectDevicesList,
+        ToolKind::ProtectDevicesStatus,
         ToolKind::CamerasSettingsRead,
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
@@ -661,6 +679,8 @@ mod tests {
                 | ToolKind::WifiBroadcastsStatus
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
+                | ToolKind::ProtectDevicesList
+                | ToolKind::ProtectDevicesStatus
                 | ToolKind::CamerasSettingsRead
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
@@ -718,6 +738,8 @@ mod tests {
             [
                 "cameras.search",
                 "cameras.status",
+                "protect.devices.list",
+                "protect.devices.status",
                 "cameras.settings.read",
                 "cameras.settings.update",
                 "cameras.snapshot",

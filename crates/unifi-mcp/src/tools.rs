@@ -31,8 +31,8 @@ use unifi_api::{
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectCameraSettingsPatch,
-        ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera, ProtectLocalNvr,
-        ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
+        ProtectDeviceFamily, ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera,
+        ProtectLocalNvr, ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
         ProtectSmartDetectSettings, ProtectStreamQuality, ProtectStreamUrls,
         ProtectTalkbackSession,
     },
@@ -457,6 +457,75 @@ struct CameraStatusInput {
     /// Top-level fields to include from the local bootstrap camera record.
     /// Use this to keep the response small when only a few fields are needed.
     detail_fields: Option<Vec<String>>,
+}
+
+/// Documented non-camera Protect resources served through fixed API paths.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectDeviceKind {
+    Light,
+    Sensor,
+    Chime,
+    Siren,
+    Fob,
+    Relay,
+    Speaker,
+    Bridge,
+    LinkStation,
+    AlarmHub,
+}
+
+impl From<ProtectDeviceKind> for ProtectDeviceFamily {
+    fn from(kind: ProtectDeviceKind) -> Self {
+        match kind {
+            ProtectDeviceKind::Light => Self::Light,
+            ProtectDeviceKind::Sensor => Self::Sensor,
+            ProtectDeviceKind::Chime => Self::Chime,
+            ProtectDeviceKind::Siren => Self::Siren,
+            ProtectDeviceKind::Fob => Self::Fob,
+            ProtectDeviceKind::Relay => Self::Relay,
+            ProtectDeviceKind::Speaker => Self::Speaker,
+            ProtectDeviceKind::Bridge => Self::Bridge,
+            ProtectDeviceKind::LinkStation => Self::LinkStation,
+            ProtectDeviceKind::AlarmHub => Self::AlarmHub,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectDevicesListInput {
+    kind: ProtectDeviceKind,
+    /// Zero-based offset into the controller's inventory for this family.
+    #[serde(default)]
+    offset: usize,
+    /// Records per page, 1-200.
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectDevicesListOutput {
+    kind: ProtectDeviceKind,
+    devices: Vec<Value>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectDevicesStatusInput {
+    kind: ProtectDeviceKind,
+    device_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectDevicesStatusOutput {
+    kind: ProtectDeviceKind,
+    device: Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2449,6 +2518,12 @@ impl ToolSpec {
             }
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraStatusInput, CameraView>(self),
+            ToolKind::ProtectDevicesList => {
+                tool::<ProtectDevicesListInput, ProtectDevicesListOutput>(self)
+            }
+            ToolKind::ProtectDevicesStatus => {
+                tool::<ProtectDevicesStatusInput, ProtectDevicesStatusOutput>(self)
+            }
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -2711,6 +2786,8 @@ impl UnifiMcp {
             ToolKind::WifiBroadcastsStatus => self.wifi_broadcasts_status(params).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
+            ToolKind::ProtectDevicesList => self.protect_devices_list(params).await,
+            ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
@@ -3302,6 +3379,56 @@ impl UnifiMcp {
             },
             inventory.local_error.as_ref(),
         )
+    }
+
+    async fn protect_devices_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectDevicesListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let devices = self
+            .protect()
+            .devices(input.kind.into())
+            .await
+            .map_err(api_error)?;
+        let total_count = devices.len();
+        let page: Vec<Value> = devices
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect();
+        let next = input.offset.saturating_add(page.len());
+        structured(ProtectDevicesListOutput {
+            kind: input.kind,
+            devices: page,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    async fn protect_devices_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectDevicesStatusInput>(params)?;
+        if input.device_id.is_empty() || input.device_id.len() > 256 {
+            return Err(McpError::invalid_params(
+                "deviceId must be 1-256 bytes",
+                None,
+            ));
+        }
+        let device = self
+            .protect()
+            .device(input.kind.into(), &input.device_id)
+            .await
+            .map_err(api_error)?;
+        structured(ProtectDevicesStatusOutput {
+            kind: input.kind,
+            device,
+        })
     }
 
     /// One camera by id or exact name.

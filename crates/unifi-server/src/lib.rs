@@ -90,12 +90,14 @@ mod tests {
         for (surface, name, url, bearer, other) in cases {
             let manifest = gateway_manifest(surface);
             for policy in tools_for_surface(surface) {
-                assert_eq!(manifest.matches(policy.name).count(), 1, "{}", policy.name);
+                let name_entry = format!("  - name: {}\n", policy.name);
+                assert_eq!(manifest.matches(&name_entry).count(), 1, "{}", policy.name);
                 let entry = format!("  - name: {}\n    risk: {}\n", policy.name, policy.risk);
                 assert!(manifest.contains(&entry), "{}", policy.name);
             }
             for policy in tools_for_surface(other) {
-                assert!(!manifest.contains(policy.name), "{}", policy.name);
+                let name_entry = format!("  - name: {}\n", policy.name);
+                assert!(!manifest.contains(&name_entry), "{}", policy.name);
             }
             assert!(manifest.contains(&format!("name: {name}\n")));
             assert!(manifest.contains("classification_mode: mcp_annotations"));
