@@ -1,0 +1,302 @@
+use std::{sync::Arc, time::Duration};
+
+use rmcp::model::CallToolRequestParams;
+use serde_json::{Value, json};
+use unifi_api::{ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, TlsMode};
+use unifi_mcp::UnifiMcp;
+use url::Url;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_json, method, path},
+};
+use zeroize::Zeroizing;
+
+const PREFIX: &str = "/proxy/network/integration/v1";
+const SITE_ID: &str = "9a3f0c62-3d11-4f9d-8b1a-7f4bb0d1c001";
+const POLICY_ID: &str = "f435b097-683e-4bc4-8d3a-453c968a48fb";
+
+fn handler_for(server: &MockServer) -> UnifiMcp {
+    let base_url = Url::parse(&server.uri()).expect("mock server URL");
+    let integration = IntegrationClient::new(&ControllerConfig {
+        name: "home".to_owned(),
+        base_url: base_url.clone(),
+        api_key: Zeroizing::new("test-key".to_owned()),
+        tls: TlsMode::SystemRoots,
+        timeout: Duration::from_secs(5),
+    })
+    .expect("integration client");
+    let legacy = LegacyClient::new(&LegacyConfig {
+        name: "home".to_owned(),
+        base_url,
+        username: "test-user".to_owned(),
+        password: Zeroizing::new("test-password".to_owned()),
+        tls: TlsMode::SystemRoots,
+        timeout: Duration::from_secs(5),
+    })
+    .expect("legacy client");
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
+}
+
+fn call(name: &str, arguments: Value) -> CallToolRequestParams {
+    let mut params = CallToolRequestParams::default();
+    params.name = name.to_owned().into();
+    params.arguments = Some(match arguments {
+        Value::Object(map) => map,
+        _ => panic!("object arguments"),
+    });
+    params
+}
+
+async fn mount_site(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn previews_cover_all_documented_dns_and_traffic_variants_without_writing() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let dns = [
+        json!({"type":"A_RECORD","enabled":true,"domain":"a.example","ipv4Address":"192.0.2.1","ttlSeconds":60}),
+        json!({"type":"AAAA_RECORD","enabled":true,"domain":"a.example","ipv6Address":"2001:db8::1","ttlSeconds":60}),
+        json!({"type":"CNAME_RECORD","enabled":true,"domain":"a.example","targetDomain":"b.example","ttlSeconds":60}),
+        json!({"type":"FORWARD_DOMAIN","enabled":true,"domain":"a.example","ipAddress":"192.0.2.1"}),
+        json!({"type":"MX_RECORD","enabled":true,"domain":"a.example","mailServerDomain":"mail.example","priority":10}),
+        json!({"type":"SRV_RECORD","enabled":true,"domain":"a.example","port":443,"priority":10,"protocol":"tcp","serverDomain":"host.example","service":"https","weight":5}),
+        json!({"type":"TXT_RECORD","enabled":true,"domain":"a.example","text":"v=spf1 -all"}),
+    ];
+    for policy in dns {
+        let result = handler
+            .call(
+                &call(
+                    "dns.policies.configure",
+                    json!({"operation":"create","policy":policy}),
+                ),
+                None,
+            )
+            .await
+            .expect("DNS preview")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["submitted"], false);
+        assert_eq!(result["requested"], policy);
+    }
+    let traffic = [
+        json!({"type":"IPV4_ADDRESSES","name":"v4","items":[{"type":"IP_ADDRESS","value":"192.0.2.1"},{"type":"IP_ADDRESS_RANGE","start":"192.0.2.1","stop":"192.0.2.10"},{"type":"SUBNET","value":"192.0.2.0/24"}]}),
+        json!({"type":"IPV6_ADDRESSES","name":"v6","items":[{"type":"IP_ADDRESS","value":"2001:db8::1"},{"type":"SUBNET","value":"2001:db8::/64"}]}),
+        json!({"type":"PORTS","name":"ports","items":[{"type":"PORT_NUMBER","value":443},{"type":"PORT_NUMBER_RANGE","start":8000,"stop":8100}]}),
+    ];
+    for list in traffic {
+        let result = handler
+            .call(
+                &call(
+                    "traffic.matching_lists.configure",
+                    json!({"operation":"create","list":list}),
+                ),
+                None,
+            )
+            .await
+            .expect("traffic preview")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["submitted"], false);
+        assert_eq!(result["requested"], list);
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn create_and_update_return_accepted_record_and_observed_record() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let policy = json!({"type":"A_RECORD","enabled":true,"domain":"a.example","ipv4Address":"192.0.2.1","ttlSeconds":60});
+    let accepted = json!({"id":POLICY_ID,"type":"A_RECORD","enabled":true,"domain":"a.example","ipv4Address":"192.0.2.1","ttlSeconds":60,"controllerExtension":{"owner":"upstream"}});
+    let route = format!("{PREFIX}/sites/{SITE_ID}/dns/policies");
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .and(body_json(policy.clone()))
+        .respond_with(ResponseTemplate::new(201).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .and(body_json(policy.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    for (operation, id, status) in [("create", None, 201), ("update", Some(POLICY_ID), 200)] {
+        let result = handler
+            .call(
+                &call(
+                    "dns.policies.configure",
+                    json!({"operation":operation,"id":id,"policy":policy,"confirm":true}),
+                ),
+                None,
+            )
+            .await
+            .expect("policy write")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["responseStatus"], status);
+        assert_eq!(result["accepted"], accepted);
+        assert_eq!(result["after"], accepted);
+        assert_eq!(result["verified"], true);
+    }
+}
+
+#[tokio::test]
+async fn delete_preserves_upstream_body_and_checks_absence() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/traffic-matching-lists/{POLICY_ID}");
+    Mock::given(method("DELETE"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller deletion accepted"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(404).set_body_string("controller says list absent"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "traffic.matching_lists.configure",
+                json!({"operation":"delete","id":POLICY_ID,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("delete accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["responseStatus"], 200);
+    assert_eq!(result["responseBody"], "controller deletion accepted");
+    assert_eq!(result["verifiedAbsent"], true);
+    assert!(
+        result["readbackError"]
+            .as_str()
+            .expect("upstream error")
+            .contains("controller says list absent")
+    );
+}
+
+#[tokio::test]
+async fn upstream_rejection_is_returned_without_retry_or_generic_replacement() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let list = json!({"type":"PORTS","name":"ports","items":[{"type":"PORT_NUMBER","value":443}]});
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/traffic-matching-lists"
+        )))
+        .and(body_json(list.clone()))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .set_body_string("upstream rejected list for a specific reason"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "traffic.matching_lists.configure",
+                json!({"operation":"create","list":list,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("controller rejection");
+    assert!(
+        error
+            .message
+            .contains("upstream rejected list for a specific reason")
+    );
+}
+
+#[tokio::test]
+async fn invalid_request_does_not_contact_controller() {
+    let server = MockServer::start().await;
+    let result = handler_for(&server)
+        .call(&call("traffic.matching_lists.configure", json!({"operation":"create","list":{"type":"PORTS","name":"ports","items":[{"type":"PORT_NUMBER","value":0}]},"confirm":true})), None)
+        .await;
+    assert!(
+        result
+            .expect_err("invalid port")
+            .message
+            .contains("1-65535")
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn large_accepted_record_remains_available_in_content() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let list = json!({"type":"PORTS","name":"ports","items":[{"type":"PORT_NUMBER","value":443}]});
+    let accepted = json!({"id":POLICY_ID,"type":"PORTS","name":"ports","items":[{"type":"PORT_NUMBER","value":443}],"controllerExtension":format!("{}controller-tail", "x".repeat(50_000))});
+    let route = format!("{PREFIX}/sites/{SITE_ID}/traffic-matching-lists");
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .and(body_json(list.clone()))
+        .respond_with(ResponseTemplate::new(201).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "traffic.matching_lists.configure",
+                json!({"operation":"create","list":list,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("large response");
+    let structured = result.structured_content.expect("structured");
+    assert_eq!(structured["acceptedInContent"], true);
+    assert_eq!(structured["afterInContent"], true);
+    assert!(
+        result
+            .content
+            .iter()
+            .any(|item| format!("{item:?}").contains("controller-tail"))
+    );
+}

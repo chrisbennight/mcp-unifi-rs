@@ -44,6 +44,8 @@ pub enum ToolKind {
     NetworkSwitchingDetail,
     NetworkPolicyList,
     NetworkPolicyDetail,
+    DnsPoliciesConfigure,
+    TrafficListsConfigure,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
     CamerasSearch,
@@ -105,6 +107,8 @@ impl ToolKind {
             | Self::DevicesControl
             | Self::DevicesAdopt
             | Self::DevicesRemove
+            | Self::DnsPoliciesConfigure
+            | Self::TrafficListsConfigure
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
@@ -216,6 +220,8 @@ impl ToolKind {
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
+            | Self::DnsPoliciesConfigure
+            | Self::TrafficListsConfigure
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
@@ -688,6 +694,22 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "network.policy.detail",
         "Read one complete DNS policy or traffic matching list by its official id and typed family selector.",
     ),
+    write_spec(
+        ToolKind::DnsPoliciesConfigure,
+        "dns.policies.configure",
+        "Preview or create, replace, or delete a DNS policy. Supports every documented A, AAAA, CNAME, MX, SRV, TXT, and forwarding variant. Returns the accepted controller record or status and body, with bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::TrafficListsConfigure,
+        "traffic.matching_lists.configure",
+        "Preview or create, replace, or delete an IPv4 address, IPv6 address, or port matching list with its documented item variants. Returns the accepted controller record or status and body, with bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::WifiBroadcastsList,
         "wifi.broadcasts.list",
@@ -855,6 +877,8 @@ mod tests {
         ToolKind::NetworkSwitchingDetail,
         ToolKind::NetworkPolicyList,
         ToolKind::NetworkPolicyDetail,
+        ToolKind::DnsPoliciesConfigure,
+        ToolKind::TrafficListsConfigure,
         ToolKind::WifiBroadcastsList,
         ToolKind::WifiBroadcastsStatus,
         ToolKind::CamerasSearch,
@@ -978,6 +1002,8 @@ mod tests {
                 | ToolKind::NetworkSwitchingDetail
                 | ToolKind::NetworkPolicyList
                 | ToolKind::NetworkPolicyDetail
+                | ToolKind::DnsPoliciesConfigure
+                | ToolKind::TrafficListsConfigure
                 | ToolKind::WifiBroadcastsList
                 | ToolKind::WifiBroadcastsStatus
                 | ToolKind::CamerasSearch

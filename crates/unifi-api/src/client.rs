@@ -370,6 +370,80 @@ impl IntegrationClient {
         self.get_json(&segments, &[]).await
     }
 
+    /// Create a DNS policy or traffic matching list. The complete accepted
+    /// record and HTTP status are retained; an ambiguous transport result is
+    /// never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or response fails.
+    pub async fn network_policy_create(
+        &self,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        body: &Value,
+    ) -> Result<(u16, Value), ApiError> {
+        self.network_policy_record_write(Method::POST, site_id, collection, None, body)
+            .await
+    }
+
+    /// Replace one DNS policy or traffic matching list by id. The complete
+    /// accepted record and HTTP status are retained; an ambiguous transport
+    /// result is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or response fails.
+    pub async fn network_policy_update(
+        &self,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        id: &str,
+        body: &Value,
+    ) -> Result<(u16, Value), ApiError> {
+        self.network_policy_record_write(Method::PUT, site_id, collection, Some(id), body)
+            .await
+    }
+
+    /// Delete one DNS policy or traffic matching list by id. The accepted
+    /// status and body are retained even though the API documents no success
+    /// body. An ambiguous transport result is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects the request.
+    pub async fn network_policy_delete(
+        &self,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        id: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let segments = policy_segments(site_id, collection, Some(id));
+        let response = self.send(self.request(Method::DELETE, &segments)?).await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
+    }
+
+    async fn network_policy_record_write(
+        &self,
+        method: Method,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        id: Option<&str>,
+        body: &Value,
+    ) -> Result<(u16, Value), ApiError> {
+        let segments = policy_segments(site_id, collection, id);
+        let response = self
+            .send(self.request(method, &segments)?.json(body))
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let record = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((status, record))
+    }
+
     /// RADIUS profiles available to wireless enterprise configurations.
     /// Each bounded page retains the fields the controller returned.
     ///
@@ -990,6 +1064,24 @@ impl IntegrationClient {
             message: bounded_error_message(response).await?,
         })
     }
+}
+
+fn policy_segments<'a>(
+    site_id: &'a str,
+    collection: NetworkPolicyCollection,
+    id: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut segments = vec!["sites", site_id];
+    match collection {
+        NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+        NetworkPolicyCollection::TrafficMatchingLists => {
+            segments.push("traffic-matching-lists");
+        }
+    }
+    if let Some(id) = id {
+        segments.push(id);
+    }
+    segments
 }
 
 fn page_query(page: PageRequest) -> [(&'static str, String); 2] {
