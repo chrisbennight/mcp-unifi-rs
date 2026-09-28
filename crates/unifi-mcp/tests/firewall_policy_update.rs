@@ -174,14 +174,16 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
 #[tokio::test]
 async fn policy_delete_rejects_an_empty_id_before_controller_io() {
     let server = MockServer::start().await;
-    let error = handler_for(&server)
-        .call(
-            &delete(&serde_json::json!({"policy": " ", "confirm": true})),
-            None,
-        )
-        .await
-        .expect_err("empty id");
-    assert!(error.message.contains("nonempty id"));
+    for id in [" ", ".", ".."] {
+        let error = handler_for(&server)
+            .call(
+                &delete(&serde_json::json!({"policy": id, "confirm": true})),
+                None,
+            )
+            .await
+            .expect_err("invalid id");
+        assert!(error.message.contains("non-dot id"), "{}", error.message);
+    }
 }
 
 /// The policy as it reads before the write, and again after.
@@ -257,6 +259,17 @@ async fn policy_delete_previews_scope_without_sending_delete() {
         .expect("structured");
     assert_eq!(output["applied"], false);
     assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
+    assert_eq!(output["preview"]["complete"], false);
+    assert!(
+        output["preview"]["omittedFields"]
+            .to_string()
+            .contains("schedule")
+    );
+    assert!(
+        output["preview"]["omittedFields"]
+            .to_string()
+            .contains("ipsecFilter")
+    );
 }
 
 #[tokio::test]

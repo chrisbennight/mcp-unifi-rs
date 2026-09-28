@@ -1688,11 +1688,21 @@ struct FirewallPoliciesDeleteInput {
 #[serde(rename_all = "camelCase")]
 struct FirewallPoliciesDeleteOutput {
     policy: PolicyView,
+    preview: PolicyPreviewCoverage,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified_absent: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct PolicyPreviewCoverage {
+    /// False if the controller record has fields the policy projection omits.
+    complete: bool,
+    omitted_fields: Vec<String>,
+    omitted_fields_truncated: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -4541,9 +4551,12 @@ impl UnifiMcp {
     ) -> Result<CallToolResult, McpError> {
         let started = tokio::time::Instant::now();
         let input = parse::<FirewallPoliciesDeleteInput>(params)?;
-        if input.policy.trim().is_empty() || input.policy.len() > 256 {
+        if input.policy.trim().is_empty()
+            || input.policy.len() > 256
+            || matches!(input.policy.as_str(), "." | "..")
+        {
             return Err(McpError::invalid_params(
-                "policy must be a nonempty id of at most 256 bytes",
+                "policy must be a nonempty, non-dot id of at most 256 bytes",
                 None,
             ));
         }
@@ -4563,6 +4576,7 @@ impl UnifiMcp {
         }
         let mut output = FirewallPoliciesDeleteOutput {
             policy: policy_view_from_record(&input.policy, &record),
+            preview: policy_preview_coverage(&record),
             applied: false,
             verified_absent: None,
             warnings: vec![
@@ -4570,6 +4584,12 @@ impl UnifiMcp {
                     .to_owned(),
             ],
         };
+        if !output.preview.complete {
+            output.warnings.push(
+                "this bounded preview omits policy fields, so its match description is incomplete"
+                    .to_owned(),
+            );
+        }
         if !input.confirm {
             return structured(output);
         }
@@ -6385,6 +6405,64 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
         source_port: endpoint("source", "port"),
         destination_zone_id: endpoint("destination", "zoneId"),
         destination_port: endpoint("destination", "port"),
+    }
+}
+
+/// Tell callers when the bounded policy projection leaves controller fields
+/// out. Field names are metadata; values stay in the typed projection.
+fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
+    const MODELED_TOP_LEVEL: &[&str] = &[
+        "id",
+        "name",
+        "enabled",
+        "action",
+        "index",
+        "ipProtocolScope",
+        "source",
+        "destination",
+    ];
+    const MODELED_ENDPOINT: &[&str] = &["zoneId", "port"];
+    const FIELD_LIMIT: usize = 16;
+    let mut omitted_fields = Vec::new();
+    let mut omitted_fields_truncated = false;
+    let mut add = |name: String| {
+        if omitted_fields.len() < FIELD_LIMIT {
+            omitted_fields.push(bounded_text(name));
+        } else {
+            omitted_fields_truncated = true;
+        }
+    };
+    for (name, value) in record {
+        if !MODELED_TOP_LEVEL.contains(&name.as_str()) {
+            add(name.clone());
+        } else if matches!(name.as_str(), "source" | "destination") {
+            if let Some(fields) = value.as_object() {
+                for (key, value) in fields {
+                    if !MODELED_ENDPOINT.contains(&key.as_str())
+                        || (!value.is_null() && !value.is_string())
+                    {
+                        add(format!("{name}.{key}"));
+                    }
+                }
+            } else if !value.is_null() {
+                add(name.clone());
+            }
+        } else if !value.is_null()
+            && match name.as_str() {
+                "enabled" => !value.is_boolean(),
+                "index" => value
+                    .as_u64()
+                    .is_none_or(|index| u32::try_from(index).is_err()),
+                _ => !value.is_string(),
+            }
+        {
+            add(name.clone());
+        }
+    }
+    PolicyPreviewCoverage {
+        complete: omitted_fields.is_empty() && !omitted_fields_truncated,
+        omitted_fields,
+        omitted_fields_truncated,
     }
 }
 
