@@ -27,8 +27,9 @@ trade the capability away to satisfy a stylistic or speculative concern.
 - Controller credentials (Integration API keys, local admin session
   credentials) are environment-injected, never logged, and never selectable
   by caller input. Do not create result fields from environment values.
-- Selected controller response fields, including credentials and error details, are
-  returned faithfully. The gateway owns disclosure and action policy.
+- Selected controller response fields, including credentials, and complete
+  accepted controller error bodies are returned faithfully. The gateway owns
+  disclosure and action policy.
 - Gateway `/mcp` requests require both the rotating gateway bearer and a
   verified gateway identity JWT. Its catalog owns risk classification and
   group authorization. Direct HTTP requires its separate rotating bearer;
