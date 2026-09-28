@@ -267,6 +267,48 @@ async fn ptz_posts_typed_actions_once_and_decodes_patrol_state() {
 }
 
 #[tokio::test]
+async fn camera_settings_patch_sends_only_typed_fields_and_decodes_camera() {
+    use unifi_api::protect::{ProtectCameraSettingsPatch, ProtectOsdSettings};
+
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/cameras/cam-1")))
+        .and(header("X-API-Key", API_KEY))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "videoMode": "highFps",
+            "osdSettings": {"isDateEnabled": false}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "cam-1", "modelKey": "camera", "name": "Front", "state": "CONNECTED",
+            "videoMode": "highFps", "osdSettings": {"isDateEnabled": false}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = client_for(&server)
+        .camera_settings_patch(
+            "cam-1",
+            &ProtectCameraSettingsPatch {
+                video_mode: Some("highFps".to_owned()),
+                osd_settings: Some(ProtectOsdSettings {
+                    is_date_enabled: Some(false),
+                    ..ProtectOsdSettings::default()
+                }),
+                ..ProtectCameraSettingsPatch::default()
+            },
+        )
+        .await
+        .expect("patch");
+    assert_eq!(response.video_mode.as_deref(), Some("highFps"));
+    assert_eq!(
+        response
+            .osd_settings
+            .and_then(|settings| settings.is_date_enabled),
+        Some(false)
+    );
+}
+
+#[tokio::test]
 async fn snapshot_fetches_a_bounded_jpeg_with_channel_and_quality() {
     let server = MockServer::start().await;
     let jpeg = jpeg_fixture();

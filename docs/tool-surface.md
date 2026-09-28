@@ -204,6 +204,16 @@ as text. The `channel` input chooses `main` (default) or `package`; the latter
 is for cameras with a package camera. `highQuality` requests 1080p or higher
 when available. A response above 4 MiB fails explicitly.
 
+`cameras.settings.read` returns the official camera name, on-screen overlay,
+LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
+`cameras.settings.update` patches only the named fields from that set. It
+previews by default and, when confirmed, returns the controller's action
+response and a separate read-back. `verified` requires the requested fields to
+match and the other modeled settings to stay unchanged. Invalid enum values,
+an empty change set, and out-of-range microphone volume are rejected before
+the write. The official doorbell LCD message setting requires its own typed
+message and asset workflow and is not accepted by this tool.
+
 `cameras.ptz.control` previews or runs a preset move, patrol start, or patrol
 stop for one camera. A preset slot of `-1` means home; patrol slots are `0` to
 `4`. Confirmed patrol actions read the reported active slot back and state
@@ -277,6 +287,7 @@ it.
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
+| `cameras.settings.update` | yes | no | yes |
 | `cameras.streams.update` | **no** | no | yes |
 | `cameras.talkback.start` | **no** | no | yes |
 

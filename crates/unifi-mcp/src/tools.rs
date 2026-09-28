@@ -31,9 +31,11 @@ use unifi_api::{
         Voucher, VoucherCreate, VoucherDetails, WlanConf, WlanPatch,
     },
     protect::{
-        ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
-        ProtectLocalCamera, ProtectLocalNvr, ProtectNvr, ProtectPatrolState, ProtectPtzCommand,
-        ProtectStreamQuality, ProtectStreamUrls, ProtectTalkbackSession,
+        ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectCameraSettingsPatch,
+        ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera, ProtectLocalNvr,
+        ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
+        ProtectSmartDetectSettings, ProtectStreamQuality, ProtectStreamUrls,
+        ProtectTalkbackSession,
     },
 };
 use zeroize::Zeroizing;
@@ -440,6 +442,130 @@ struct CamerasSearchInput {
 struct CameraSelectorInput {
     /// Camera id, exact reported name, or display name from `cameras.search`.
     camera: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraSettingsChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mic_volume: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    video_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hdr_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    osd_settings: Option<CameraOsdChanges>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    led_settings: Option<CameraLedChanges>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    smart_detect_settings: Option<CameraSmartDetectChanges>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraOsdChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_name_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_date_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_logo_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_debug_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay_location: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraLedChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    welcome_led: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flood_led: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraSmartDetectChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    object_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraSettingsUpdateInput {
+    camera: String,
+    changes: CameraSettingsChanges,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraSettingsOutput {
+    camera_id: String,
+    applied: bool,
+    requested: CameraSettingsChanges,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<CameraSettingsState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<CameraSettingsState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<CameraSettingsState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraSettingsState {
+    camera_id: String,
+    name: Option<String>,
+    mic_volume: Option<u8>,
+    video_mode: Option<String>,
+    hdr_type: Option<String>,
+    osd_settings: Option<CameraOsdChanges>,
+    led_settings: Option<CameraLedChanges>,
+    smart_detect_settings: Option<CameraSmartDetectChanges>,
+}
+
+impl From<ProtectCamera> for CameraSettingsState {
+    fn from(camera: ProtectCamera) -> Self {
+        Self {
+            camera_id: camera.id,
+            name: camera.name.map(bounded_text),
+            mic_volume: camera.mic_volume,
+            video_mode: camera.video_mode,
+            hdr_type: camera.hdr_type,
+            osd_settings: camera.osd_settings.map(|settings| CameraOsdChanges {
+                is_name_enabled: settings.is_name_enabled,
+                is_date_enabled: settings.is_date_enabled,
+                is_logo_enabled: settings.is_logo_enabled,
+                is_debug_enabled: settings.is_debug_enabled,
+                overlay_location: settings.overlay_location,
+            }),
+            led_settings: camera.led_settings.map(|settings| CameraLedChanges {
+                is_enabled: settings.is_enabled,
+                welcome_led: settings.welcome_led,
+                flood_led: settings.flood_led,
+            }),
+            smart_detect_settings: camera.smart_detect_settings.map(|settings| {
+                CameraSmartDetectChanges {
+                    object_types: settings.object_types,
+                    audio_types: settings.audio_types,
+                }
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2094,6 +2220,10 @@ impl ToolSpec {
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraSelectorInput, CameraView>(self),
+            ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
+            ToolKind::CamerasSettingsUpdate => {
+                tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
+            }
             ToolKind::CamerasSnapshot => tool::<CameraSnapshotInput, CameraSnapshotOutput>(self),
             ToolKind::CamerasPtzControl => tool::<CameraPtzInput, CameraPtzOutput>(self),
             ToolKind::CamerasStreamsList => {
@@ -2364,6 +2494,8 @@ impl UnifiMcp {
             ToolKind::NetworksRead => self.networks_read(params, principal).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
+            ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
+            ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
             ToolKind::CamerasPtzControl => self.cameras_ptz_control(params).await,
             ToolKind::CamerasStreamsList => self.cameras_streams_list(params).await,
@@ -2936,6 +3068,87 @@ impl UnifiMcp {
         let selector = camera_selector(&input.camera)?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
         structured(camera_by_selector(inventory, selector)?)
+    }
+
+    async fn cameras_settings_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraSelectorInput>(params)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera = self.protect().camera(&camera_id).await.map_err(api_error)?;
+        structured(CameraSettingsState::from(camera))
+    }
+
+    async fn cameras_settings_update(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<CameraSettingsUpdateInput>(params)?;
+        let patch = camera_settings_patch(&input.changes)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let mut output = CameraSettingsOutput {
+            camera_id: camera_id.clone(),
+            applied: false,
+            requested: input.changes,
+            before: None,
+            response: None,
+            after: None,
+            verified: None,
+            warnings: Vec::new(),
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+        let before = self.protect().camera(&camera_id).await.map_err(api_error)?;
+        output.before = Some(before.into());
+        let response = self
+            .protect()
+            .camera_settings_patch(&camera_id, &patch)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        output.response = Some(response.into());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+            .min(CAMERA_SETTINGS_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            None
+        } else {
+            tokio::time::timeout(budget, self.protect().camera(&camera_id))
+                .await
+                .ok()
+        };
+        match readback {
+            Some(Ok(after)) if after.id == camera_id => {
+                let after: CameraSettingsState = after.into();
+                output.verified = Some(camera_settings_match(
+                    &patch,
+                    output.before.as_ref().expect("recorded pre-write state"),
+                    &after,
+                ));
+                output.after = Some(after);
+            }
+            _ => {}
+        }
+        if output.verified != Some(true) {
+            output.warnings.push(
+                "the controller accepted the patch, but the requested settings were not verified"
+                    .to_owned(),
+            );
+        }
+        structured(output)
     }
 
     async fn cameras_snapshot(
@@ -5291,6 +5504,186 @@ fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<Came
     }
 }
 
+fn camera_settings_patch(
+    changes: &CameraSettingsChanges,
+) -> Result<ProtectCameraSettingsPatch, McpError> {
+    let raw = serde_json::to_value(changes)
+        .map_err(|_| McpError::internal_error("camera settings could not be encoded", None))?;
+    mutation::reject_redacted_input(&raw)?;
+    if changes.name.as_ref().is_some_and(|name| {
+        name.trim().is_empty() || name.chars().count() > 128 || name.len() > 512
+    }) {
+        return Err(McpError::invalid_params(
+            "camera name must be 1-128 characters and at most 512 bytes",
+            None,
+        ));
+    }
+    if changes
+        .mic_volume
+        .is_some_and(|volume| !(1..=100).contains(&volume))
+    {
+        return Err(McpError::invalid_params(
+            "micVolume must be between 1 and 100",
+            None,
+        ));
+    }
+    if changes.video_mode.as_deref().is_some_and(|mode| {
+        !matches!(
+            mode,
+            "default" | "highFps" | "sport" | "slowShutter" | "lprReflex" | "lprNoneReflex"
+        )
+    }) {
+        return Err(McpError::invalid_params("unsupported videoMode", None));
+    }
+    if changes
+        .hdr_type
+        .as_deref()
+        .is_some_and(|mode| !matches!(mode, "auto" | "on" | "off"))
+    {
+        return Err(McpError::invalid_params(
+            "hdrType must be auto, on, or off",
+            None,
+        ));
+    }
+    if changes.osd_settings.as_ref().is_some_and(|osd| {
+        osd.overlay_location.as_deref().is_some_and(|location| {
+            !matches!(
+                location,
+                "topLeft"
+                    | "topMiddle"
+                    | "topRight"
+                    | "bottomLeft"
+                    | "bottomMiddle"
+                    | "bottomRight"
+            )
+        })
+    }) {
+        return Err(McpError::invalid_params(
+            "unsupported overlayLocation",
+            None,
+        ));
+    }
+    if changes
+        .smart_detect_settings
+        .as_ref()
+        .is_some_and(invalid_smart_detection)
+    {
+        return Err(McpError::invalid_params(
+            "smart detection types must use the documented object and audio categories",
+            None,
+        ));
+    }
+    let patch = typed_camera_settings_patch(changes);
+    let value = serde_json::to_value(&patch)
+        .map_err(|_| McpError::internal_error("camera settings could not be encoded", None))?;
+    if value.as_object().is_none_or(serde_json::Map::is_empty)
+        || value.as_object().is_some_and(|fields| {
+            fields
+                .values()
+                .any(|value| value.as_object().is_some_and(serde_json::Map::is_empty))
+        })
+    {
+        return Err(McpError::invalid_params(
+            "changes must name at least one nonempty camera setting",
+            None,
+        ));
+    }
+    Ok(patch)
+}
+
+fn typed_camera_settings_patch(changes: &CameraSettingsChanges) -> ProtectCameraSettingsPatch {
+    ProtectCameraSettingsPatch {
+        name: changes.name.clone(),
+        mic_volume: changes.mic_volume,
+        video_mode: changes.video_mode.clone(),
+        hdr_type: changes.hdr_type.clone(),
+        osd_settings: changes.osd_settings.as_ref().map(|osd| ProtectOsdSettings {
+            is_name_enabled: osd.is_name_enabled,
+            is_date_enabled: osd.is_date_enabled,
+            is_logo_enabled: osd.is_logo_enabled,
+            is_debug_enabled: osd.is_debug_enabled,
+            overlay_location: osd.overlay_location.clone(),
+        }),
+        led_settings: changes.led_settings.as_ref().map(|led| ProtectLedSettings {
+            is_enabled: led.is_enabled,
+            welcome_led: led.welcome_led,
+            flood_led: led.flood_led,
+        }),
+        smart_detect_settings: changes.smart_detect_settings.as_ref().map(|smart| {
+            ProtectSmartDetectSettings {
+                object_types: smart.object_types.clone(),
+                audio_types: smart.audio_types.clone(),
+            }
+        }),
+    }
+}
+
+fn invalid_smart_detection(smart: &CameraSmartDetectChanges) -> bool {
+    smart.object_types.as_ref().is_some_and(|types| {
+        types.len() > 6
+            || types.iter().any(|kind| {
+                !matches!(
+                    kind.as_str(),
+                    "person" | "vehicle" | "package" | "licensePlate" | "face" | "animal"
+                )
+            })
+    }) || smart.audio_types.as_ref().is_some_and(|types| {
+        types.len() > 9
+            || types.iter().any(|kind| {
+                !matches!(
+                    kind.as_str(),
+                    "alrmSmoke"
+                        | "alrmCmonx"
+                        | "alrmSiren"
+                        | "alrmBabyCry"
+                        | "alrmSpeak"
+                        | "alrmBark"
+                        | "alrmBurglar"
+                        | "alrmCarHorn"
+                        | "alrmGlassBreak"
+                )
+            })
+    })
+}
+
+fn camera_settings_match(
+    patch: &ProtectCameraSettingsPatch,
+    before: &CameraSettingsState,
+    after: &CameraSettingsState,
+) -> bool {
+    let requested = serde_json::to_value(patch).expect("typed patch serializes");
+    let before = serde_json::to_value(before).expect("typed camera settings serialize");
+    let after = serde_json::to_value(after).expect("typed camera settings serialize");
+    camera_settings_values_match(Some(&requested), &before, &after)
+}
+
+fn camera_settings_values_match(requested: Option<&Value>, before: &Value, after: &Value) -> bool {
+    if let Some(Value::Object(fields)) = requested {
+        let Some(new) = after.as_object() else {
+            return false;
+        };
+        let old = before.as_object();
+        return fields.iter().all(|(key, wanted)| {
+            new.get(key).is_some_and(|observed| {
+                camera_settings_values_match(
+                    Some(wanted),
+                    old.and_then(|fields| fields.get(key))
+                        .unwrap_or(&Value::Null),
+                    observed,
+                )
+            })
+        }) && old.is_none_or(|old| {
+            old.iter()
+                .filter(|(key, _)| !fields.contains_key(*key))
+                .all(|(key, old_value)| new.get(key) == Some(old_value))
+        });
+    }
+    match requested {
+        Some(value) => after == value,
+        None => before == after,
+    }
+}
+
 fn camera_selector(raw: &str) -> Result<&str, McpError> {
     let selector = raw.trim();
     if selector.is_empty()
@@ -6072,6 +6465,9 @@ const STREAM_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// A guest action response must remain returnable after a slow detail read.
 const GUEST_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const GUEST_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+/// Bound the optional camera read so an accepted patch remains reportable.
+const CAMERA_SETTINGS_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const CAMERA_SETTINGS_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -7676,6 +8072,8 @@ mod tests {
         ("firewall.policies.update", true, false, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
+        // Applying the same named settings leaves the same configuration.
+        ("cameras.settings.update", true, false, true),
         // Repeating a stream creation or removal, or opening another audio
         // session, can have another upstream effect.
         ("cameras.streams.update", false, false, true),
