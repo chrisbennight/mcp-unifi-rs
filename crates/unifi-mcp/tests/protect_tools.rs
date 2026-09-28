@@ -2275,6 +2275,13 @@ async fn protect_events_refuses_name_selection_when_local_inventory_is_unavailab
 async fn protect_events_equal_timestamp_boundary_names_the_recovery_path() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
+    let body = serde_json::json!([
+        {"id": "event-3", "type": "motion", "start": 1900},
+        {"id": "event-2", "type": "motion", "start": 1900},
+        {"id": "event-1", "type": "motion", "start": 1900,
+         "controller_extension": "x".repeat(700),
+         "z_controller_field": "original-event-tail"}
+    ]);
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
         .and(body_json(serde_json::json!({
@@ -2293,11 +2300,7 @@ async fn protect_events_equal_timestamp_boundary_names_the_recovery_path() {
         .and(path("/proxy/protect/api/events"))
         .and(query_param("limit", "3"))
         .and(query_param("offset", "0"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {"id": "event-3", "type": "motion", "start": 1900},
-            {"id": "event-2", "type": "motion", "start": 1900},
-            {"id": "event-1", "type": "motion", "start": 1900}
-        ])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
         .expect(1)
         .mount(&server)
         .await;
@@ -2316,6 +2319,11 @@ async fn protect_events_equal_timestamp_boundary_names_the_recovery_path() {
 
     assert!(
         error.message.contains("retry with a higher limit"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&body.to_string()),
         "{}",
         error.message
     );

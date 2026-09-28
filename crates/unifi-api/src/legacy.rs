@@ -601,10 +601,11 @@ impl LegacyClient {
 
         let request_end = continuation.map_or(end, |cursor| cursor.next_end);
         let request_limit = limit + 1;
-        let events = self
+        let (events, bytes) = self
             .protect_events_with_reauth(start, request_end, request_limit)
             .await?;
         finish_protect_event_page(start, request_end, limit, events)
+            .map_err(|error| error.with_controller_response(&bytes))
     }
 
     /// Fetch the JPEG thumbnail associated with a historical Protect event.
@@ -868,7 +869,7 @@ impl LegacyClient {
         start: u64,
         end: u64,
         limit: u32,
-    ) -> Result<Vec<ProtectEvent>, ApiError> {
+    ) -> Result<(Vec<ProtectEvent>, Vec<u8>), ApiError> {
         let generation = self.ensure_session().await?;
         let first = self.execute_protect_events(start, end, limit).await;
         match first {
@@ -892,7 +893,7 @@ impl LegacyClient {
         start: u64,
         end: u64,
         limit: u32,
-    ) -> Result<Vec<ProtectEvent>, ApiError> {
+    ) -> Result<(Vec<ProtectEvent>, Vec<u8>), ApiError> {
         let kind = {
             let session = self.session.lock().await;
             session.kind.ok_or_else(|| {
@@ -933,7 +934,7 @@ impl LegacyClient {
                     "Protect request failed"
                 );
             })?;
-        self.decode_protect_response(response, "protect.events")
+        self.decode_protect_response_with_bytes(response, "protect.events")
             .await
     }
 
@@ -1012,16 +1013,6 @@ impl LegacyClient {
             })?;
         self.decode_protect_response_with_bytes(response, "protect.bootstrap")
             .await
-    }
-
-    async fn decode_protect_response<T: DeserializeOwned>(
-        &self,
-        response: Response,
-        endpoint: &'static str,
-    ) -> Result<T, ApiError> {
-        self.decode_protect_response_with_bytes(response, endpoint)
-            .await
-            .map(|(value, _)| value)
     }
 
     async fn decode_protect_response_with_bytes<T: DeserializeOwned>(
@@ -1591,10 +1582,9 @@ fn finish_protect_event_page(
             events.pop();
         }
         if events.is_empty() {
-            return Err(ApiError::Config(
-                "Protect event page boundary exceeds the requested limit; retry with a higher limit"
-                    .to_owned(),
-            ));
+            return Err(ApiError::Decode(BoundedMessage::new(
+                "Protect event page boundary exceeds the requested limit; retry with a higher limit",
+            )));
         }
         boundary_start
     } else {

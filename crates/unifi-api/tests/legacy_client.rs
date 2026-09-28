@@ -1943,3 +1943,58 @@ async fn protect_event_page_fails_loud_instead_of_splitting_one_timestamp() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn invalid_protect_event_page_keeps_the_exact_controller_body() {
+    for (events, expected_diagnostic) in [
+        (
+            serde_json::json!([{
+                "id": "", "type": "motion", "start": 1900,
+                "controller_extension": "x".repeat(700),
+                "z_controller_field": "original-event-tail"
+            }]),
+            "invalid event id",
+        ),
+        (
+            serde_json::json!([
+                {"id": "event-3", "type": "motion", "start": 1900},
+                {"id": "event-2", "type": "motion", "start": 1900},
+                {"id": "event-1", "type": "motion", "start": 1900,
+                 "controller_extension": "x".repeat(700),
+                 "z_controller_field": "original-event-tail"}
+            ]),
+            "retry with a higher limit",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("set-cookie", "TOKEN=protect-session; Path=/")
+                    .set_body_json(serde_json::json!({})),
+            )
+            .mount(&server)
+            .await;
+        let body = events.to_string();
+        Mock::given(method("GET"))
+            .and(path("/proxy/protect/api/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server)
+            .protect_events(1000, 2000, 2, None)
+            .await
+            .expect_err("invalid event page");
+        let ApiError::DecodeResponse {
+            response,
+            diagnostic,
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(response.as_str(), body);
+        assert!(diagnostic.as_str().contains(expected_diagnostic));
+    }
+}
