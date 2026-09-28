@@ -424,15 +424,19 @@ reported without claiming verification. Controller failures retain their full
 bodies, and large accepted records move to labeled content blocks with
 corresponding flags.
 
-`cameras.settings.read` returns the official camera name, on-screen overlay,
-LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
-`cameras.settings.update` patches only the named fields from that set. It
-previews by default and, when confirmed, returns the controller's action
-response and a separate read-back. `verified` requires the requested fields to
-match and the other modeled settings to stay unchanged. Invalid enum values,
-an empty change set, and out-of-range microphone volume are rejected before
-the write. The official doorbell LCD message setting requires its own typed
-message and asset workflow and is not accepted by this tool.
+`cameras.settings.read` returns the complete camera record, including the
+controller's LCD message and other reported fields. `cameras.settings.update`
+patches only named settings. It accepts the documented doorbell LCD message
+types `DO_NOT_DISTURB`, `LEAVE_PACKAGE_AT_DOOR`, `CUSTOM_MESSAGE`, and `IMAGE`.
+Custom text and image asset names use the `text` field; an explicit `null`
+`resetAt` means the message lasts until changed, while an omitted `resetAt`
+uses the recorder's default timeout. The tool previews by default and, when
+confirmed, returns complete before, accepted, and read-back camera records.
+`verified` requires the requested fields to match and the other modeled
+settings to stay unchanged. Invalid enum values, an empty change set,
+out-of-range microphone volume, and requests above 1 MiB are rejected before
+the write. Large complete records move to labeled content blocks, with
+corresponding `InContent` flags.
 When the read-back fails, `readbackError` carries the controller response
 alongside the accepted patch response.
 If an accepted patch response names another camera or reports a different

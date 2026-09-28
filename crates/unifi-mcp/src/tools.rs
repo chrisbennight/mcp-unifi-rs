@@ -1304,7 +1304,71 @@ struct CameraSettingsChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     led_settings: Option<CameraLedChanges>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    lcd_message: Option<CameraLcdMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     smart_detect_settings: Option<CameraSmartDetectChanges>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum CameraResetAt {
+    Timestamp(Number),
+    Forever,
+}
+
+fn deserialize_camera_reset_at<'de, D>(deserializer: D) -> Result<Option<CameraResetAt>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Number>::deserialize(deserializer).map(|value| {
+        Some(match value {
+            Some(timestamp) => CameraResetAt::Timestamp(timestamp),
+            None => CameraResetAt::Forever,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+enum CameraLcdMessage {
+    DoNotDisturb {
+        #[serde(
+            default,
+            rename = "resetAt",
+            deserialize_with = "deserialize_camera_reset_at",
+            skip_serializing_if = "Option::is_none"
+        )]
+        reset_at: Option<CameraResetAt>,
+    },
+    LeavePackageAtDoor {
+        #[serde(
+            default,
+            rename = "resetAt",
+            deserialize_with = "deserialize_camera_reset_at",
+            skip_serializing_if = "Option::is_none"
+        )]
+        reset_at: Option<CameraResetAt>,
+    },
+    CustomMessage {
+        text: String,
+        #[serde(
+            default,
+            rename = "resetAt",
+            deserialize_with = "deserialize_camera_reset_at",
+            skip_serializing_if = "Option::is_none"
+        )]
+        reset_at: Option<CameraResetAt>,
+    },
+    Image {
+        text: String,
+        #[serde(
+            default,
+            rename = "resetAt",
+            deserialize_with = "deserialize_camera_reset_at",
+            skip_serializing_if = "Option::is_none"
+        )]
+        reset_at: Option<CameraResetAt>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1353,16 +1417,33 @@ struct CameraSettingsUpdateInput {
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+struct CameraSettingsReadOutput {
+    camera_id: String,
+    camera: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    camera_in_content: Option<bool>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 struct CameraSettingsOutput {
     camera_id: String,
     applied: bool,
-    requested: CameraSettingsChanges,
+    requested: Option<CameraSettingsChanges>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    before: Option<CameraSettingsState>,
+    requested_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    response: Option<CameraSettingsState>,
+    before: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    after: Option<CameraSettingsState>,
+    before_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1383,6 +1464,7 @@ struct CameraSettingsState {
     hdr_type: Option<String>,
     osd_settings: Option<CameraOsdChanges>,
     led_settings: Option<CameraLedChanges>,
+    lcd_message: Option<Value>,
     smart_detect_settings: Option<CameraSmartDetectChanges>,
 }
 
@@ -1406,6 +1488,7 @@ impl From<ProtectCamera> for CameraSettingsState {
                 welcome_led: settings.welcome_led,
                 flood_led: settings.flood_led,
             }),
+            lcd_message: camera.lcd_message,
             smart_detect_settings: camera.smart_detect_settings.map(|settings| {
                 CameraSmartDetectChanges {
                     object_types: settings.object_types,
@@ -3355,7 +3438,9 @@ impl ToolSpec {
             ToolKind::ProtectLiveviewsConfigure => {
                 tool::<ProtectLiveviewsConfigureInput, ProtectLiveviewsConfigureOutput>(self)
             }
-            ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
+            ToolKind::CamerasSettingsRead => {
+                tool::<CameraSelectorInput, CameraSettingsReadOutput>(self)
+            }
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
             }
@@ -5101,8 +5186,16 @@ impl UnifiMcp {
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
         let camera_id = camera_by_selector(&inventory, selector)?.id;
-        let camera = self.protect().camera(&camera_id).await.map_err(api_error)?;
-        structured(CameraSettingsState::from(camera))
+        let (_, camera) = self
+            .protect()
+            .camera_with_response(&camera_id)
+            .await
+            .map_err(api_error)?;
+        camera_settings_read_result(CameraSettingsReadOutput {
+            camera_id,
+            camera: Some(camera),
+            camera_in_content: None,
+        })
     }
 
     async fn cameras_settings_update(
@@ -5120,27 +5213,35 @@ impl UnifiMcp {
         let mut output = CameraSettingsOutput {
             camera_id: camera_id.clone(),
             applied: false,
-            requested: input.changes,
+            requested: Some(input.changes),
+            requested_in_content: None,
             before: None,
+            before_in_content: None,
             response: None,
+            response_in_content: None,
             after: None,
+            after_in_content: None,
             verified: None,
             readback_error: None,
             readback_error_in_content: None,
             warnings: Vec::new(),
         };
         if !input.confirm {
-            return structured(output);
+            return camera_settings_update_result(output);
         }
-        let before = self.protect().camera(&camera_id).await.map_err(api_error)?;
-        output.before = Some(before.into());
-        let response = self
+        let (before, before_raw) = self
             .protect()
-            .camera_settings_patch(&camera_id, &patch)
+            .camera_with_response(&camera_id)
+            .await
+            .map_err(api_error)?;
+        output.before = Some(before_raw);
+        let (_, response_raw) = self
+            .protect()
+            .camera_settings_patch_with_response(&camera_id, &patch)
             .await
             .map_err(api_error)?;
         output.applied = true;
-        output.response = Some(response.into());
+        output.response = Some(response_raw);
         let budget = self
             .request_timeout()
             .saturating_sub(started.elapsed())
@@ -5149,18 +5250,16 @@ impl UnifiMcp {
         let readback = if budget.is_zero() {
             None
         } else {
-            Some(tokio::time::timeout(budget, self.protect().camera(&camera_id)).await)
+            Some(
+                tokio::time::timeout(budget, self.protect().camera_with_response(&camera_id)).await,
+            )
         };
         let mut upstream_error = None;
         match readback {
-            Some(Ok(Ok(after))) if after.id == camera_id => {
-                let after: CameraSettingsState = after.into();
-                output.verified = Some(camera_settings_match(
-                    &patch,
-                    output.before.as_ref().expect("recorded pre-write state"),
-                    &after,
-                ));
-                output.after = Some(after);
+            Some(Ok(Ok((after, after_raw)))) if after.id == camera_id => {
+                output.verified =
+                    Some(camera_settings_match(&patch, &before.into(), &after.into()));
+                output.after = Some(after_raw);
             }
             Some(Ok(Err(error))) => {
                 output.readback_error = Some(error.to_string());
@@ -5178,7 +5277,7 @@ impl UnifiMcp {
                     .to_owned(),
             );
         }
-        structured_with_mutation_readback_error(output, upstream_error.as_ref())
+        camera_settings_update_result(output)
     }
 
     async fn cameras_snapshot(
@@ -8205,6 +8304,12 @@ fn camera_settings_patch(
     let patch = typed_camera_settings_patch(changes);
     let value = serde_json::to_value(&patch)
         .map_err(|_| McpError::internal_error("camera settings could not be encoded", None))?;
+    if value.to_string().len() > 1024 * 1024 {
+        return Err(McpError::invalid_params(
+            "camera settings request exceeds 1 MiB",
+            None,
+        ));
+    }
     if value.as_object().is_none_or(serde_json::Map::is_empty)
         || value.as_object().is_some_and(|fields| {
             fields
@@ -8223,6 +8328,10 @@ fn camera_settings_patch(
 fn typed_camera_settings_patch(changes: &CameraSettingsChanges) -> ProtectCameraSettingsPatch {
     ProtectCameraSettingsPatch {
         name: changes.name.clone(),
+        lcd_message: changes
+            .lcd_message
+            .as_ref()
+            .map(|message| serde_json::to_value(message).expect("typed LCD message serializes")),
         mic_volume: changes.mic_volume,
         video_mode: changes.video_mode.clone(),
         hdr_type: changes.hdr_type.clone(),
@@ -8280,10 +8389,31 @@ fn camera_settings_match(
     before: &CameraSettingsState,
     after: &CameraSettingsState,
 ) -> bool {
-    let requested = serde_json::to_value(patch).expect("typed patch serializes");
-    let before = serde_json::to_value(before).expect("typed camera settings serialize");
-    let after = serde_json::to_value(after).expect("typed camera settings serialize");
-    camera_settings_values_match(Some(&requested), &before, &after)
+    let mut requested = serde_json::to_value(patch).expect("typed patch serializes");
+    let mut before_value = serde_json::to_value(before).expect("typed camera settings serialize");
+    let mut after_value = serde_json::to_value(after).expect("typed camera settings serialize");
+    let requested_lcd = requested
+        .as_object_mut()
+        .and_then(|fields| fields.remove("lcdMessage"));
+    let lcd_matches = requested_lcd.as_ref().is_none_or(|wanted| {
+        // Protect can fill an omitted resetAt from recorder defaults, and
+        // a camera can have no prior LCD message.
+        after
+            .lcd_message
+            .as_ref()
+            .is_some_and(|observed| requested_json_matches(wanted, observed))
+    });
+    if requested_lcd.is_some() {
+        before_value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("lcdMessage");
+        after_value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("lcdMessage");
+    }
+    lcd_matches && camera_settings_values_match(Some(&requested), &before_value, &after_value)
 }
 
 fn camera_settings_values_match(requested: Option<&Value>, before: &Value, after: &Value) -> bool {
@@ -10712,6 +10842,74 @@ fn camera_disable_mic_result(
     Ok(result)
 }
 
+fn camera_settings_read_result(
+    mut output: CameraSettingsReadOutput,
+) -> Result<CallToolResult, McpError> {
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(camera) = output.camera.take()
+    {
+        output.camera_in_content = Some(true);
+        let mut result = structured(output)?;
+        result
+            .content
+            .push(ContentBlock::text(format!("camera: {camera}")));
+        return Ok(result);
+    }
+    structured(output)
+}
+
+fn camera_settings_update_result(
+    mut output: CameraSettingsOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &CameraSettingsOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(requested) = output.requested.take()
+    {
+        output.requested_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "requested: {}",
+            serde_json::to_value(requested).map_err(|_| McpError::internal_error(
+                "failed to serialize camera settings",
+                None
+            ))?
+        )));
+    }
+    if exceeds(&output)?
+        && let Some(before) = output.before.take()
+    {
+        output.before_in_content = Some(true);
+        content.push(ContentBlock::text(format!("before: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(response) = output.response.take()
+    {
+        output.response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("response: {response}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn protect_action_result(
     mut output: ProtectDevicesActionOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -11003,6 +11201,19 @@ mod tests {
     };
     use crate::mutation::FieldOutcome;
     use crate::registry::{TOOL_REGISTRY, ToolBehavior};
+
+    #[test]
+    fn lcd_integer_reset_time_keeps_its_json_number_form() {
+        let changes: super::CameraSettingsChanges = serde_json::from_value(json!({
+            "lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456}
+        }))
+        .expect("typed LCD message");
+        let patch = super::camera_settings_patch(&changes).expect("camera patch");
+        assert_eq!(
+            patch.lcd_message.expect("LCD message")["resetAt"],
+            json!(123_456)
+        );
+    }
 
     const CONSTRAINING_KEYWORDS: [&str; 43] = [
         "type",

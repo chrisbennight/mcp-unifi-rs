@@ -134,6 +134,7 @@ pub struct ProtectCamera {
     pub mic_volume: Option<u8>,
     pub osd_settings: Option<ProtectOsdSettings>,
     pub led_settings: Option<ProtectLedSettings>,
+    pub lcd_message: Option<Value>,
     pub video_mode: Option<String>,
     pub hdr_type: Option<String>,
     pub smart_detect_settings: Option<ProtectSmartDetectSettings>,
@@ -191,6 +192,8 @@ pub struct ProtectCameraSettingsPatch {
     pub osd_settings: Option<ProtectOsdSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub led_settings: Option<ProtectLedSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lcd_message: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mic_volume: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -701,6 +704,34 @@ impl ProtectClient {
         .await
     }
 
+    /// Read one camera as both a validated model and the complete JSON record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or bounded response fails.
+    pub async fn camera_with_response(
+        &self,
+        camera_id: &str,
+    ) -> Result<(ProtectCamera, Value), ApiError> {
+        validate_identifier("cameras.by_id", camera_id)?;
+        let (camera, bytes) = self
+            .get_json_validated_with_response(&["cameras", camera_id], |camera: &ProtectCamera| {
+                validate_model_key("cameras.by_id", &camera.model_key, "camera")?;
+                validate_identifier("cameras.by_id", &camera.id)?;
+                if camera.id != camera_id {
+                    return Err(ApiError::SchemaMismatch {
+                        endpoint: "cameras.by_id",
+                        path: BoundedMessage::new("id"),
+                        response: None,
+                    });
+                }
+                Ok(())
+            })
+            .await?;
+        let complete = decode_json("cameras.by_id", &bytes)?;
+        Ok((camera, complete))
+    }
+
     /// Read one complete camera record for a workflow that returns the
     /// controller's fields without narrowing them to the inventory model.
     ///
@@ -1121,6 +1152,22 @@ impl ProtectClient {
         camera_id: &str,
         patch: &ProtectCameraSettingsPatch,
     ) -> Result<ProtectCamera, ApiError> {
+        self.camera_settings_patch_with_response(camera_id, patch)
+            .await
+            .map(|(camera, _)| camera)
+    }
+
+    /// Patch one camera and retain its complete accepted JSON record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects or cannot decode
+    /// the action response.
+    pub async fn camera_settings_patch_with_response(
+        &self,
+        camera_id: &str,
+        patch: &ProtectCameraSettingsPatch,
+    ) -> Result<(ProtectCamera, Value), ApiError> {
         validate_identifier("cameras.settings.update", camera_id)?;
         let request = self
             .request(Method::PATCH, &["cameras", camera_id])?
@@ -1138,7 +1185,8 @@ impl ProtectClient {
             }
             .with_controller_response(&bytes));
         }
-        Ok(camera)
+        let complete = decode_json("cameras.settings.update", &bytes)?;
+        Ok((camera, complete))
     }
 
     /// Execute one PTZ action. POST is never retried after an ambiguous result.
