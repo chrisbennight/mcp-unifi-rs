@@ -2601,7 +2601,9 @@ impl UnifiMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<CameraSnapshotInput>(params)?;
         let selector = camera_selector(&input.camera)?;
-        let inventory = self.camera_inventory(CameraInventoryScope::Public).await?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
         let mut matches: Vec<&CameraView> = inventory
             .cameras
             .iter()

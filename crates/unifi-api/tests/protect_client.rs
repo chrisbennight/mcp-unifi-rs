@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
 use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, TlsMode};
 use url::Url;
 use wiremock::{
@@ -17,6 +18,14 @@ use zeroize::Zeroizing;
 
 const API_KEY: &str = "test-protect-key";
 const PREFIX: &str = "/proxy/protect/integration/v1";
+
+fn jpeg_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    JpegEncoder::new(&mut bytes)
+        .encode(&[0, 128, 255], 1, 1, ExtendedColorType::Rgb8)
+        .expect("encode synthetic JPEG");
+    bytes
+}
 
 fn client_for(server: &MockServer) -> ProtectClient {
     let config = ControllerConfig {
@@ -119,7 +128,7 @@ async fn a_camera_id_carrying_url_syntax_stays_one_path_segment() {
 #[tokio::test]
 async fn snapshot_fetches_a_bounded_jpeg_with_channel_and_quality() {
     let server = MockServer::start().await;
-    let jpeg = vec![0xff, 0xd8, 0x11, 0x22, 0xff, 0xd9];
+    let jpeg = jpeg_fixture();
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
         .and(query_param("channel", "package"))
@@ -165,6 +174,23 @@ async fn snapshot_refuses_non_jpeg_and_oversized_bodies() {
             .camera_snapshot("cam-1", "main", false)
             .await,
         Err(ApiError::ResponseTooLarge { limit: 4_194_304 })
+    ));
+}
+
+#[tokio::test]
+async fn snapshot_refuses_truncated_jpeg_even_with_correct_content_type() {
+    let server = MockServer::start().await;
+    let mut truncated = jpeg_fixture();
+    truncated.truncate(truncated.len() / 2);
+    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(truncated, "image/jpeg"))
+        .mount(&server)
+        .await;
+    assert!(matches!(
+        client_for(&server)
+            .camera_snapshot("cam-1", "main", false)
+            .await,
+        Err(ApiError::Decode(_))
     ));
 }
 

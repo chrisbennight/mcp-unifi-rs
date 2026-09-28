@@ -20,6 +20,7 @@ unifi-api = { path = "../unifi-api" }
 zeroize.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 jsonschema.workspace = true
 url.workspace = true
 wiremock.workspace = true

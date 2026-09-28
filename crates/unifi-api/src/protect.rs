@@ -15,6 +15,7 @@
 //! network names, disk identifiers, and unrelated application state never
 //! enter these types.
 
+use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
@@ -472,12 +473,23 @@ impl ProtectClient {
             )));
         }
         let bytes = http::read_bounded_body(response).await?;
-        if !bytes.starts_with(&[0xff, 0xd8]) {
-            return Err(ApiError::Decode(BoundedMessage::new(
-                "camera snapshot response did not start with a JPEG marker",
-            )));
-        }
-        Ok(bytes)
+        tokio::task::spawn_blocking(move || {
+            let mut reader =
+                ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
+            let mut limits = Limits::default();
+            limits.max_image_width = Some(8192);
+            limits.max_image_height = Some(8192);
+            limits.max_alloc = Some(128 * 1024 * 1024);
+            reader.limits(limits);
+            reader.decode().map_err(|_| {
+                ApiError::Decode(BoundedMessage::new(
+                    "camera snapshot was not a decodable JPEG",
+                ))
+            })?;
+            Ok(bytes)
+        })
+        .await
+        .map_err(|_| ApiError::Decode(BoundedMessage::new("camera snapshot validation failed")))?
     }
 
     /// The recorder this console runs. The official endpoint returns one
