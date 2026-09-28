@@ -964,6 +964,11 @@ pub(crate) async fn read_jpeg(response: Response) -> Result<Vec<u8>, ApiError> {
             })
         };
     }
+    if bytes.is_empty() {
+        return Err(ApiError::Decode(BoundedMessage::new(
+            "image response was not a decodable JPEG",
+        )));
+    }
     tokio::task::spawn_blocking(move || {
         let mut reader = ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
         let mut limits = Limits::default();

@@ -393,6 +393,24 @@ async fn snapshot_refuses_truncated_jpeg_even_with_correct_content_type() {
 }
 
 #[tokio::test]
+async fn empty_jpeg_response_keeps_its_existing_decode_error() {
+    let server = MockServer::start().await;
+    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(Vec::<u8>::new(), "image/jpeg"))
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .camera_snapshot("cam-1", "main", false)
+        .await
+        .expect_err("empty JPEG");
+    assert!(matches!(error, ApiError::Decode(_)));
+    assert_eq!(
+        error.to_string(),
+        "response decoding failed: image response was not a decodable JPEG"
+    );
+}
+
+#[tokio::test]
 async fn nvr_decodes_as_the_official_single_nullable_object() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
