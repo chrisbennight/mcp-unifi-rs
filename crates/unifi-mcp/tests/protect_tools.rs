@@ -151,6 +151,57 @@ async fn stream_list_returns_handles_on_independent_transport() {
 }
 
 #[tokio::test]
+async fn stream_creation_keeps_its_handle_and_complete_large_readback_error() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let route = format!("{PROTECT}/cameras/cam-front/rtsps-stream");
+    let failure = format!("{}stream-readback-tail", "x".repeat(50_000));
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.streams.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "create",
+                    "qualities": ["high"], "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("stream was created");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(
+        output["streams"][0]["url"],
+        "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
+    );
+    assert!(output.get("readbackError").is_none());
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(content.to_string().contains(&failure));
+    assert!(
+        content
+            .to_string()
+            .contains("readbackError: controller returned HTTP 503:")
+    );
+}
+
+#[tokio::test]
 async fn stream_update_previews_creates_and_reports_readback() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
@@ -360,6 +411,47 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
 }
 
 #[tokio::test]
+async fn ptz_action_returns_controller_readback_error() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let failure = format!("patrol read failed: {}ptz-readback-tail", "x".repeat(700));
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/ptz/patrol/start/2"
+        )))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "startPatrol", "slot": 2,
+                    "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("patrol started")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(
+        output["readbackError"],
+        format!("controller returned HTTP 503: {failure}")
+    );
+}
+
+#[tokio::test]
 async fn ptz_previews_and_verifies_a_confirmed_patrol() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
@@ -435,6 +527,63 @@ async fn camera_status_reports_a_public_active_patrol_slot() {
         .structured_content
         .expect("structured");
     assert_eq!(status["activePatrolSlot"], 3);
+}
+
+#[tokio::test]
+async fn camera_settings_update_returns_controller_readback_error() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door",
+        "state": "CONNECTED", "micVolume": 40
+    });
+    let after = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door",
+        "state": "CONNECTED", "micVolume": 70
+    });
+    let failure = format!(
+        "settings read failed: {}settings-readback-tail",
+        "x".repeat(700)
+    );
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "changes": {"micVolume": 70},
+                    "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("settings changed")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["response"]["micVolume"], 70);
+    assert_eq!(
+        output["readbackError"],
+        format!("controller returned HTTP 503: {failure}")
+    );
 }
 
 #[tokio::test]

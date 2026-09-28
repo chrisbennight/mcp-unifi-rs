@@ -244,6 +244,8 @@ match and the other modeled settings to stay unchanged. Invalid enum values,
 an empty change set, and out-of-range microphone volume are rejected before
 the write. The official doorbell LCD message setting requires its own typed
 message and asset workflow and is not accepted by this tool.
+When the read-back fails, `readbackError` carries the controller response
+alongside the accepted patch response.
 
 `cameras.ptz.control` previews or runs a preset move, patrol start, or patrol
 stop for one camera. A preset slot of `-1` means home; patrol slots are `0` to
@@ -251,16 +253,21 @@ stop for one camera. A preset slot of `-1` means home; patrol slots are `0` to
 whether it matches. The official API does not report position after a preset
 move, so that action reports controller acceptance without claiming position
 verification. `cameras.status` includes `activePatrolSlot` when reported by the
-console; null means no patrol is running.
+console; null means no patrol is running. A failed patrol read-back returns the
+controller response in `readbackError`.
 
 `cameras.streams.list` returns the existing RTSPS stream URLs for a camera.
 These URLs grant access to the camera feed, so the result is classified high
-risk and sensitive. Independent server modes require the operator's secret
-disclosure grant for this read. `cameras.streams.update` previews by default;
+risk and sensitive. The gateway decides caller access in gateway mode.
+`cameras.streams.update` previews by default;
 with `confirm`, it creates or removes one or more distinct qualities: `high`,
 `medium`, `low`, or `package`. A created URL is returned even if the follow-up
 readback fails or times out. The result says whether the requested qualities
-were observed afterward. `package` requires a camera with a package camera.
+were observed afterward, and `readbackError` carries any controller failure.
+For these camera mutations, an error that exceeds the structured result budget
+is returned as a separate text content block, signaled by
+`readbackErrorInContent`, so an accepted action result remains available.
+`package` requires a camera with a package camera.
 
 `cameras.talkback.start` previews or creates a talkback session. A confirmed
 call returns its RTP URL, codec, sampling rate, and bit depth. The API does not
