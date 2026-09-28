@@ -454,6 +454,8 @@ else moved.
 If a wireless network or port forward snapshot cannot be decoded into its
 typed record, the error includes the controller's complete accepted response
 and the local decoding error.
+An accepted detail response with no row, multiple rows, or a different id
+returns the complete controller envelope and a local diagnostic.
 
 Requested fields report their previous, requested, and observed values, including
 passphrases when the caller changes one. The gateway governs access to sensitive
