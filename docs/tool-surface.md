@@ -283,6 +283,7 @@ it.
 | `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |
 | `firewall.policies.update` | yes | no | yes |
+| `firewall.policies.delete` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
@@ -443,7 +444,13 @@ The observed grant is returned separately when it can be read. If a disconnected
 client is no longer readable, the action response remains available and the
 result says that verification was unavailable.
 
-## Not on this surface
+### Rule deletion: `firewall.policies.delete`
 
-Creating and deleting rules is out of scope throughout: these tools operate
-configuration an operator already has.
+`firewall.policies.delete` removes a zone-based policy by id. It previews the
+policy's match and action, then sends one DELETE when confirmed. A following
+read distinguishes a policy that is absent from one the controller retained.
+
+## Remaining rule workflows
+
+Creation, ordering, and the remaining rule lifecycle operations are tracked
+in the Network rule issue.

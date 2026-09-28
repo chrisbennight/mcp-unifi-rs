@@ -69,6 +69,13 @@ fn update(arguments: &serde_json::Value) -> CallToolRequestParams {
     params
 }
 
+fn delete(arguments: &serde_json::Value) -> CallToolRequestParams {
+    let mut params = CallToolRequestParams::default();
+    params.name = "firewall.policies.delete".to_owned().into();
+    params.arguments = Some(arguments.as_object().expect("object").clone());
+    params
+}
+
 async fn mount_site(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
@@ -154,6 +161,27 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
          it no longer has: {}",
         error.message
     );
+    let delete_error = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect_err("classic firewall cannot delete a zone policy");
+    assert!(delete_error.message.contains("classic firewall"));
+}
+
+#[tokio::test]
+async fn policy_delete_rejects_an_empty_id_before_controller_io() {
+    let server = MockServer::start().await;
+    let error = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": " ", "confirm": true})),
+            None,
+        )
+        .await
+        .expect_err("empty id");
+    assert!(error.message.contains("nonempty id"));
 }
 
 /// The policy as it reads before the write, and again after.
@@ -214,6 +242,82 @@ async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
         output["changes"],
         serde_json::json!([{"field": "enabled", "from": true, "to": false}])
     );
+}
+
+#[tokio::test]
+async fn policy_delete_previews_scope_without_sending_delete() {
+    let server = MockServer::start().await;
+    let record = stored(true, "BLOCK");
+    reads(&server, &record, &record).await;
+    let output = handler_for(&server)
+        .call(&delete(&serde_json::json!({"policy": POLICY})), None)
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], false);
+    assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
+}
+
+#[tokio::test]
+async fn policy_delete_sends_once_and_verifies_absence() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stored(true, "BLOCK")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verifiedAbsent"], true);
+}
+
+#[tokio::test]
+async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
+    let server = MockServer::start().await;
+    let record = stored(true, "BLOCK");
+    reads(&server, &record, &record).await;
+    Mock::given(method("DELETE"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}"
+        )))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verifiedAbsent"], false);
 }
 
 /// A property whose value no JSON value model represents exactly.

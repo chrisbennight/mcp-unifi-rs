@@ -1676,6 +1676,27 @@ struct FirewallPoliciesUpdateOutput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPoliciesDeleteInput {
+    /// Zone-based policy id, as `firewall.read` reports it.
+    policy: String,
+    /// Delete the policy. Absent or false previews its scope.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FirewallPoliciesDeleteOutput {
+    policy: PolicyView,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct VouchersCreateInput {
     /// Label the controller stores against the batch.
     name: String,
@@ -2250,6 +2271,9 @@ impl ToolSpec {
             ToolKind::FirewallPoliciesUpdate => {
                 tool::<FirewallPoliciesUpdateInput, FirewallPoliciesUpdateOutput>(self)
             }
+            ToolKind::FirewallPoliciesDelete => {
+                tool::<FirewallPoliciesDeleteInput, FirewallPoliciesDeleteOutput>(self)
+            }
             ToolKind::VouchersSearch => tool::<VouchersSearchInput, VouchersSearchOutput>(self),
             ToolKind::VouchersStatus => tool::<VoucherIdInput, VoucherReadView>(self),
             ToolKind::VouchersRevoke => tool::<VoucherRevokeInput, VoucherRevokeOutput>(self),
@@ -2489,6 +2513,7 @@ impl UnifiMcp {
             ToolKind::GuestsUnauthorize => self.guests_unauthorize(params).await,
             ToolKind::PortForwardsUpdate => self.port_forwards_update(params).await,
             ToolKind::FirewallPoliciesUpdate => self.firewall_policies_update(params).await,
+            ToolKind::FirewallPoliciesDelete => self.firewall_policies_delete(params).await,
             ToolKind::VouchersSearch => self.vouchers_search(params).await,
             ToolKind::VouchersStatus => self.vouchers_status(params).await,
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
@@ -4510,6 +4535,78 @@ impl UnifiMcp {
         })
     }
 
+    async fn firewall_policies_delete(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<FirewallPoliciesDeleteInput>(params)?;
+        if input.policy.trim().is_empty() || input.policy.len() > 256 {
+            return Err(McpError::invalid_params(
+                "policy must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
+        self.require_zone_based_firewall().await?;
+        let site_id = self.site_id().await?;
+        let (raw, _) = self
+            .integration()
+            .firewall_policy_snapshot(&site_id, &input.policy)
+            .await
+            .map_err(api_error)?;
+        let record = parsed_record(&raw);
+        if record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
+            return Err(McpError::internal_error(
+                "controller returned a different firewall policy",
+                None,
+            ));
+        }
+        let mut output = FirewallPoliciesDeleteOutput {
+            policy: policy_view_from_record(&input.policy, &record),
+            applied: false,
+            verified_absent: None,
+            warnings: vec![
+                "deleting this policy changes how later firewall policies handle matching traffic"
+                    .to_owned(),
+            ],
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+        self.integration()
+            .delete_firewall_policy(&site_id, &input.policy)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(FIREWALL_DELETE_RESPONSE_RESERVE)
+            .min(FIREWALL_DELETE_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            None
+        } else {
+            tokio::time::timeout(
+                budget,
+                self.integration()
+                    .firewall_policy_snapshot(&site_id, &input.policy),
+            )
+            .await
+            .ok()
+        };
+        output.verified_absent = match readback {
+            Some(Err(ApiError::Status { status: 404, .. })) => Some(true),
+            Some(Ok(_)) => Some(false),
+            _ => None,
+        };
+        if output.verified_absent != Some(true) {
+            output.warnings.push(
+                "the delete request was accepted, but policy absence was not verified".to_owned(),
+            );
+        }
+        structured(output)
+    }
+
     async fn vouchers_search(
         &self,
         params: &CallToolRequestParams,
@@ -6355,6 +6452,9 @@ const GUEST_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Bound the optional camera read so an accepted patch remains reportable.
 const CAMERA_SETTINGS_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const CAMERA_SETTINGS_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+/// Leave time to return a successful firewall deletion after checking absence.
+const FIREWALL_DELETE_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const FIREWALL_DELETE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -7713,6 +7813,8 @@ mod tests {
         ("port_forwards.update", true, false, true),
         // Same, and the result names the zones and ports a policy governs.
         ("firewall.policies.update", true, false, true),
+        // Repeating deletion leaves the policy absent.
+        ("firewall.policies.delete", true, false, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.
