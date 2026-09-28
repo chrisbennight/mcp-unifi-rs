@@ -565,11 +565,12 @@ async fn a_rejected_credential_is_never_reported_as_an_absent_api() {
 #[tokio::test]
 async fn a_controller_error_body_reaches_the_caller() {
     const CONTROLLER_VALUE: &str = "synthetic-controller-device-id";
+    const END_MARKER: &str = "protect-error-tail";
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/cameras")))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "message": format!("bad key {API_KEY} for {CONTROLLER_VALUE}"),
+            "message": format!("bad key {API_KEY} for {CONTROLLER_VALUE} {}{END_MARKER}", "x".repeat(700)),
         })))
         .mount(&server)
         .await;
@@ -578,6 +579,7 @@ async fn a_controller_error_body_reaches_the_caller() {
     let rendered = error.to_string();
     assert!(rendered.contains(API_KEY), "{rendered}");
     assert!(rendered.contains(CONTROLLER_VALUE), "{rendered}");
+    assert!(rendered.contains(END_MARKER), "{rendered}");
 }
 
 #[tokio::test]
@@ -609,16 +611,28 @@ async fn rate_limited_reads_without_an_acceptable_delay_surface_the_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/meta/info")))
-        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "600"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "600")
+                .set_body_raw(
+                    format!("{}protect-rate-tail", "x".repeat(700)),
+                    "text/plain",
+                ),
+        )
         .expect(1)
         .mount(&server)
         .await;
 
     let error = client_for(&server).info().await.expect_err("rate limited");
-    let ApiError::RateLimited { retry_after, .. } = error else {
+    let ApiError::RateLimited {
+        retry_after,
+        message,
+    } = error
+    else {
         panic!("expected RateLimited, got {error:?}");
     };
     assert_eq!(retry_after, Some(Duration::from_mins(10)));
+    assert!(message.as_str().ends_with("protect-rate-tail"));
 }
 
 #[tokio::test]

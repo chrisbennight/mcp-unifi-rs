@@ -131,8 +131,9 @@ accepted write proves nothing. Every write tool shares one path:
   rejoins before the check reads as connected — rather than asserting the
   action succeeded. Claiming field-level verification where none exists would
   be the same false confidence the classification exists to prevent.
-- **Response fidelity.** Selected controller values and error details reach
-  the caller without credential substitution. The gateway controls caller access.
+- **Response fidelity.** Selected controller values and complete accepted
+  controller error bodies reach the caller without credential substitution. The
+  gateway controls caller access.
 - **Stable selection.** A write addresses a resource by its controller id or
   hardware address, never by a renameable attribute. A client is addressed by
   MAC because a blocked one is absent from the connected list, so no name

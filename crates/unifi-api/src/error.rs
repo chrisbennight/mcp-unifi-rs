@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-/// Longest upstream-derived detail carried by any error variant.
-const MAXIMUM_MESSAGE_BYTES: usize = 512;
+/// The transport rejects bodies above this limit before they reach an error.
+const MAXIMUM_MESSAGE_BYTES: usize = crate::http::MAXIMUM_RESPONSE_BYTES;
 const TRUNCATION_MARKER: &str = " [truncated]";
 
-/// An upstream-derived message kept within the error string budget.
+/// An upstream-derived message kept within the transport body budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundedMessage(String);
 
@@ -62,51 +62,22 @@ impl From<String> for BoundedMessage {
 
 /// Pair a decoder failure with the controller's bounded response body.
 pub(crate) fn decode_failure(error: &impl std::fmt::Display, bytes: &[u8]) -> ApiError {
-    let body = BoundedMessage::with_limit(&String::from_utf8_lossy(bytes), 280);
-    let diagnostic = bounded_diagnostic(&error.to_string(), 175);
-    ApiError::Decode(BoundedMessage::new(&format!(
-        "controller response: {body}; decode error: {diagnostic}",
-    )))
-}
-
-/// Retain the start and end of a long parser diagnostic. Serde puts the
-/// expected type and line/column near the end, after rejected input text.
-fn bounded_diagnostic(raw: &str, limit: usize) -> String {
-    const MIDDLE_MARKER: &str = " [truncated] ";
-    if raw.len() <= limit {
-        return raw.to_owned();
+    ApiError::DecodeResponse {
+        response: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+        diagnostic: BoundedMessage::new(&error.to_string()),
     }
-    let head_budget = (limit - MIDDLE_MARKER.len()) / 2;
-    let tail_budget = limit - MIDDLE_MARKER.len() - head_budget;
-    let head_end = raw
-        .char_indices()
-        .take_while(|(index, character)| index + character.len_utf8() <= head_budget)
-        .last()
-        .map_or(0, |(index, character)| index + character.len_utf8());
-    let tail_start = raw
-        .char_indices()
-        .rev()
-        .take_while(|(index, _)| raw.len() - index <= tail_budget)
-        .last()
-        .map_or(raw.len(), |(index, _)| index);
-    format!(
-        "{}{}{}",
-        &raw[..head_end],
-        MIDDLE_MARKER,
-        &raw[tail_start..]
-    )
 }
 
 /// A failure talking to a controller. Upstream-derived detail always travels
 /// as a [`BoundedMessage`]. Controller-provided values remain present in the
-/// selected error detail, with an explicit marker if the budget is reached.
+/// complete response text when the transport accepts the body.
 #[derive(Debug, Clone, Error)]
 pub enum ApiError {
     /// Locally produced configuration diagnostics; carries no upstream data.
     #[error("invalid controller configuration: {0}")]
     Config(String),
     /// The controller answered with a non-success status. `message` keeps
-    /// the original response text within the error string budget.
+    /// the original response text within the transport body budget.
     #[error("controller returned HTTP {status}: {message}")]
     Status {
         status: u16,
@@ -152,6 +123,13 @@ pub enum ApiError {
     },
     #[error("response decoding failed: {0}")]
     Decode(BoundedMessage),
+    /// A decoded response failed a typed contract. Keep the complete body
+    /// separately so a parser diagnostic cannot displace controller content.
+    #[error("controller response: {response}; decode error: {diagnostic}")]
+    DecodeResponse {
+        response: BoundedMessage,
+        diagnostic: BoundedMessage,
+    },
 }
 
 impl ApiError {
@@ -178,10 +156,9 @@ mod tests {
     use super::BoundedMessage;
 
     #[test]
-    fn bounding_respects_character_boundaries_under_the_byte_budget() {
-        let bounded = BoundedMessage::new(&"é".repeat(600));
-        assert!(bounded.as_str().len() <= 512);
-        assert_eq!(bounded.as_str().len(), 512);
+    fn bounding_respects_character_boundaries_under_the_transport_budget() {
+        let bounded = BoundedMessage::new(&"é".repeat(super::MAXIMUM_MESSAGE_BYTES / 2 + 100));
+        assert!(bounded.as_str().len() <= super::MAXIMUM_MESSAGE_BYTES);
         assert!(bounded.as_str().ends_with(" [truncated]"));
         assert!(
             bounded
@@ -200,7 +177,10 @@ mod tests {
     #[test]
     fn every_construction_path_respects_the_budget() {
         let oversized = "x".repeat(4096);
-        assert!(BoundedMessage::from(oversized.as_str()).as_str().len() <= 512);
-        assert!(BoundedMessage::from(oversized).as_str().len() <= 512);
+        assert_eq!(
+            BoundedMessage::from(oversized.as_str()).as_str().len(),
+            4096
+        );
+        assert_eq!(BoundedMessage::from(oversized).as_str().len(), 4096);
     }
 }

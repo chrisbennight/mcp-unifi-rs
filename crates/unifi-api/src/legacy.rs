@@ -740,7 +740,9 @@ impl LegacyClient {
             Err(ApiError::Status {
                 status: 404 | 405, ..
             }) => DpiAvailability::Unsupported,
-            Err(ApiError::Decode(_)) => DpiAvailability::Unrecognized,
+            Err(ApiError::Decode(_) | ApiError::DecodeResponse { .. }) => {
+                DpiAvailability::Unrecognized
+            }
             Err(error) => return Err(error),
         };
         Ok(DpiReport {

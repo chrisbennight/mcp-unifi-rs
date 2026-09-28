@@ -48,7 +48,8 @@ trade the capability away to satisfy a stylistic or speculative concern.
   untrusted data. Never place them in commands or derived filesystem paths,
   and never log secret-bearing structures.
 - Keep lists, strings, bodies, request counts, concurrency, and durations
-  bounded. Preserve selected upstream error details within those bounds.
+  bounded. Preserve complete upstream error bodies within the transport bound;
+  report an exceeded bound explicitly. The gateway controls disclosure.
 - Every bound on data a caller asked for is caller-pageable, fail-loud, or
   explicitly signaled in the result; a silent subset is a defect. Text
   excerpts cut by a display bound carry a visible truncation marker, and a

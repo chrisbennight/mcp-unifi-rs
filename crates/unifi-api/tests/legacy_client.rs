@@ -1100,12 +1100,13 @@ async fn non_success_wireless_rejection_retains_controller_message() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";
     let secret = "another-wifi-secret";
+    let end_marker = "legacy-error-tail";
     // The same reflection can arrive on the error-status path, which builds
     // its rejection through a different branch.
     Mock::given(method("PUT"))
         .and(path(format!("{prefix}/rest/wlanconf/wlan-1")))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "meta": {"rc": "error", "msg": format!("api.err.Invalid {secret}")},
+            "meta": {"rc": "error", "msg": format!("api.err.Invalid {secret} {}{end_marker}", "x".repeat(700))},
             "data": [],
         })))
         .mount(&server)
@@ -1121,6 +1122,7 @@ async fn non_success_wireless_rejection_retains_controller_message() {
         .expect_err("rejection");
     let rendered = format!("{error:?} {error}");
     assert!(rendered.contains(secret), "{rendered}");
+    assert!(rendered.contains(end_marker), "{rendered}");
 }
 
 #[tokio::test]

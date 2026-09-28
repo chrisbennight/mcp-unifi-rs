@@ -443,7 +443,7 @@ async fn rate_limited_reads_without_an_acceptable_delay_surface_the_error() {
         .respond_with(
             ResponseTemplate::new(429)
                 .insert_header("Retry-After", "600")
-                .set_body_json(serde_json::json!({"message":"controller says wait"})),
+                .set_body_json(serde_json::json!({"message":format!("controller says wait {}rate-limit-tail", "x".repeat(700))})),
         )
         .expect(1)
         .mount(&server)
@@ -459,6 +459,7 @@ async fn rate_limited_reads_without_an_acceptable_delay_surface_the_error() {
     };
     assert_eq!(retry_after, Some(Duration::from_mins(10)));
     assert!(message.as_str().contains("controller says wait"));
+    assert!(message.as_str().contains("rate-limit-tail"));
 }
 
 #[tokio::test]
@@ -479,7 +480,7 @@ async fn rate_limited_mutations_are_never_retried() {
 }
 
 #[tokio::test]
-async fn upstream_errors_are_bounded_and_keep_the_controller_body() {
+async fn upstream_errors_keep_the_complete_controller_body() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/info")))
@@ -576,14 +577,14 @@ async fn a_long_decode_diagnostic_cannot_hide_the_controller_response() {
         rendered.contains("controller changed this field"),
         "{rendered}"
     );
-    assert!(rendered.contains(" [truncated]"), "{rendered}");
+    assert!(rendered.contains(&"x".repeat(600)), "{rendered}");
     assert!(rendered.contains("decode error:"), "{rendered}");
     assert!(rendered.contains("expected u64"), "{rendered}");
     assert!(rendered.contains("line 1 column"), "{rendered}");
 }
 
 #[tokio::test]
-async fn an_over_limit_multibyte_error_message_is_truncated_without_panicking() {
+async fn a_multibyte_error_message_is_returned_completely() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/info")))
@@ -600,13 +601,10 @@ async fn an_over_limit_multibyte_error_message_is_truncated_without_panicking() 
         panic!("expected Status, got {error:?}");
     };
     assert_eq!(status, 500);
-    assert!(
-        message.as_str().len() <= 512,
-        "message must respect the byte budget"
+    assert_eq!(
+        message.as_str(),
+        serde_json::json!({"statusCode": 500, "message": "é".repeat(600)}).to_string()
     );
-    assert!(!message.as_str().is_empty());
-    assert!(message.as_str().ends_with(" [truncated]"));
-    assert!(message.as_str().contains('é'));
 }
 
 #[tokio::test]
