@@ -505,7 +505,9 @@ whether it matches. The official API does not report position after a preset
 move, so that action reports controller acceptance without claiming position
 verification. `cameras.status` includes `activePatrolSlot` when reported by the
 console; null means no patrol is running. A failed patrol read-back returns the
-controller response in `readbackError`.
+controller response in `readbackError`. Every confirmed PTZ action returns its
+accepted HTTP status and complete controller body, even when a later readback
+fails or times out. Large bodies and readback errors move to labeled content.
 
 `cameras.microphone.disable` previews the complete camera record by default.
 With `confirm: true`, it sends the official permanent microphone-disable POST
@@ -537,11 +539,12 @@ risk and sensitive. The gateway decides caller access in gateway mode.
 `cameras.streams.update` previews by default;
 with `confirm`, it creates or removes one or more distinct qualities: `high`,
 `medium`, `low`, or `package`. A created URL is returned even if the follow-up
-readback fails or times out. The result says whether the requested qualities
+readback fails or times out. Removal returns its accepted HTTP status and
+complete controller body. The result says whether the requested qualities
 were observed afterward, and `readbackError` carries any controller failure.
-For these camera mutations, an error that exceeds the structured result budget
-is returned as a separate text content block, signaled by
-`readbackErrorInContent`, so an accepted action result remains available.
+For these camera mutations, a large accepted body or readback error moves to
+a labeled text content block with a corresponding `InContent` marker, so an
+accepted action result remains available.
 `package` requires a camera with a package camera.
 
 `cameras.talkback.start` previews or creates a talkback session. A confirmed

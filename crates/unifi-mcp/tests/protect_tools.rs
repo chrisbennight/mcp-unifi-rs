@@ -356,7 +356,7 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
     Mock::given(method("DELETE"))
         .and(path(&route))
         .and(wiremock::matchers::query_param("qualities", "high"))
-        .respond_with(ResponseTemplate::new(204))
+        .respond_with(ResponseTemplate::new(200).set_body_string("stream removal accepted"))
         .expect(1)
         .mount(&server)
         .await;
@@ -396,6 +396,8 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
         .structured_content
         .expect("structured");
     assert_eq!(removed["verified"], true);
+    assert_eq!(removed["responseStatus"], 200);
+    assert_eq!(removed["responseBody"], "stream removal accepted");
     assert!(removed.get("streams").is_none());
     let preview = handler
         .call(
@@ -601,7 +603,7 @@ async fn ptz_action_returns_controller_readback_error() {
         .and(path(format!(
             "{PROTECT}/cameras/cam-front/ptz/patrol/start/2"
         )))
-        .respond_with(ResponseTemplate::new(204))
+        .respond_with(ResponseTemplate::new(202).set_body_string("patrol accepted"))
         .expect(1)
         .mount(&server)
         .await;
@@ -627,9 +629,88 @@ async fn ptz_action_returns_controller_readback_error() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 202);
+    assert_eq!(output["responseBody"], "patrol accepted");
     assert_eq!(
         output["readbackError"],
         format!("controller returned HTTP 503: {failure}")
+    );
+}
+
+#[tokio::test]
+async fn ptz_accepted_body_survives_a_stalled_readback() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/ptz/patrol/start/2"
+        )))
+        .respond_with(ResponseTemplate::new(202).set_body_string("patrol accepted"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(6)))
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server).with_request_limits(4, Duration::from_secs(2));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "startPatrol", "slot": 2,
+                    "confirm": true
+                }),
+            ),
+            None,
+        ),
+    )
+    .await
+    .expect("completed before the tool deadline")
+    .expect("accepted PTZ action remains available")
+    .structured_content
+    .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 202);
+    assert_eq!(output["responseBody"], "patrol accepted");
+    assert_eq!(output["readbackError"], "camera readback timed out");
+}
+
+#[tokio::test]
+async fn large_ptz_accepted_body_remains_in_content() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let accepted = format!("{}ptz-response-tail", "x".repeat(50_000));
+    Mock::given(method("POST"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/ptz/goto/-1")))
+        .respond_with(ResponseTemplate::new(202).set_body_string(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.ptz.control",
+                &serde_json::json!({
+                    "camera": "cam-front", "action": "gotoPreset", "slot": -1,
+                    "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted PTZ response");
+    let structured = result.structured_content.expect("structured");
+    assert_eq!(structured["responseStatus"], 202);
+    assert_eq!(structured["responseBodyInContent"], true);
+    assert!(
+        result
+            .content
+            .iter()
+            .any(|block| format!("{block:?}").contains(&accepted))
     );
 }
 

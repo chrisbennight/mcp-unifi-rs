@@ -1757,6 +1757,12 @@ struct CameraPtzOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     slot: Option<i32>,
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// Present for confirmed patrol actions when the camera reports its
     /// active slot. A preset move has no position readback in this API.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1883,6 +1889,12 @@ struct CameraStreamsUpdateOutput {
     action: CameraStreamsAction,
     qualities: Vec<StreamQuality>,
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -6477,6 +6489,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<CameraPtzInput>(params)?;
         let command = ptz_command(input.action, input.slot)?;
         let selector = camera_selector(&input.camera)?;
@@ -6489,6 +6502,9 @@ impl UnifiMcp {
             action: input.action,
             slot: input.slot,
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             verified: None,
             active_patrol_slot: None,
             readback_error: None,
@@ -6496,24 +6512,38 @@ impl UnifiMcp {
             warnings: Vec::new(),
         };
         if !input.confirm {
-            return structured(output);
+            return structured_with_accepted_response(output);
         }
 
-        self.protect()
+        let (status, body) = self
+            .protect()
             .camera_ptz(&camera_id, command)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         if matches!(command, ProtectPtzCommand::GotoPreset(_)) {
             output.warnings.push(
                 "controller accepted preset movement; the integration API does not report camera position"
                     .to_owned(),
             );
-            return structured(output);
+            return structured_with_accepted_response(output);
         }
-        let mut upstream_error = None;
-        match self.protect().camera(&camera_id).await {
-            Ok(camera) if camera.id == camera_id => {
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(PTZ_RESPONSE_RESERVE)
+            .min(PTZ_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("camera readback skipped near request deadline".to_owned());
+            return structured_with_accepted_response(output);
+        }
+        let readback = tokio::time::timeout(budget, self.protect().camera(&camera_id)).await;
+        match readback {
+            Err(_) => output.readback_error = Some("camera readback timed out".to_owned()),
+            Ok(Ok(camera)) if camera.id == camera_id => {
                 output.active_patrol_slot = patrol_slot_view(camera.active_patrol_slot);
                 output.verified = match (command, camera.active_patrol_slot) {
                     (ProtectPtzCommand::StartPatrol(want), ProtectPatrolState::Running(got)) => {
@@ -6538,16 +6568,15 @@ impl UnifiMcp {
                     );
                 }
             }
-            Ok(camera) => output.warnings.push(format!(
+            Ok(Ok(camera)) => output.warnings.push(format!(
                 "controller returned camera {} during readback of {camera_id}",
                 camera.id
             )),
-            Err(error) => {
+            Ok(Err(error)) => {
                 output.readback_error = Some(error.to_string());
-                upstream_error = Some(error);
             }
         }
-        structured_with_mutation_readback_error(output, upstream_error.as_ref())
+        structured_with_accepted_response(output)
     }
 
     async fn cameras_microphone_disable(
@@ -6745,6 +6774,10 @@ impl UnifiMcp {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Stream creation and removal share one accepted-response and readback contract"
+    )]
     async fn cameras_streams_update(
         &self,
         params: &CallToolRequestParams,
@@ -6762,6 +6795,9 @@ impl UnifiMcp {
             action: input.action,
             qualities: input.qualities.clone(),
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             verified: None,
             readback_error: None,
             readback_error_in_content: None,
@@ -6769,7 +6805,7 @@ impl UnifiMcp {
             warnings: Vec::new(),
         };
         if !input.confirm {
-            return structured(output);
+            return structured_with_accepted_response(output);
         }
 
         let qualities: Vec<ProtectStreamQuality> = input
@@ -6803,11 +6839,15 @@ impl UnifiMcp {
                 }
             }
             CameraStreamsAction::Remove => {
-                self.protect()
+                let (status, body) = self
+                    .protect()
                     .camera_streams_delete(&camera_id, &qualities)
                     .await
                     .map_err(api_error)?;
                 output.applied = true;
+                output.response_status = Some(status);
+                output.response_body =
+                    Some(BoundedMessage::from_controller_bytes(&body).to_string());
             }
         }
         // Verification must leave time to return newly created stream handles.
@@ -6821,7 +6861,6 @@ impl UnifiMcp {
         } else {
             Some(tokio::time::timeout(budget, self.protect().camera_streams(&camera_id)).await)
         };
-        let mut upstream_error = None;
         match readback {
             Some(Ok(Ok(after))) => {
                 output.verified = Some(input.qualities.iter().all(|quality| {
@@ -6840,14 +6879,13 @@ impl UnifiMcp {
             }
             Some(Ok(Err(error))) => {
                 output.readback_error = Some(error.to_string());
-                upstream_error = Some(error);
             }
             Some(Err(_)) => output.warnings.push("stream readback timed out".to_owned()),
             None => output
                 .warnings
                 .push("stream readback skipped because the request deadline was near".to_owned()),
         }
-        structured_with_mutation_readback_error(output, upstream_error.as_ref())
+        structured_with_accepted_response(output)
     }
 
     async fn cameras_talkback_start(
@@ -11214,6 +11252,8 @@ const VOUCHER_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const STREAM_READBACK_BUDGET: Duration = Duration::from_secs(5);
 /// Leave time to serialize stream handles after the optional readback.
 const STREAM_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+const PTZ_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const PTZ_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// A guest action response must remain returnable after a slow detail read.
 const GUEST_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const GUEST_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
@@ -12249,6 +12289,29 @@ fn structured_with_mutation_readback_error<T: Serialize>(
         return Ok(result);
     }
     Ok(CallToolResult::structured(value))
+}
+
+/// Keep a confirmed action's accepted response and any later controller
+/// readback failure available when either exceeds the structured result bound.
+fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
+    let mut value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut content = Vec::new();
+    for (field, marker) in [
+        ("responseBody", "responseBodyInContent"),
+        ("readbackError", "readbackErrorInContent"),
+    ] {
+        if value.to_string().len() > MAXIMUM_RESULT_BYTES
+            && let Value::Object(fields) = &mut value
+            && let Some(Value::String(body)) = fields.remove(field)
+        {
+            fields.insert(marker.to_owned(), Value::Bool(true));
+            content.push(ContentBlock::text(format!("{field}: {body}")));
+        }
+    }
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(content);
+    Ok(result)
 }
 
 /// Keep issued voucher codes in the structured result when several
