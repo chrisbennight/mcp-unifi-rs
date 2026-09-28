@@ -470,5 +470,3 @@ result says that verification was unavailable.
 
 Creating and deleting rules is out of scope throughout: these tools operate
 configuration an operator already has.
-
-Camera settings updates remain tracked in the Protect capability issue.
