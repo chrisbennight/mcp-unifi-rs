@@ -70,6 +70,18 @@ pub enum ProtectDeviceActionRoute<'a> {
     AlarmHubTrigger { output_id: &'a str },
 }
 
+/// Fixed arm-profile and alarm routes documented by the Protect API.
+#[derive(Debug, Clone, Copy)]
+pub enum ProtectArmRoute<'a> {
+    Create,
+    Update { profile_id: &'a str },
+    Delete { profile_id: &'a str },
+    Select,
+    Enable,
+    Disable,
+    Webhook { trigger_id: &'a str },
+}
+
 /// The accepted status and body returned by one Protect device action.
 #[derive(Debug, Clone)]
 pub struct ProtectActionResponse {
@@ -766,6 +778,80 @@ impl ProtectClient {
             }
         };
         let mut request = self.request(Method::POST, &segments)?;
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = self.send(request, endpoint).await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| log_response_rejection(endpoint, status, error))?;
+        Ok(ProtectActionResponse { status, body })
+    }
+
+    /// Read every arm-profile record without discarding controller fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn arm_profiles(&self) -> Result<Vec<Value>, ApiError> {
+        self.get_json(&["arm-profiles"]).await
+    }
+
+    /// Invoke one documented arm-profile or alarm operation exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid identifiers, transport failure,
+    /// controller rejection, or a response beyond the transport byte budget.
+    pub async fn arm_operation(
+        &self,
+        route: ProtectArmRoute<'_>,
+        body: Option<&Value>,
+    ) -> Result<ProtectActionResponse, ApiError> {
+        let (method, segments, endpoint): (Method, Vec<&str>, &'static str) = match route {
+            ProtectArmRoute::Create => (Method::POST, vec!["arm-profiles"], "protect.arm.create"),
+            ProtectArmRoute::Update { profile_id } => {
+                validate_identifier("protect.arm.update", profile_id)?;
+                (
+                    Method::PATCH,
+                    vec!["arm-profiles", profile_id],
+                    "protect.arm.update",
+                )
+            }
+            ProtectArmRoute::Delete { profile_id } => {
+                validate_identifier("protect.arm.delete", profile_id)?;
+                (
+                    Method::DELETE,
+                    vec!["arm-profiles", profile_id],
+                    "protect.arm.delete",
+                )
+            }
+            ProtectArmRoute::Select => (
+                Method::PATCH,
+                vec!["arm-profiles", "settings"],
+                "protect.arm.select",
+            ),
+            ProtectArmRoute::Enable => (
+                Method::POST,
+                vec!["arm-profiles", "enable"],
+                "protect.arm.enable",
+            ),
+            ProtectArmRoute::Disable => (
+                Method::POST,
+                vec!["arm-profiles", "disable"],
+                "protect.arm.disable",
+            ),
+            ProtectArmRoute::Webhook { trigger_id } => {
+                validate_identifier("protect.arm.webhook", trigger_id)?;
+                (
+                    Method::POST,
+                    vec!["alarm-manager", "webhook", trigger_id],
+                    "protect.arm.webhook",
+                )
+            }
+        };
+        let mut request = self.request(method, &segments)?;
         if let Some(body) = body {
             request = request.json(body);
         }
