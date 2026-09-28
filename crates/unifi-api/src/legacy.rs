@@ -326,10 +326,10 @@ impl LegacyClient {
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session, request, or decoding fails,
-    /// or [`ApiError::Rejected`] when the id names no wireless network.
+    /// including the accepted controller response when it contains no row.
     pub async fn wlan(&self, site: &str, id: &str) -> Result<WlanConf, ApiError> {
-        let rows: Vec<WlanConf> = self
-            .request_with_reauth(
+        let (rows, bytes): (Vec<WlanConf>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
                 RequestClass::IdempotentRead,
                 Method::GET,
                 site,
@@ -337,14 +337,9 @@ impl LegacyClient {
                 None,
             )
             .await?;
-        // An `ok` envelope with no row means the id matched nothing. That is
-        // a caller-visible outcome, not a transport fault, so it travels as a
-        // rejection rather than a decode failure.
-        rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
-            status: None,
-            code: BoundedMessage::new("api.err.NotFound"),
-            message: BoundedMessage::new("no wireless network has that id"),
-        })
+        let row = legacy_detail_row(rows, &bytes, "wireless network")?;
+        validate_legacy_detail_id(&row.id, id, &bytes, "wireless network")?;
+        Ok(row)
     }
 
     /// One wireless network read once, as both the allowlisted projection and
@@ -358,7 +353,7 @@ impl LegacyClient {
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session, request, or decoding fails,
-    /// or [`ApiError::Rejected`] when the id names no wireless network.
+    /// including the accepted controller response when it contains no row.
     pub async fn wlan_snapshot(
         &self,
         site: &str,
@@ -373,14 +368,11 @@ impl LegacyClient {
                 None,
             )
             .await?;
-        let row = rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
-            status: None,
-            code: BoundedMessage::new("api.err.NotFound"),
-            message: BoundedMessage::new("no wireless network has that id"),
-        })?;
+        let row = legacy_detail_row(rows, &bytes, "wireless network")?;
         let fingerprint = RecordFingerprint(row.clone());
-        let conf = serde_json::from_value(serde_json::Value::Object(row))
+        let conf: WlanConf = serde_json::from_value(serde_json::Value::Object(row))
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        validate_legacy_detail_id(&conf.id, id, &bytes, "wireless network")?;
         Ok((conf, fingerprint))
     }
 
@@ -428,7 +420,7 @@ impl LegacyClient {
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session, request, or decoding fails,
-    /// or [`ApiError::Rejected`] when the id names no port forward.
+    /// including the accepted controller response when it contains no row.
     pub async fn port_forward_snapshot(
         &self,
         site: &str,
@@ -443,14 +435,11 @@ impl LegacyClient {
                 None,
             )
             .await?;
-        let row = rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
-            status: None,
-            code: BoundedMessage::new("api.err.NotFound"),
-            message: BoundedMessage::new("no port forward has that id"),
-        })?;
+        let row = legacy_detail_row(rows, &bytes, "port forward")?;
         let fingerprint = RecordFingerprint(row.clone());
-        let forward = serde_json::from_value(serde_json::Value::Object(row))
+        let forward: PortForward = serde_json::from_value(serde_json::Value::Object(row))
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        validate_legacy_detail_id(&forward.id, id, &bytes, "port forward")?;
         Ok((forward, fingerprint))
     }
 
@@ -1372,6 +1361,41 @@ impl LegacyClient {
             session.csrf = Some(token);
         }
     }
+}
+
+fn legacy_detail_row<T>(rows: Vec<T>, bytes: &[u8], kind: &str) -> Result<T, ApiError> {
+    if rows.len() != 1 {
+        let diagnostic = if rows.is_empty() {
+            format!("{kind} response contains no row for requested id")
+        } else {
+            format!(
+                "{kind} response contains {} rows for requested id",
+                rows.len()
+            )
+        };
+        return Err(ApiError::DecodeResponse {
+            response: BoundedMessage::from_controller_bytes(bytes),
+            diagnostic: BoundedMessage::new(&diagnostic),
+        });
+    }
+    Ok(rows.into_iter().next().expect("checked one row"))
+}
+
+fn validate_legacy_detail_id(
+    actual: &str,
+    requested: &str,
+    bytes: &[u8],
+    kind: &str,
+) -> Result<(), ApiError> {
+    if actual != requested {
+        return Err(ApiError::DecodeResponse {
+            response: BoundedMessage::from_controller_bytes(bytes),
+            diagnostic: BoundedMessage::new(&format!(
+                "{kind} response id does not match requested id"
+            )),
+        });
+    }
+    Ok(())
 }
 
 fn capture_csrf_into(session: &mut SessionState, response: &Response) {

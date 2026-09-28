@@ -721,6 +721,133 @@ async fn snapshot_conversion_errors_keep_the_original_controller_envelope() {
 }
 
 #[tokio::test]
+async fn empty_detail_rows_keep_the_accepted_controller_envelope() {
+    let server = logged_in_server().await;
+    for (endpoint, kind) in [
+        ("/proxy/network/api/s/default/rest/wlanconf/wlan-1", "wlan"),
+        (
+            "/proxy/network/api/s/default/rest/portforward/pf-1",
+            "port_forward",
+        ),
+    ] {
+        let mut body = ok_envelope(&serde_json::json!([]));
+        body["controllerDetail"] =
+            serde_json::json!(format!("{}empty-detail-tail", "x".repeat(700)));
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let errors = if kind == "wlan" {
+            vec![
+                client
+                    .wlan("default", "wlan-1")
+                    .await
+                    .expect_err("missing WLAN"),
+                client
+                    .wlan_snapshot("default", "wlan-1")
+                    .await
+                    .expect_err("missing WLAN snapshot"),
+            ]
+        } else {
+            vec![
+                client
+                    .port_forward_snapshot("default", "pf-1")
+                    .await
+                    .expect_err("missing port forward"),
+            ]
+        };
+        for error in errors {
+            let ApiError::DecodeResponse {
+                response,
+                diagnostic,
+            } = error
+            else {
+                panic!("expected accepted response, got {error:?}");
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(response.as_str())
+                    .expect("response JSON"),
+                body
+            );
+            assert!(response.as_str().contains("empty-detail-tail"));
+            assert!(diagnostic.as_str().contains("no row"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_detail_identity_and_row_count_keep_the_controller_envelope() {
+    for (endpoint, kind, requested_id) in [
+        (
+            "/proxy/network/api/s/default/rest/wlanconf/wlan-1",
+            "wlan",
+            "wlan-1",
+        ),
+        (
+            "/proxy/network/api/s/default/rest/portforward/pf-1",
+            "port_forward",
+            "pf-1",
+        ),
+    ] {
+        for (rows, diagnostic) in [
+            (serde_json::json!([{"_id": "another-id"}]), "does not match"),
+            (
+                serde_json::json!([{"_id": requested_id}, {"_id": "another-id"}]),
+                "2 rows",
+            ),
+        ] {
+            let server = logged_in_server().await;
+            let mut body = ok_envelope(&rows);
+            body["controllerDetail"] = serde_json::json!(format!("{}detail-tail", "x".repeat(700)));
+            Mock::given(method("GET"))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+                .mount(&server)
+                .await;
+            let client = client_for(&server);
+            let errors = if kind == "wlan" {
+                vec![
+                    client
+                        .wlan("default", requested_id)
+                        .await
+                        .expect_err("invalid WLAN detail"),
+                    client
+                        .wlan_snapshot("default", requested_id)
+                        .await
+                        .expect_err("invalid WLAN snapshot"),
+                ]
+            } else {
+                vec![
+                    client
+                        .port_forward_snapshot("default", requested_id)
+                        .await
+                        .expect_err("invalid port forward"),
+                ]
+            };
+            for error in errors {
+                let ApiError::DecodeResponse {
+                    response,
+                    diagnostic: actual,
+                } = error
+                else {
+                    panic!("expected accepted response, got {error:?}");
+                };
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(response.as_str())
+                        .expect("response JSON"),
+                    body
+                );
+                assert!(response.as_str().contains("detail-tail"));
+                assert!(actual.as_str().contains(diagnostic), "{actual}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn activity_validation_errors_keep_the_exact_controller_body() {
     const START: u64 = 1_789_200_000_000;
     let window = ActivityWindow::new(START, START + 3_600_000).expect("window");
@@ -1237,10 +1364,11 @@ async fn a_single_wireless_read_returns_the_row_and_names_a_missing_id() {
         .mount(&server)
         .await;
     // An `ok` envelope with no rows is how the controller reports an id that
-    // matched nothing; it must not decode into a phantom resource.
+    // matched nothing; its response must remain available to the caller.
+    let empty_response = ok_envelope(&serde_json::json!([]));
     Mock::given(method("GET"))
         .and(path(format!("{prefix}/rest/wlanconf/absent")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&empty_response))
         .mount(&server)
         .await;
 
@@ -1254,7 +1382,18 @@ async fn a_single_wireless_read_returns_the_row_and_names_a_missing_id() {
         .wlan("default", "absent")
         .await
         .expect_err("absent id");
-    assert!(matches!(missing, ApiError::Rejected { .. }), "{missing:?}");
+    let ApiError::DecodeResponse {
+        response,
+        diagnostic,
+    } = missing
+    else {
+        panic!("expected accepted response, got {missing:?}");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(response.as_str()).expect("response JSON"),
+        empty_response
+    );
+    assert!(diagnostic.as_str().contains("no row"));
 }
 
 #[tokio::test]

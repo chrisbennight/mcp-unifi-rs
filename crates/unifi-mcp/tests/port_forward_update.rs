@@ -422,9 +422,12 @@ async fn a_request_that_changes_nothing_is_refused_before_any_controller_call() 
 async fn an_id_that_names_no_rule_changes_nothing() {
     let server = MockServer::start().await;
     logged_in(&server).await;
+    let mut response = ok_envelope(&serde_json::json!([]));
+    response["controllerDetail"] =
+        serde_json::json!(format!("{}missing-rule-tail", "x".repeat(700)));
     Mock::given(method("GET"))
         .and(path(format!("{LEGACY}/rest/portforward/{FORWARD}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
         .mount(&server)
         .await;
     // No PUT is mounted: the read must fail before anything is written.
@@ -440,7 +443,9 @@ async fn an_id_that_names_no_rule_changes_nothing() {
         )
         .await
         .expect_err("unknown id");
-    // The missing row is reported directly, and the absent PUT mock proves
-    // nothing was written.
-    assert_eq!(error.message, "no port forward has that id");
+    // The accepted response is reported directly, and the absent PUT mock
+    // proves nothing was written.
+    assert!(error.message.contains(&response.to_string()));
+    assert!(error.message.contains("missing-rule-tail"));
+    assert!(error.message.contains("no row for requested id"));
 }
