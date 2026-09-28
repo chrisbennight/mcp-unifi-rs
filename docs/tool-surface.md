@@ -196,6 +196,13 @@ resolving it by position. `protect.overview` groups cameras by the state words
 the console itself used and wraps the official single NVR object in its
 recorder list.
 
+`cameras.status` can include the complete original local camera record with
+`includeDetails: true`, or selected top-level fields with `detailFields`.
+`protect.overview` accepts `detailFields` to return selected top-level fields
+from the original local bootstrap, including recorder, account, and user
+records. These fields are returned as the console reports them. A result over
+the 48 KiB response budget fails explicitly; request fewer fields when needed.
+
 `cameras.snapshot` fetches a JPEG from the official Protect API by camera id
 or exact reported name. It returns MCP image content plus small structured
 metadata, so an agent can inspect a frame without receiving a base64 string
