@@ -429,6 +429,16 @@ pub struct PortForwardPatch {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fwd_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dst_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proto: Option<String>,
 }
 
 impl PortForwardPatch {
@@ -436,7 +446,13 @@ impl PortForwardPatch {
     /// that cannot change anything.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.name.is_none() && self.enabled.is_none()
+        self.name.is_none()
+            && self.enabled.is_none()
+            && self.src.is_none()
+            && self.fwd.is_none()
+            && self.fwd_port.is_none()
+            && self.dst_port.is_none()
+            && self.proto.is_none()
     }
 }
 

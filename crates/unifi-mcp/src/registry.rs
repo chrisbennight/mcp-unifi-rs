@@ -506,11 +506,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::PortForwardsUpdate,
         "port_forwards.update",
-        "Enable, disable, or rename one port forward by id, as firewall.read \
+        "Update one port forward by id, as firewall.read \
          reports it. Previews the change and its consequences unless confirm \
          is true; a confirmed change is read back and each field reported as \
-         persisted, dropped, or coerced. Where the rule points is not settable \
-         here.",
+         persisted, dropped, or coerced. Source, target, ports, and protocol \
+         can be changed along with name and enabled state.",
         // Applying the same settings twice leaves the same state. The result
         // reports which internal host a rule exposes.
         ToolBehavior::write(true).result_sensitive(),
