@@ -166,6 +166,14 @@ reports the subsequent detail read and whether the requested values or
 deletion were observed. A failed readback does not erase an accepted write.
 Large values move to MCP content with a corresponding `InContent` marker.
 
+`acl.rules.ordering.read` returns the complete priority ordering from the
+official ACL ordering endpoint. `acl.rules.ordering.configure` previews a full
+replacement `orderedAclRuleIds` list and sends it only with `confirm: true`. It
+returns the complete accepted controller record and HTTP status, then reads
+the ordering again to report whether the requested order persisted. A failed
+or stalled readback leaves the accepted response available. Large records move
+to MCP content with explicit markers.
+
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 
 These tools use the [official Network Wi-Fi broadcast API](https://developer.ui.com/network/v10.4.57/getwifibroadcastpage).
@@ -610,6 +618,7 @@ it.
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
 | `acl.rules.configure` | no | yes | yes |
+| `acl.rules.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |

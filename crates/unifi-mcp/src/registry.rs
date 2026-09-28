@@ -45,6 +45,8 @@ pub enum ToolKind {
     NetworkPolicyList,
     NetworkPolicyDetail,
     AclRulesConfigure,
+    AclRulesOrderingRead,
+    AclRulesOrderingConfigure,
     DnsPoliciesConfigure,
     TrafficListsConfigure,
     WifiBroadcastsList,
@@ -109,6 +111,7 @@ impl ToolKind {
             | Self::DevicesAdopt
             | Self::DevicesRemove
             | Self::AclRulesConfigure
+            | Self::AclRulesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::GuestsAuthorize
@@ -145,6 +148,7 @@ impl ToolKind {
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
+            | Self::AclRulesOrderingRead
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
@@ -223,6 +227,8 @@ impl ToolKind {
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
             | Self::AclRulesConfigure
+            | Self::AclRulesOrderingRead
+            | Self::AclRulesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::WifiBroadcastsList
@@ -705,6 +711,19 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .input_sensitive()
             .result_sensitive(),
     ),
+    sensitive_read_spec(
+        ToolKind::AclRulesOrderingRead,
+        "acl.rules.ordering.read",
+        "Read the complete ACL rule priority ordering for the selected site.",
+    ),
+    write_spec(
+        ToolKind::AclRulesOrderingConfigure,
+        "acl.rules.ordering.configure",
+        "Preview or replace the selected site's complete ACL rule priority ordering. Returns the accepted controller record and bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     write_spec(
         ToolKind::DnsPoliciesConfigure,
         "dns.policies.configure",
@@ -889,6 +908,8 @@ mod tests {
         ToolKind::NetworkPolicyList,
         ToolKind::NetworkPolicyDetail,
         ToolKind::AclRulesConfigure,
+        ToolKind::AclRulesOrderingRead,
+        ToolKind::AclRulesOrderingConfigure,
         ToolKind::DnsPoliciesConfigure,
         ToolKind::TrafficListsConfigure,
         ToolKind::WifiBroadcastsList,
@@ -1015,6 +1036,8 @@ mod tests {
                 | ToolKind::NetworkPolicyList
                 | ToolKind::NetworkPolicyDetail
                 | ToolKind::AclRulesConfigure
+                | ToolKind::AclRulesOrderingRead
+                | ToolKind::AclRulesOrderingConfigure
                 | ToolKind::DnsPoliciesConfigure
                 | ToolKind::TrafficListsConfigure
                 | ToolKind::WifiBroadcastsList
