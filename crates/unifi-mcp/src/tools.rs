@@ -8334,19 +8334,18 @@ fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallTo
     result
 }
 
-/// Preserve the recovery instruction for an unsplittable event boundary.
+/// Keep the caller's recovery path for an event timestamp group that needs a
+/// larger page while carrying the complete controller response.
 fn protect_events_api_error(error: ApiError) -> McpError {
-    match error {
-        ApiError::Config(message)
-            if message
-                == "Protect event page boundary exceeds the requested limit; retry with a higher limit" =>
-        {
-            McpError::invalid_params(
-                "Protect event page boundary exceeds the requested limit; retry with a higher limit",
-                None,
-            )
-        }
-        other => api_error(other),
+    if matches!(
+        &error,
+        ApiError::DecodeResponse { diagnostic, .. }
+            if diagnostic.as_str()
+                == "Protect event page boundary exceeds the requested limit; retry with a higher limit"
+    ) {
+        McpError::invalid_params(error.to_string(), None)
+    } else {
+        api_error(error)
     }
 }
 

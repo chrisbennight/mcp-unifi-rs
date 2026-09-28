@@ -333,7 +333,9 @@ complete timestamp group, so insertions and removals among newer rows cannot
 shift unread history. A
 one-row lookahead keeps simultaneous events together. If one timestamp group
 is larger than the requested page, the call fails loudly and asks for a higher
-limit instead of silently splitting it. The per-page `limit` controls work
+limit instead of silently splitting it. A malformed accepted event page
+returns the complete controller body with a separate validation diagnostic.
+The per-page `limit` controls work
 and result size; there is no whole-window row cap or silent truncation.
 
 The snapshot tool covers still images from cameras; RTSPS URLs are transport
