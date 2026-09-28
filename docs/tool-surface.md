@@ -339,6 +339,16 @@ records or a wrong detail id return the accepted controller body with a local
 diagnostic. A result that exceeds the MCP budget fails explicitly so the
 caller can lower the page limit.
 
+`protect.viewers.settings.update` previews the viewer's current record and a
+typed change to its `name` or assigned `liveview`. An explicit `null` clears
+the live-view assignment. With `confirm: true`, it sends one PATCH, returns
+the complete accepted response, and reads the viewer back. `verified` is true
+only when the requested fields appear in that read-back. Controller errors
+and invalid accepted records retain the complete upstream body. Large records
+move to labeled content blocks so a successful PATCH can still return its
+response; the corresponding `InContent` flags identify those fields. The
+gateway decides who may use the action and see its records.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It

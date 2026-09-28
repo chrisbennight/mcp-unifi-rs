@@ -19,7 +19,7 @@ use rmcp::{
     },
 };
 use schemars::{JsonSchema, schema_for};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use unifi_api::{
     ApiError, BoundedMessage, ProtectAvailability, RecordFingerprint,
@@ -673,6 +673,75 @@ struct ProtectViewerStatusInput {
 #[serde(rename_all = "camelCase")]
 struct ProtectViewerStatusOutput {
     viewer: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectViewerSettingsChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    liveview: Option<LiveviewAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum LiveviewAssignment {
+    Id(String),
+    Clear,
+}
+
+fn deserialize_present_nullable<'de, D>(
+    deserializer: D,
+) -> Result<Option<LiveviewAssignment>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|value| {
+        Some(match value {
+            Some(id) => LiveviewAssignment::Id(id),
+            None => LiveviewAssignment::Clear,
+        })
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectViewerSettingsUpdateInput {
+    viewer_id: String,
+    changes: ProtectViewerSettingsChanges,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectViewerSettingsUpdateOutput {
+    viewer_id: String,
+    requested: ProtectViewerSettingsChanges,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2707,6 +2776,9 @@ impl ToolSpec {
             ToolKind::ProtectViewersStatus => {
                 tool::<ProtectViewerStatusInput, ProtectViewerStatusOutput>(self)
             }
+            ToolKind::ProtectViewersSettingsUpdate => {
+                tool::<ProtectViewerSettingsUpdateInput, ProtectViewerSettingsUpdateOutput>(self)
+            }
             ToolKind::ProtectLiveviewsList => {
                 tool::<ProtectViewsListInput, ProtectLiveviewsListOutput>(self)
             }
@@ -2982,6 +3054,9 @@ impl UnifiMcp {
             ToolKind::CamerasPosTransaction => self.cameras_pos_transaction(params).await,
             ToolKind::ProtectViewersList => self.protect_viewers_list(params).await,
             ToolKind::ProtectViewersStatus => self.protect_viewers_status(params).await,
+            ToolKind::ProtectViewersSettingsUpdate => {
+                self.protect_viewers_settings_update(params).await
+            }
             ToolKind::ProtectLiveviewsList => self.protect_liveviews_list(params).await,
             ToolKind::ProtectLiveviewsStatus => self.protect_liveviews_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
@@ -3797,6 +3872,92 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
         structured(ProtectViewerStatusOutput { viewer })
+    }
+
+    async fn protect_viewers_settings_update(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<ProtectViewerSettingsUpdateInput>(params)?;
+        if input.viewer_id.is_empty() || input.viewer_id.len() > 256 {
+            return Err(McpError::invalid_params(
+                "viewerId must be 1-256 bytes",
+                None,
+            ));
+        }
+        if input.changes.name.is_none() && input.changes.liveview.is_none() {
+            return Err(McpError::invalid_params(
+                "changes names no field to change",
+                None,
+            ));
+        }
+        if input
+            .changes
+            .name
+            .as_ref()
+            .is_some_and(|name| name.len() > 4096)
+            || input
+                .changes
+                .liveview
+                .as_ref()
+                .is_some_and(|assignment| matches!(assignment, LiveviewAssignment::Id(id) if id.is_empty() || id.len() > 256))
+        {
+            return Err(McpError::invalid_params(
+                "name must be at most 4096 bytes and a liveview id must be 1-256 bytes",
+                None,
+            ));
+        }
+        let patch = serde_json::to_value(&input.changes)
+            .map_err(|_| McpError::internal_error("viewer settings could not be encoded", None))?;
+        let before = self
+            .protect()
+            .viewer(&input.viewer_id)
+            .await
+            .map_err(api_error)?;
+        let mut output = ProtectViewerSettingsUpdateOutput {
+            viewer_id: input.viewer_id,
+            requested: input.changes,
+            applied: false,
+            before: Some(before),
+            before_in_content: None,
+            response: None,
+            response_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return viewer_settings_result(output);
+        }
+        let response = self
+            .protect()
+            .viewer_settings_patch(&output.viewer_id, &patch)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        output.response = Some(response);
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+            .min(CAMERA_SETTINGS_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("viewer readback skipped because the request deadline was near".to_owned());
+            return viewer_settings_result(output);
+        }
+        match tokio::time::timeout(budget, self.protect().viewer(&output.viewer_id)).await {
+            Ok(Ok(after)) => {
+                output.verified = Some(viewer_settings_match(&output.requested, &after));
+                output.after = Some(after);
+            }
+            Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+            Err(_) => output.readback_error = Some("viewer readback timed out".to_owned()),
+        }
+        viewer_settings_result(output)
     }
 
     async fn protect_liveviews_list(
@@ -9092,6 +9253,60 @@ fn page_validation_error(
     })
 }
 
+fn viewer_settings_match(changes: &ProtectViewerSettingsChanges, after: &Value) -> bool {
+    changes
+        .name
+        .as_ref()
+        .is_none_or(|name| after.get("name").and_then(Value::as_str) == Some(name.as_str()))
+        && changes
+            .liveview
+            .as_ref()
+            .is_none_or(|assignment| match assignment {
+                LiveviewAssignment::Id(id) => {
+                    after.get("liveview").and_then(Value::as_str) == Some(id.as_str())
+                }
+                LiveviewAssignment::Clear => after.get("liveview") == Some(&Value::Null),
+            })
+}
+
+fn viewer_settings_result(
+    mut output: ProtectViewerSettingsUpdateOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &ProtectViewerSettingsUpdateOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(before) = output.before.take()
+    {
+        output.before_in_content = Some(true);
+        content.push(ContentBlock::text(format!("before: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(response) = output.response.take()
+    {
+        output.response_in_content = Some(true);
+        content.push(ContentBlock::text(format!("response: {response}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn guest_validation_error(response: BoundedMessage, diagnostic: &'static str) -> ApiError {
     ApiError::DecodeResponse {
         response,
@@ -9307,6 +9522,26 @@ mod tests {
         jsonschema::validator_for(schema)
             .expect("published schema compiles")
             .is_valid(instance)
+    }
+
+    #[test]
+    fn viewer_settings_schema_accepts_an_explicit_null_assignment() {
+        let schema = serde_json::to_value(schemars::schema_for!(
+            super::ProtectViewerSettingsUpdateInput
+        ))
+        .expect("viewer settings schema");
+        assert!(validates(
+            &schema,
+            &json!({"viewerId":"viewer-1","changes":{"liveview":null}})
+        ));
+        assert!(validates(
+            &schema,
+            &json!({"viewerId":"viewer-1","changes":{"liveview":"view-1"}})
+        ));
+        assert!(!validates(
+            &schema,
+            &json!({"viewerId":"viewer-1","changes":{"liveview":42}})
+        ));
     }
 
     #[test]
@@ -9537,6 +9772,9 @@ mod tests {
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.
         ("cameras.settings.update", true, false, true),
+        // A viewer assignment is stable when repeated; device names and
+        // returned configuration may be sensitive.
+        ("protect.viewers.settings.update", true, true, true),
         // Repeating a stream creation or removal, or opening another audio
         // session, can have another upstream effect.
         ("cameras.streams.update", false, false, true),

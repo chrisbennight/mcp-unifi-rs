@@ -48,6 +48,7 @@ pub enum ToolKind {
     CamerasPosTransaction,
     ProtectViewersList,
     ProtectViewersStatus,
+    ProtectViewersSettingsUpdate,
     ProtectLiveviewsList,
     ProtectLiveviewsStatus,
     CamerasSettingsRead,
@@ -97,6 +98,7 @@ impl ToolKind {
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
             | Self::CamerasPosTransaction
+            | Self::ProtectViewersSettingsUpdate
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -144,6 +146,7 @@ impl ToolKind {
             | Self::ProtectUsersStatus
             | Self::ProtectViewersList
             | Self::ProtectViewersStatus
+            | Self::ProtectViewersSettingsUpdate
             | Self::ProtectLiveviewsList
             | Self::ProtectLiveviewsStatus
             | Self::CamerasSettingsRead
@@ -433,6 +436,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.viewers.status",
         "Read the complete Protect viewer device record by exact id.",
     ),
+    write_spec(
+        ToolKind::ProtectViewersSettingsUpdate,
+        "protect.viewers.settings.update",
+        "Preview or patch a Protect viewer's name and assigned live view by exact id, then read back the complete record.",
+        ToolBehavior::write(true)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::ProtectLiveviewsList,
         "protect.liveviews.list",
@@ -697,6 +708,7 @@ mod tests {
         ToolKind::CamerasPosTransaction,
         ToolKind::ProtectViewersList,
         ToolKind::ProtectViewersStatus,
+        ToolKind::ProtectViewersSettingsUpdate,
         ToolKind::ProtectLiveviewsList,
         ToolKind::ProtectLiveviewsStatus,
         ToolKind::CamerasSettingsRead,
@@ -741,6 +753,18 @@ mod tests {
     }
 
     #[test]
+    fn viewer_settings_classifies_the_write_and_both_data_directions() {
+        let spec = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.kind == ToolKind::ProtectViewersSettingsUpdate)
+            .expect("viewer settings tool");
+        assert_eq!(spec.risk, "high");
+        assert!(spec.kind.requires_write_access());
+        assert!(spec.behavior.input_sensitive);
+        assert!(spec.behavior.result_sensitive);
+    }
+
+    #[test]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
             // Exhaustiveness anchor: a new variant must be added here or the
@@ -765,6 +789,7 @@ mod tests {
                 | ToolKind::CamerasPosTransaction
                 | ToolKind::ProtectViewersList
                 | ToolKind::ProtectViewersStatus
+                | ToolKind::ProtectViewersSettingsUpdate
                 | ToolKind::ProtectLiveviewsList
                 | ToolKind::ProtectLiveviewsStatus
                 | ToolKind::CamerasSettingsRead
@@ -831,6 +856,7 @@ mod tests {
                 "cameras.pos.transaction",
                 "protect.viewers.list",
                 "protect.viewers.status",
+                "protect.viewers.settings.update",
                 "protect.liveviews.list",
                 "protect.liveviews.status",
                 "cameras.settings.read",
