@@ -1515,6 +1515,42 @@ struct CameraPtzOutput {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraDisableMicInput {
+    /// Camera id or exact reported name from `cameras.search`.
+    camera: String,
+    /// Run the irreversible action. Absent or false previews the request.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraDisableMicOutput {
+    camera_id: String,
+    effect: &'static str,
+    before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_in_content: Option<bool>,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum PatrolSlotView {
@@ -3325,6 +3361,9 @@ impl ToolSpec {
             }
             ToolKind::CamerasSnapshot => tool::<CameraSnapshotInput, CameraSnapshotOutput>(self),
             ToolKind::CamerasPtzControl => tool::<CameraPtzInput, CameraPtzOutput>(self),
+            ToolKind::CamerasMicrophoneDisable => {
+                tool::<CameraDisableMicInput, CameraDisableMicOutput>(self)
+            }
             ToolKind::CamerasStreamsList => {
                 tool::<CameraStreamsListInput, CameraStreamsListOutput>(self)
             }
@@ -3607,6 +3646,7 @@ impl UnifiMcp {
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
             ToolKind::CamerasPtzControl => self.cameras_ptz_control(params).await,
+            ToolKind::CamerasMicrophoneDisable => self.cameras_microphone_disable(params).await,
             ToolKind::CamerasStreamsList => self.cameras_streams_list(params).await,
             ToolKind::CamerasStreamsUpdate => self.cameras_streams_update(params).await,
             ToolKind::CamerasTalkbackStart => self.cameras_talkback_start(params).await,
@@ -5265,6 +5305,73 @@ impl UnifiMcp {
             }
         }
         structured_with_mutation_readback_error(output, upstream_error.as_ref())
+    }
+
+    async fn cameras_microphone_disable(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<CameraDisableMicInput>(params)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self
+            .camera_inventory(CameraInventoryScope::CameraNames)
+            .await?;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
+        let before = self
+            .protect()
+            .camera_raw(&camera_id)
+            .await
+            .map_err(api_error)?;
+        let mut output = CameraDisableMicOutput {
+            camera_id,
+            effect: "permanently disable microphone; restoring it requires a camera reset",
+            before: Some(before),
+            before_in_content: None,
+            submitted: false,
+            accepted_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return camera_disable_mic_result(output);
+        }
+        let response = self
+            .protect()
+            .camera_disable_mic(&output.camera_id)
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.accepted_status = Some(response.status);
+        output.response_body =
+            Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+            .min(CAMERA_SETTINGS_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("camera readback skipped because the request deadline was near".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.protect().camera_raw(&output.camera_id)).await {
+                Ok(Ok(after)) => {
+                    output.verified = after
+                        .get("isMicEnabled")
+                        .and_then(Value::as_bool)
+                        .map(|enabled| !enabled);
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("camera readback timed out".to_owned()),
+            }
+        }
+        camera_disable_mic_result(output)
     }
 
     async fn cameras_streams_list(
@@ -10567,6 +10674,44 @@ fn device_settings_update_result(
     Ok(result)
 }
 
+fn camera_disable_mic_result(
+    mut output: CameraDisableMicOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &CameraDisableMicOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(before) = output.before.take()
+    {
+        output.before_in_content = Some(true);
+        content.push(ContentBlock::text(format!("before: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn protect_action_result(
     mut output: ProtectDevicesActionOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -11324,6 +11469,7 @@ mod tests {
         ("protect.alarms.action", false, true, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
+        ("cameras.microphone.disable", true, false, true),
         // Applying the same named settings leaves the same configuration.
         ("cameras.settings.update", true, false, true),
         // A viewer assignment is stable when repeated; device names and

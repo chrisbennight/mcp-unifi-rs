@@ -448,6 +448,15 @@ verification. `cameras.status` includes `activePatrolSlot` when reported by the
 console; null means no patrol is running. A failed patrol read-back returns the
 controller response in `readbackError`.
 
+`cameras.microphone.disable` previews the complete camera record by default.
+With `confirm: true`, it sends the official permanent microphone-disable POST
+once, returns the accepted status and complete controller body, then reads the
+complete camera record again. `verified` is true only when the camera reports
+`isMicEnabled: false`; a failed read-back is reported without claiming the
+microphone is disabled. Protect says restoring the microphone requires a
+camera reset. Large records and responses move to labeled content blocks,
+with `InContent` flags in the structured result.
+
 `cameras.streams.list` returns the existing RTSPS stream URLs for a camera.
 These URLs grant access to the camera feed, so the result is classified high
 risk and sensitive. The gateway decides caller access in gateway mode.
@@ -529,6 +538,7 @@ it.
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
+| `cameras.microphone.disable` | yes | yes | yes |
 | `cameras.settings.update` | yes | no | yes |
 | `cameras.streams.update` | **no** | no | yes |
 | `cameras.talkback.start` | **no** | no | yes |

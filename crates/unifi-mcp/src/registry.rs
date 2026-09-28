@@ -61,6 +61,7 @@ pub enum ToolKind {
     CamerasSettingsUpdate,
     CamerasSnapshot,
     CamerasPtzControl,
+    CamerasMicrophoneDisable,
     CamerasStreamsList,
     CamerasStreamsUpdate,
     CamerasTalkbackStart,
@@ -100,6 +101,7 @@ impl ToolKind {
             | Self::FirewallPoliciesDelete
             | Self::VouchersRevoke
             | Self::CamerasPtzControl
+            | Self::CamerasMicrophoneDisable
             | Self::CamerasSettingsUpdate
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
@@ -171,6 +173,7 @@ impl ToolKind {
             | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
             | Self::CamerasPtzControl
+            | Self::CamerasMicrophoneDisable
             | Self::CamerasStreamsList
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
@@ -539,6 +542,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Preview or run a Protect PTZ action for one camera: go to a preset (including home), start a patrol slot, or stop the patrol. Confirmed patrol actions read the active slot back; preset movement reports acceptance because the API exposes no position readback.",
         ToolBehavior::write(false).result_sensitive(),
     ),
+    write_spec(
+        ToolKind::CamerasMicrophoneDisable,
+        "cameras.microphone.disable",
+        "Preview or permanently disable one Protect camera microphone by id or exact name. A confirmed call returns the full accepted controller body and complete camera readback. The microphone can be restored only by resetting the camera.",
+        ToolBehavior::write(true).result_sensitive(),
+    ),
     credential_read_spec(
         ToolKind::CamerasStreamsList,
         "cameras.streams.list",
@@ -784,6 +793,7 @@ mod tests {
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
         ToolKind::CamerasPtzControl,
+        ToolKind::CamerasMicrophoneDisable,
         ToolKind::CamerasStreamsList,
         ToolKind::CamerasStreamsUpdate,
         ToolKind::CamerasTalkbackStart,
@@ -897,6 +907,7 @@ mod tests {
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
                 | ToolKind::CamerasPtzControl
+                | ToolKind::CamerasMicrophoneDisable
                 | ToolKind::CamerasStreamsList
                 | ToolKind::CamerasStreamsUpdate
                 | ToolKind::CamerasTalkbackStart
@@ -970,6 +981,7 @@ mod tests {
                 "cameras.settings.update",
                 "cameras.snapshot",
                 "cameras.ptz.control",
+                "cameras.microphone.disable",
                 "cameras.streams.list",
                 "cameras.streams.update",
                 "cameras.talkback.start",
