@@ -410,10 +410,17 @@ Code lengths are reported rather than judged: the controller decides the
 format, and refusing a batch for being unfamiliar would condemn vouchers that
 already exist. It also reads each identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
-reported with the creation response; the caller can inspect `vouchers.status`
-or `vouchers.search` without minting the batch again.
+reported with the creation response in `readbackErrors`, with the voucher id
+and complete controller error. `readbackComplete` says whether all returned
+rows were checked. A deadline or accumulated error response budget that stops
+later reads is named in `readbackStopReason`; those vouchers remain reachable
+through `vouchers.status` or `vouchers.search` without minting the batch again.
+Large errors move to a separate text content block, signaled by
+`readbackErrorsInContent`, while issued codes remain in the structured result.
 
-**The codes come back whether or not those checks pass.** From the moment the
+**Every code the controller supplied comes back whether or not those checks
+pass.** A row with no code keeps that field absent rather than inventing an
+empty code. From the moment the
 request succeeds the vouchers exist on the controller, and withholding their
 codes because something looked wrong would create guest access nobody can use
 and nobody can find. A failed check is reported alongside the codes, never

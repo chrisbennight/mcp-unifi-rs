@@ -268,6 +268,37 @@ async fn a_row_the_controller_did_not_identify_still_yields_its_code() {
 }
 
 #[tokio::test]
+async fn a_missing_voucher_code_is_reported_as_missing() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "vouchers": [{"id": "voucher-0"}]
+        })))
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 1,
+                "timeLimitMinutes": 60, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("created voucher remains visible")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["vouchers"][0]["id"], "voucher-0");
+    assert!(output["vouchers"][0].get("code").is_none());
+    assert_eq!(output["checks"]["allIdentified"], false);
+}
+
+#[tokio::test]
 async fn a_voucher_id_and_code_are_returned_exactly() {
     let server = MockServer::start().await;
     mount_site(&server).await;
@@ -444,6 +475,97 @@ async fn failed_readback_is_reported_without_hiding_created_codes() {
     assert_eq!(output["verified"], false, "{output}");
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert!(output.get("wellFormed").is_some(), "{output}");
+    assert_eq!(output["readbackErrors"][0]["voucherId"], "voucher-0");
+    assert!(
+        output["readbackErrors"][0]["error"]
+            .as_str()
+            .expect("error")
+            .contains("controller returned HTTP 404")
+    );
+    assert_eq!(output["readbackComplete"], true);
+}
+
+#[tokio::test]
+async fn multiple_readback_failures_identify_the_vouchers_that_failed() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890", "2345678901"])).await;
+    for index in 0..2 {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-{index}"
+            )))
+            .respond_with(
+                ResponseTemplate::new(503).set_body_string(format!("detail failure {index}")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 2, "timeLimitMinutes": 60,
+                "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("created codes survive")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["readbackComplete"], true);
+    for index in 0..2 {
+        assert_eq!(
+            output["readbackErrors"][index]["voucherId"],
+            format!("voucher-{index}")
+        );
+        assert_eq!(
+            output["readbackErrors"][index]["error"],
+            format!("controller returned HTTP 503: detail failure {index}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_rows() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890", "2345678901"])).await;
+    let failure = format!("detail failed: {}voucher-error-tail", "x".repeat(50_000));
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-0"
+        )))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-1"
+        )))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 2, "timeLimitMinutes": 60,
+                "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("created codes survive");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["vouchers"][0]["code"], "1234567890");
+    assert_eq!(output["vouchers"][1]["code"], "2345678901");
+    assert_eq!(output["readbackComplete"], false);
+    assert_eq!(output["readbackStopReason"], "responseBudget");
+    assert_eq!(output["readbackErrorsInContent"], true);
+    assert!(content.to_string().contains("voucher-0"));
+    assert!(content.to_string().contains(&failure));
 }
 
 #[tokio::test]
@@ -482,6 +604,8 @@ async fn slow_readback_returns_the_creation_response_before_the_tool_deadline() 
     assert_eq!(output["verified"], false, "{output}");
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert_eq!(output["vouchers"][1]["code"], "2345678901");
+    assert_eq!(output["readbackComplete"], false);
+    assert_eq!(output["readbackStopReason"], "deadline");
 }
 
 #[tokio::test]
