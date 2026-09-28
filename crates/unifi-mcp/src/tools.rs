@@ -2004,7 +2004,8 @@ struct VoucherView {
     /// code is still returned so an incomplete creation response is visible.
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
 }
 
 /// Checks on the creation response, separate from readback verification.
@@ -2028,6 +2029,20 @@ struct VoucherChecks {
     /// not uniform. Reported rather than judged: the controller decides the
     /// format, and this server should not refuse a batch for being unfamiliar.
     code_lengths: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct VoucherReadbackFailure {
+    voucher_id: String,
+    error: String,
+}
+
+struct VoucherVerification {
+    verified: bool,
+    errors: Vec<VoucherReadbackFailure>,
+    complete: bool,
+    stop_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -2056,6 +2071,14 @@ struct VouchersCreateOutput {
     /// False also covers missing ids, failed reads and mismatched codes.
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    readback_errors: Vec<VoucherReadbackFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_errors_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_stop_reason: Option<&'static str>,
     /// Consequences worth knowing before confirming.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -5260,37 +5283,13 @@ impl UnifiMcp {
         structured_with_mutation_readback_error(result, upstream_error.as_ref())
     }
 
-    async fn verify_created_vouchers(
-        &self,
-        site_id: &str,
-        requested: u32,
-        vouchers: &[Voucher],
-    ) -> bool {
-        let mut verified = usize::try_from(requested).is_ok_and(|want| want == vouchers.len());
-        let mut ids = HashSet::new();
-        for voucher in vouchers {
-            let (Some(id), Some(code)) = (voucher.id.as_deref(), voucher.code.as_deref()) else {
-                verified = false;
-                continue;
-            };
-            if !ids.insert(id) {
-                verified = false;
-            }
-            match self.integration().voucher(site_id, id).await {
-                Ok(persisted) if persisted.id == id && persisted.code == code => {}
-                Ok(_) | Err(_) => verified = false,
-            }
-        }
-        verified
-    }
-
     async fn verify_created_vouchers_before_deadline(
         &self,
         site_id: &str,
         requested: u32,
         vouchers: &[Voucher],
         started: tokio::time::Instant,
-    ) -> bool {
+    ) -> VoucherVerification {
         // A slow detail endpoint must not consume the outer tool deadline
         // after minting. Reserve time to shape and return the creation result.
         let budget = self
@@ -5298,15 +5297,55 @@ impl UnifiMcp {
             .saturating_sub(started.elapsed())
             .saturating_sub(VOUCHER_RESPONSE_RESERVE)
             .min(VOUCHER_READBACK_BUDGET);
-        if budget.is_zero() {
-            return false;
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut result = VoucherVerification {
+            verified: usize::try_from(requested).is_ok_and(|want| want == vouchers.len()),
+            errors: Vec::new(),
+            complete: true,
+            stop_reason: None,
+        };
+        let mut error_bytes = 0;
+        let mut ids = HashSet::new();
+        for (index, voucher) in vouchers.iter().enumerate() {
+            let (Some(id), Some(code)) = (voucher.id.as_deref(), voucher.code.as_deref()) else {
+                result.verified = false;
+                continue;
+            };
+            if !ids.insert(id) {
+                result.verified = false;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                result.verified = false;
+                result.complete = false;
+                result.stop_reason = Some("deadline");
+                break;
+            }
+            match tokio::time::timeout_at(deadline, self.integration().voucher(site_id, id)).await {
+                Ok(Ok(persisted)) if persisted.id == id && persisted.code == code => {}
+                Ok(Ok(_)) => result.verified = false,
+                Ok(Err(error)) => {
+                    result.verified = false;
+                    let message = error.to_string();
+                    error_bytes += message.len();
+                    result.errors.push(VoucherReadbackFailure {
+                        voucher_id: id.to_owned(),
+                        error: message,
+                    });
+                    if error_bytes >= MAXIMUM_RESULT_BYTES && index + 1 < vouchers.len() {
+                        result.complete = false;
+                        result.stop_reason = Some("responseBudget");
+                        break;
+                    }
+                }
+                Err(_) => {
+                    result.verified = false;
+                    result.complete = false;
+                    result.stop_reason = Some("deadline");
+                    break;
+                }
+            }
         }
-        tokio::time::timeout(
-            budget,
-            self.verify_created_vouchers(site_id, requested, vouchers),
-        )
-        .await
-        .unwrap_or(false)
+        result
     }
 
     /// Mint hotspot vouchers, previewing unless the caller confirms.
@@ -5332,6 +5371,10 @@ impl UnifiMcp {
                 checks: None,
                 well_formed: None,
                 verified: None,
+                readback_errors: Vec::new(),
+                readback_errors_in_content: None,
+                readback_complete: None,
+                readback_stop_reason: None,
                 warnings,
             });
         }
@@ -5352,7 +5395,7 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
 
-        let verified = self
+        let verification = self
             .verify_created_vouchers_before_deadline(
                 &site_id,
                 input.count,
@@ -5360,7 +5403,7 @@ impl UnifiMcp {
                 started,
             )
             .await;
-        if !verified {
+        if !verification.verified && verification.errors.is_empty() {
             warnings.push(
                 "not every created voucher could be read back with the same id and code; inspect vouchers.status or vouchers.search"
                     .to_owned(),
@@ -5372,7 +5415,7 @@ impl UnifiMcp {
             .into_iter()
             .map(|voucher| VoucherView {
                 id: voucher.id,
-                code: voucher.code.unwrap_or_default(),
+                code: voucher.code,
             })
             .collect();
         // The checks describe the ids and codes returned by the controller.
@@ -5381,14 +5424,18 @@ impl UnifiMcp {
             && checks.all_identified
             && checks.all_distinct
             && checks.all_well_formed;
-        structured(VouchersCreateOutput {
+        structured_with_mutation_readback_errors(VouchersCreateOutput {
             applied: true,
             batch,
             requested: input.count,
             vouchers: Some(vouchers),
             checks: Some(checks),
             well_formed: Some(well_formed),
-            verified: Some(verified),
+            verified: Some(verification.verified),
+            readback_errors: verification.errors,
+            readback_errors_in_content: None,
+            readback_complete: Some(verification.complete),
+            readback_stop_reason: verification.stop_reason,
             warnings,
         })
     }
@@ -7233,23 +7280,26 @@ fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> 
 fn voucher_checks(requested: u32, vouchers: &[VoucherView]) -> VoucherChecks {
     let mut lengths: Vec<usize> = vouchers
         .iter()
-        .map(|voucher| voucher.code.chars().count())
+        .filter_map(|voucher| voucher.code.as_ref().map(|code| code.chars().count()))
         .collect();
     lengths.sort_unstable();
     lengths.dedup();
-    let mut codes: Vec<&str> = vouchers.iter().map(|v| v.code.as_str()).collect();
+    let mut codes: Vec<&str> = vouchers.iter().filter_map(|v| v.code.as_deref()).collect();
     codes.sort_unstable();
     let distinct = codes.len();
     codes.dedup();
     VoucherChecks {
         count_matches: usize::try_from(requested).is_ok_and(|want| want == vouchers.len()),
         all_identified: vouchers.iter().all(|voucher| {
-            voucher.id.as_ref().is_some_and(|id| !id.is_empty()) && !voucher.code.is_empty()
+            voucher.id.as_ref().is_some_and(|id| !id.is_empty())
+                && voucher.code.as_ref().is_some_and(|code| !code.is_empty())
         }),
         all_distinct: codes.len() == distinct,
         all_well_formed: vouchers.iter().all(|voucher| {
-            let code = voucher.code.chars().count();
-            code > 0 && code <= VOUCHER_CODE_MAX && !voucher.code.chars().any(char::is_whitespace)
+            voucher.code.as_ref().is_some_and(|code| {
+                let length = code.chars().count();
+                length > 0 && length <= VOUCHER_CODE_MAX && !code.chars().any(char::is_whitespace)
+            })
         }),
         code_lengths: lengths,
     }
@@ -8148,6 +8198,27 @@ fn structured_with_mutation_readback_error<T: Serialize>(
         result
             .content
             .push(ContentBlock::text(format!("readbackError: {error}")));
+        return Ok(result);
+    }
+    Ok(CallToolResult::structured(value))
+}
+
+/// Keep issued voucher codes in the structured result when several
+/// verification failures do not fit alongside them.
+fn structured_with_mutation_readback_errors<T: Serialize>(
+    output: T,
+) -> Result<CallToolResult, McpError> {
+    let mut value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(errors) = fields.remove("readbackErrors")
+    {
+        fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
+        let mut result = CallToolResult::structured(value);
+        result
+            .content
+            .push(ContentBlock::text(format!("readbackErrors: {errors}")));
         return Ok(result);
     }
     Ok(CallToolResult::structured(value))
