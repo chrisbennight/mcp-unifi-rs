@@ -122,6 +122,43 @@ async fn radius_profiles_list_pages_without_dropping_controller_fields() {
     assert!(second.get("nextOffset").is_none());
 }
 
+#[tokio::test]
+async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/radius/profiles"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 0, "count": 2, "totalCount": 2,
+            "data": [{"id": "radius-1", "name": "Office"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &call("radius_profiles.list", &serde_json::json!({"limit": 1})),
+            None,
+        )
+        .await
+        .expect_err("contradictory page metadata");
+    assert!(
+        error
+            .message
+            .contains("reported offset 0, limit 0, count 2, and 1 rows")
+    );
+}
+
 async fn common_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))

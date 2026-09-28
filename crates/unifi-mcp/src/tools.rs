@@ -4084,19 +4084,31 @@ impl UnifiMcp {
             )
             .await
             .map_err(api_error)?;
-        if page.offset != input.offset || page.data.len() > usize::from(input.limit) {
+        let row_count = page.data.len() as u64;
+        if page.offset != input.offset
+            || page.limit == 0
+            || page.limit > u64::from(input.limit)
+            || row_count > page.limit
+            || page.count != row_count
+        {
             return Err(McpError::internal_error(
-                "RADIUS profile page does not match the requested bounds",
+                format!(
+                    "RADIUS profile page reported offset {}, limit {}, count {}, and {} rows for requested offset {} and limit {}",
+                    page.offset, page.limit, page.count, row_count, input.offset, input.limit
+                ),
                 None,
             ));
         }
         let next = input
             .offset
-            .checked_add(page.data.len() as u64)
+            .checked_add(row_count)
             .ok_or_else(|| McpError::internal_error("RADIUS profile offset overflow", None))?;
         if next < page.total_count && page.data.is_empty() {
             return Err(McpError::internal_error(
-                "RADIUS profile page is empty before the reported total",
+                format!(
+                    "RADIUS profile page at offset {} returned no rows before reported total {}",
+                    input.offset, page.total_count
+                ),
                 None,
             ));
         }
