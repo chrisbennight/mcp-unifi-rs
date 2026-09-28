@@ -1096,7 +1096,7 @@ impl LegacyClient {
     ) -> Result<Vec<T>, ApiError> {
         let bytes = self.execute_bytes(class, method, site, tail, body).await?;
         let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
-            .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         if envelope.meta.rc == "ok" {
             Ok(envelope.data)
         } else {
@@ -1332,12 +1332,14 @@ fn validate_protect_bootstrap(bootstrap: &ProtectBootstrap) -> Result<(), ApiErr
         return Err(ApiError::SchemaMismatch {
             endpoint: "protect.bootstrap",
             path: BoundedMessage::new("nvr.id"),
+            response: None,
         });
     }
     if bootstrap.nvr.model_key != "nvr" {
         return Err(ApiError::SchemaMismatch {
             endpoint: "protect.bootstrap",
             path: BoundedMessage::new("nvr.modelKey"),
+            response: None,
         });
     }
     Ok(())
@@ -1348,6 +1350,7 @@ fn validate_protect_cameras(cameras: &[ProtectLocalCamera]) -> Result<(), ApiErr
         return Err(ApiError::SchemaMismatch {
             endpoint: "protect.bootstrap",
             path: BoundedMessage::new("cameras"),
+            response: None,
         });
     }
     for camera in cameras {
@@ -1355,12 +1358,14 @@ fn validate_protect_cameras(cameras: &[ProtectLocalCamera]) -> Result<(), ApiErr
             return Err(ApiError::SchemaMismatch {
                 endpoint: "protect.bootstrap",
                 path: BoundedMessage::new("cameras.id"),
+                response: None,
             });
         }
         if camera.model_key != "camera" {
             return Err(ApiError::SchemaMismatch {
                 endpoint: "protect.bootstrap",
                 path: BoundedMessage::new("cameras.modelKey"),
+                response: None,
             });
         }
     }

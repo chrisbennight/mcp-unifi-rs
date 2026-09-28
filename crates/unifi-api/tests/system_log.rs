@@ -225,3 +225,26 @@ async fn reads_retry_session_expiry_or_a_short_rate_limit_once() {
             .expect("retried read");
     }
 }
+
+#[tokio::test]
+async fn an_unrecognized_system_log_page_keeps_the_controller_response() {
+    let server = MockServer::start().await;
+    login(&server, 1).await;
+    Mock::given(method("POST"))
+        .and(path(ROUTE))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"error":"system-log format changed"}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let error = client(&server)
+        .system_log("default", &SystemLogQuery::new(0, 2000, 1).unwrap())
+        .await
+        .expect_err("unrecognized page");
+    assert!(
+        error.to_string().contains("system-log format changed"),
+        "{error}"
+    );
+}

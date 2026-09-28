@@ -56,6 +56,14 @@ impl From<String> for BoundedMessage {
     }
 }
 
+/// Pair a decoder failure with the controller's bounded response body.
+pub(crate) fn decode_failure(error: &impl std::fmt::Display, bytes: &[u8]) -> ApiError {
+    ApiError::Decode(BoundedMessage::new(&format!(
+        "{error}; controller response: {}",
+        String::from_utf8_lossy(bytes)
+    )))
+}
+
 /// A failure talking to a controller. Upstream-derived detail always travels
 /// as a [`BoundedMessage`]. Controller-provided values remain present in the
 /// selected error detail, with an explicit marker if the budget is reached.
@@ -64,8 +72,8 @@ pub enum ApiError {
     /// Locally produced configuration diagnostics; carries no upstream data.
     #[error("invalid controller configuration: {0}")]
     Config(String),
-    /// The controller answered with a non-success status. `message` is a
-    /// bounded extract of the upstream error body, never the raw payload.
+    /// The controller answered with a non-success status. `message` keeps
+    /// the original response text within the error string budget.
     #[error("controller returned HTTP {status}: {message}")]
     Status {
         status: u16,
@@ -91,23 +99,45 @@ pub enum ApiError {
     /// A successful response exceeded the process-wide response body budget.
     #[error("controller response exceeded the {limit}-byte budget")]
     ResponseTooLarge { limit: usize },
-    /// A successful response was not syntactically valid JSON. Only its
-    /// location is retained; the parser's text can contain controller values.
-    #[error("invalid JSON from {endpoint} at line {line}, column {column}")]
+    /// A successful response was not syntactically valid JSON. The bounded
+    /// controller body remains available with its parser location.
+    #[error("invalid JSON from {endpoint} at line {line}, column {column}{response_suffix}", response_suffix = controller_response_suffix(response.as_ref()))]
     InvalidJson {
         endpoint: &'static str,
         line: usize,
         column: usize,
+        response: Option<BoundedMessage>,
     },
     /// Valid JSON did not match the endpoint's typed wire contract. The path
-    /// names fields only and never retains the rejected value.
-    #[error("response from {endpoint} did not match its schema at {path}")]
+    /// identifies the mismatch and a bounded controller body accompanies it
+    /// when the mismatch happened during wire decoding.
+    #[error("response from {endpoint} did not match its schema at {path}{response_suffix}", response_suffix = controller_response_suffix(response.as_ref()))]
     SchemaMismatch {
         endpoint: &'static str,
         path: BoundedMessage,
+        response: Option<BoundedMessage>,
     },
     #[error("response decoding failed: {0}")]
     Decode(BoundedMessage),
+}
+
+impl ApiError {
+    /// Retain the controller body when a decoded value fails a typed
+    /// response invariant after JSON parsing has succeeded.
+    pub(crate) fn with_controller_response(self, bytes: &[u8]) -> Self {
+        match self {
+            Self::SchemaMismatch { endpoint, path, .. } => Self::SchemaMismatch {
+                endpoint,
+                path,
+                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
+            },
+            other => other,
+        }
+    }
+}
+
+fn controller_response_suffix(response: Option<&BoundedMessage>) -> String {
+    response.map_or_else(String::new, |body| format!("; controller response: {body}"))
 }
 
 #[cfg(test)]

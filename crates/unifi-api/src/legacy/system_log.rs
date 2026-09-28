@@ -113,7 +113,7 @@ impl LegacyClient {
             ));
         }
         let page: SystemLogPage = serde_json::from_slice(&bytes)
-            .map_err(|_| ApiError::Decode("unexpected Network system-log response".into()))?;
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         query.validate_response(&page)?;
         Ok(page)
     }

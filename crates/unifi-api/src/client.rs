@@ -273,6 +273,7 @@ impl IntegrationClient {
             return Err(ApiError::SchemaMismatch {
                 endpoint: "guests.authorize",
                 path: BoundedMessage::new("action/grantedAuthorization"),
+                response: None,
             });
         }
         Ok(result)
@@ -298,6 +299,7 @@ impl IntegrationClient {
             return Err(ApiError::SchemaMismatch {
                 endpoint: "guests.unauthorize",
                 path: BoundedMessage::new("action/revokedAuthorization"),
+                response: None,
             });
         }
         Ok(result)
@@ -610,25 +612,15 @@ fn validate_guest_limits(limits: &GuestAuthorizationLimits) -> Result<(), ApiErr
 
 async fn decode<T: DeserializeOwned>(response: Response) -> Result<T, ApiError> {
     let bytes = http::read_bounded_body(response).await?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))
+    serde_json::from_slice(&bytes).map_err(|error| crate::error::decode_failure(&error, &bytes))
 }
 
-/// Keep the controller's error body within the error message budget.
+/// Keep the controller's full error body within the error message budget.
 pub(crate) async fn bounded_error_message(response: Response) -> Result<BoundedMessage, ApiError> {
     let bytes = http::read_bounded_body(response).await?;
     Ok(bounded_error_message_from_bytes(&bytes))
 }
 
 pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8]) -> BoundedMessage {
-    let message = serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
-    BoundedMessage::new(&message)
+    BoundedMessage::new(&String::from_utf8_lossy(bytes))
 }

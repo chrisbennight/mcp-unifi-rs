@@ -396,14 +396,14 @@ async fn rate_limited_mutations_are_never_retried() {
 }
 
 #[tokio::test]
-async fn upstream_errors_are_bounded_and_carry_the_extracted_message() {
+async fn upstream_errors_are_bounded_and_keep_the_controller_body() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/info")))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
             "statusCode": 401,
             "message": "invalid API key",
-            "internalDetail": "x".repeat(10_000),
+            "internalDetail": "additional context",
         })))
         .expect(1)
         .mount(&server)
@@ -414,7 +414,9 @@ async fn upstream_errors_are_bounded_and_carry_the_extracted_message() {
         panic!("expected Status, got {error:?}");
     };
     assert_eq!(status, 401);
-    assert_eq!(message.as_str(), "invalid API key");
+    assert!(message.as_str().contains("invalid API key"), "{message}");
+    assert!(message.as_str().contains("internalDetail"), "{message}");
+    assert!(message.as_str().contains("statusCode"), "{message}");
 }
 
 #[tokio::test]
@@ -434,7 +436,36 @@ async fn an_upstream_error_message_is_returned_unchanged() {
     let ApiError::Status { message, .. } = error else {
         panic!("expected Status, got {error:?}");
     };
-    assert_eq!(message.as_str(), format!("invalid key {API_KEY} rejected"));
+    assert_eq!(
+        message.as_str(),
+        serde_json::json!({
+            "statusCode": 401,
+            "message": format!("invalid key {API_KEY} rejected"),
+        })
+        .to_string()
+    );
+}
+
+#[tokio::test]
+async fn a_successful_response_that_cannot_decode_keeps_the_controller_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/info")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"applicationVersion": 17, "detail": "version format changed"}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server)
+        .info()
+        .await
+        .expect_err("incompatible response");
+    let rendered = error.to_string();
+    assert!(rendered.contains("controller response:"), "{rendered}");
+    assert!(rendered.contains("version format changed"), "{rendered}");
+    assert!(rendered.contains("applicationVersion"), "{rendered}");
 }
 
 #[tokio::test]
@@ -461,13 +492,7 @@ async fn an_over_limit_multibyte_error_message_is_truncated_without_panicking() 
     );
     assert!(!message.as_str().is_empty());
     assert!(message.as_str().ends_with(" [truncated]"));
-    assert!(
-        message
-            .as_str()
-            .trim_end_matches(" [truncated]")
-            .chars()
-            .all(|character| character == '\u{e9}')
-    );
+    assert!(message.as_str().contains('é'));
 }
 
 #[tokio::test]

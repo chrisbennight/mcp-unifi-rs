@@ -409,9 +409,10 @@ async fn wrong_resource_discriminators_are_rejected() {
 
     let error = client_for(&server).cameras().await.expect_err("wrong kind");
     assert!(
-        matches!(error, ApiError::SchemaMismatch { endpoint: "cameras", ref path }
+        matches!(error, ApiError::SchemaMismatch { endpoint: "cameras", ref path, .. }
         if path.as_str() == "modelKey")
     );
+    assert!(error.to_string().contains("wrong-kind"), "{error}");
 }
 
 #[tokio::test]
@@ -432,13 +433,13 @@ async fn documented_nullable_names_must_still_be_present() {
         .await
         .expect_err("missing required nullable name");
     assert!(
-        matches!(error, ApiError::SchemaMismatch { endpoint: "cameras", ref path }
+        matches!(error, ApiError::SchemaMismatch { endpoint: "cameras", ref path, .. }
         if path.as_str().starts_with("[0]"))
     );
 }
 
 #[tokio::test]
-async fn invalid_json_and_schema_mismatch_are_distinct_without_retaining_values() {
+async fn invalid_json_and_schema_mismatch_retain_bounded_controller_responses() {
     let invalid_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/cameras")))
@@ -456,6 +457,7 @@ async fn invalid_json_and_schema_mismatch_are_distinct_without_retaining_values(
             ..
         }
     ));
+    assert!(invalid.to_string().contains("[{"), "{invalid}");
 
     let schema_server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -480,7 +482,7 @@ async fn invalid_json_and_schema_mismatch_are_distinct_without_retaining_values(
             ..
         }
     ));
-    assert!(!rendered.contains("987654321"), "{rendered}");
+    assert!(rendered.contains("987654321"), "{rendered}");
 }
 
 #[tokio::test]

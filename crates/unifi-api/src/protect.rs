@@ -577,6 +577,7 @@ impl ProtectClient {
             return Err(ApiError::SchemaMismatch {
                 endpoint: "cameras.settings.update",
                 path: BoundedMessage::new("id"),
+                response: None,
             });
         }
         Ok(camera)
@@ -801,7 +802,7 @@ impl ProtectClient {
         );
         decode_json(endpoint, &bytes)
             .and_then(|value| {
-                validate(&value)?;
+                validate(&value).map_err(|error| error.with_controller_response(&bytes))?;
                 Ok(value)
             })
             .inspect_err(|error| {
@@ -962,10 +963,12 @@ pub(crate) fn decode_json<T: DeserializeOwned>(
                 endpoint,
                 line: inner.line(),
                 column: inner.column(),
+                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
             },
             Category::Data | Category::Io => ApiError::SchemaMismatch {
                 endpoint,
                 path: BoundedMessage::new(&path),
+                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
             },
         }
     })?;
@@ -973,6 +976,7 @@ pub(crate) fn decode_json<T: DeserializeOwned>(
         endpoint,
         line: error.line(),
         column: error.column(),
+        response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
     })?;
     Ok(decoded)
 }
@@ -988,6 +992,7 @@ fn validate_model_key(
         Err(ApiError::SchemaMismatch {
             endpoint,
             path: BoundedMessage::new("modelKey"),
+            response: None,
         })
     }
 }
@@ -999,6 +1004,7 @@ fn validate_identifier(endpoint: &'static str, id: &str) -> Result<(), ApiError>
         Err(ApiError::SchemaMismatch {
             endpoint,
             path: BoundedMessage::new("id"),
+            response: None,
         })
     }
 }
