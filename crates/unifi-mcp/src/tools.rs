@@ -1193,7 +1193,7 @@ struct CameraSettingsChanges {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum CameraResetAt {
-    Timestamp(f64),
+    Timestamp(Number),
     Forever,
 }
 
@@ -1201,7 +1201,7 @@ fn deserialize_camera_reset_at<'de, D>(deserializer: D) -> Result<Option<CameraR
 where
     D: Deserializer<'de>,
 {
-    Option::<f64>::deserialize(deserializer).map(|value| {
+    Option::<Number>::deserialize(deserializer).map(|value| {
         Some(match value {
             Some(timestamp) => CameraResetAt::Timestamp(timestamp),
             None => CameraResetAt::Forever,
@@ -8277,17 +8277,12 @@ fn camera_settings_match(
         .as_object_mut()
         .and_then(|fields| fields.remove("lcdMessage"));
     let lcd_matches = requested_lcd.as_ref().is_none_or(|wanted| {
-        let Some(wanted_fields) = wanted.as_object() else {
-            return false;
-        };
-        let Some(observed_fields) = after.lcd_message.as_ref().and_then(Value::as_object) else {
-            return false;
-        };
         // Protect can fill an omitted resetAt from recorder defaults, and
         // a camera can have no prior LCD message.
-        wanted_fields
-            .iter()
-            .all(|(key, value)| observed_fields.get(key) == Some(value))
+        after
+            .lcd_message
+            .as_ref()
+            .is_some_and(|observed| requested_json_matches(wanted, observed))
     });
     if requested_lcd.is_some() {
         before_value
@@ -11017,6 +11012,19 @@ mod tests {
     };
     use crate::mutation::FieldOutcome;
     use crate::registry::{TOOL_REGISTRY, ToolBehavior};
+
+    #[test]
+    fn lcd_integer_reset_time_keeps_its_json_number_form() {
+        let changes: super::CameraSettingsChanges = serde_json::from_value(json!({
+            "lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456}
+        }))
+        .expect("typed LCD message");
+        let patch = super::camera_settings_patch(&changes).expect("camera patch");
+        assert_eq!(
+            patch.lcd_message.expect("LCD message")["resetAt"],
+            json!(123_456)
+        );
+    }
 
     const CONSTRAINING_KEYWORDS: [&str; 43] = [
         "type",
