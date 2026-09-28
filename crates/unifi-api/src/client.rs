@@ -977,8 +977,9 @@ impl IntegrationClient {
     /// the one field it means to change, and sends the rest back exactly as it
     /// arrived. Nothing here interprets the record.
     ///
-    /// A mutation: never retried after an ambiguous transport result, and it
-    /// asserts nothing about persistence.
+    /// The accepted status and body are returned. This mutation is never
+    /// retried after an ambiguous transport result and asserts nothing about
+    /// persistence.
     ///
     /// # Errors
     ///
@@ -989,7 +990,7 @@ impl IntegrationClient {
         site_id: &str,
         policy_id: &str,
         record: &std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let response = self
             .send(
                 self.request(
@@ -999,12 +1000,14 @@ impl IntegrationClient {
                 .json(record),
             )
             .await?;
-        drop(response);
-        Ok(())
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
-    /// Delete one zone-based firewall policy. Never retried after an
-    /// ambiguous transport result; callers confirm absence with a read.
+    /// Delete one zone-based firewall policy. The accepted status and body
+    /// are returned. The mutation is never retried after an ambiguous
+    /// transport result; callers confirm absence with a read.
     ///
     /// # Errors
     ///
@@ -1013,15 +1016,16 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         policy_id: &str,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let response = self
             .send(self.request(
                 Method::DELETE,
                 &["sites", site_id, "firewall", "policies", policy_id],
             )?)
             .await?;
-        drop(response);
-        Ok(())
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
     fn request(&self, method: Method, segments: &[&str]) -> Result<RequestBuilder, ApiError> {

@@ -897,12 +897,14 @@ async fn firewall_policy_delete_uses_the_typed_id_route_once() {
     Mock::given(method("DELETE"))
         .and(path(format!("{PREFIX}/sites/s1/firewall/policies/p1")))
         .and(header("X-API-Key", API_KEY))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller deletion accepted"))
         .expect(1)
         .mount(&server)
         .await;
-    client_for(&server)
+    let (status, body) = client_for(&server)
         .delete_firewall_policy("s1", "p1")
         .await
         .expect("delete");
+    assert_eq!(status, 200);
+    assert_eq!(body, b"controller deletion accepted");
 }
