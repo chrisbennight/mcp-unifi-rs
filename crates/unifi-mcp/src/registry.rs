@@ -62,6 +62,8 @@ pub enum ToolKind {
     CamerasSnapshot,
     CamerasPtzControl,
     CamerasMicrophoneDisable,
+    ProtectAssetsList,
+    ProtectAssetsUpload,
     CamerasStreamsList,
     CamerasStreamsUpdate,
     CamerasTalkbackStart,
@@ -102,6 +104,7 @@ impl ToolKind {
             | Self::VouchersRevoke
             | Self::CamerasPtzControl
             | Self::CamerasMicrophoneDisable
+            | Self::ProtectAssetsUpload
             | Self::CamerasSettingsUpdate
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
@@ -137,6 +140,7 @@ impl ToolKind {
             | Self::ProtectLiveviewsStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSnapshot
+            | Self::ProtectAssetsList
             | Self::CamerasStreamsList
             | Self::ProtectOverview
             | Self::ProtectEvents
@@ -174,6 +178,8 @@ impl ToolKind {
             | Self::CamerasSnapshot
             | Self::CamerasPtzControl
             | Self::CamerasMicrophoneDisable
+            | Self::ProtectAssetsList
+            | Self::ProtectAssetsUpload
             | Self::CamerasStreamsList
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
@@ -548,6 +554,19 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Preview or permanently disable one Protect camera microphone by id or exact name. A confirmed call returns the full accepted controller body and complete camera readback. The microphone can be restored only by resetting the camera.",
         ToolBehavior::write(true).result_sensitive(),
     ),
+    sensitive_read_spec(
+        ToolKind::ProtectAssetsList,
+        "protect.assets.list",
+        "Page through complete Protect animation asset records, including controller file names and paths.",
+    ),
+    write_spec(
+        ToolKind::ProtectAssetsUpload,
+        "protect.assets.upload",
+        "Preview or upload one bounded image or audio asset to Protect's fixed animations route. Returns the complete accepted record and readback when available.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     credential_read_spec(
         ToolKind::CamerasStreamsList,
         "cameras.streams.list",
@@ -794,6 +813,8 @@ mod tests {
         ToolKind::CamerasSnapshot,
         ToolKind::CamerasPtzControl,
         ToolKind::CamerasMicrophoneDisable,
+        ToolKind::ProtectAssetsList,
+        ToolKind::ProtectAssetsUpload,
         ToolKind::CamerasStreamsList,
         ToolKind::CamerasStreamsUpdate,
         ToolKind::CamerasTalkbackStart,
@@ -908,6 +929,8 @@ mod tests {
                 | ToolKind::CamerasSnapshot
                 | ToolKind::CamerasPtzControl
                 | ToolKind::CamerasMicrophoneDisable
+                | ToolKind::ProtectAssetsList
+                | ToolKind::ProtectAssetsUpload
                 | ToolKind::CamerasStreamsList
                 | ToolKind::CamerasStreamsUpdate
                 | ToolKind::CamerasTalkbackStart
@@ -982,6 +1005,8 @@ mod tests {
                 "cameras.snapshot",
                 "cameras.ptz.control",
                 "cameras.microphone.disable",
+                "protect.assets.list",
+                "protect.assets.upload",
                 "cameras.streams.list",
                 "cameras.streams.update",
                 "cameras.talkback.start",
