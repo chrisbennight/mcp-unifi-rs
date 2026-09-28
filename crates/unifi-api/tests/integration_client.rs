@@ -40,6 +40,50 @@ fn page_body(data: &serde_json::Value) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn guest_action_validation_keeps_the_exact_controller_body() {
+    for (action, field) in [
+        ("AUTHORIZE_GUEST_ACCESS", "action/grantedAuthorization"),
+        ("UNAUTHORIZE_GUEST_ACCESS", "action/revokedAuthorization"),
+    ] {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "action": action,
+            "padding": "x".repeat(700),
+            "z_controller_field": "original-guest-action-tail",
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path(format!("{PREFIX}/sites/s1/clients/c1/actions")))
+            .and(body_json(serde_json::json!({"action": action})))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+
+        let error = if action == "AUTHORIZE_GUEST_ACCESS" {
+            client_for(&server)
+                .authorize_guest("s1", "c1", GuestAuthorizationLimits::default())
+                .await
+                .expect_err("missing grant")
+        } else {
+            client_for(&server)
+                .unauthorize_guest("s1", "c1")
+                .await
+                .expect_err("missing revocation")
+        };
+        let ApiError::SchemaMismatch {
+            path,
+            response: Some(response),
+            ..
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(path.as_str(), field);
+        assert_eq!(response.as_str(), body);
+    }
+}
+
+#[tokio::test]
 async fn every_request_authenticates_with_the_api_key_header() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

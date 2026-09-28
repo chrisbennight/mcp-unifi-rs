@@ -307,7 +307,7 @@ impl IntegrationClient {
         limits: GuestAuthorizationLimits,
     ) -> Result<GuestActionResponse, ApiError> {
         validate_guest_limits(&limits)?;
-        let result: GuestActionResponse = self
+        let (result, bytes): (GuestActionResponse, Vec<u8>) = self
             .post_action_result(
                 &["sites", site_id, "clients", client_id, "actions"],
                 &ClientAction::AuthorizeGuestAccess { limits },
@@ -318,7 +318,8 @@ impl IntegrationClient {
                 endpoint: "guests.authorize",
                 path: BoundedMessage::new("action/grantedAuthorization"),
                 response: None,
-            });
+            }
+            .with_controller_response(&bytes));
         }
         Ok(result)
     }
@@ -333,7 +334,7 @@ impl IntegrationClient {
         site_id: &str,
         client_id: &str,
     ) -> Result<GuestActionResponse, ApiError> {
-        let result: GuestActionResponse = self
+        let (result, bytes): (GuestActionResponse, Vec<u8>) = self
             .post_action_result(
                 &["sites", site_id, "clients", client_id, "actions"],
                 &ClientAction::UnauthorizeGuestAccess,
@@ -344,7 +345,8 @@ impl IntegrationClient {
                 endpoint: "guests.unauthorize",
                 path: BoundedMessage::new("action/revokedAuthorization"),
                 response: None,
-            });
+            }
+            .with_controller_response(&bytes));
         }
         Ok(result)
     }
@@ -484,11 +486,14 @@ impl IntegrationClient {
         &self,
         segments: &[&str],
         action: &A,
-    ) -> Result<T, ApiError> {
+    ) -> Result<(T, Vec<u8>), ApiError> {
         let response = self
             .send(self.request(Method::POST, segments)?.json(action))
             .await?;
-        decode(response).await
+        let bytes = http::read_bounded_body(response).await?;
+        let result = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((result, bytes))
     }
 
     /// One zone-based policy exactly as the controller stores it, plus a
