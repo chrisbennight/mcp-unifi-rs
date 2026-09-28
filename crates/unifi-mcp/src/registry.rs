@@ -523,12 +523,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
-        "Read one Protect camera's documented name, overlay, LED, microphone volume, video mode, HDR, and smart detection settings by id or exact name.",
+        "Read one complete Protect camera record, including LCD message and settings, by id or exact name. Large records move to labeled content.",
     ),
     write_spec(
         ToolKind::CamerasSettingsUpdate,
         "cameras.settings.update",
-        "Preview or patch one Protect camera's documented settings by id or exact name. Sends only named settings and reads the camera back to report the observed state.",
+        "Preview or patch one Protect camera's documented settings, including typed doorbell LCD messages, by id or exact name. Returns complete accepted and read-back records.",
         ToolBehavior::write(true).result_sensitive(),
     ),
     sensitive_read_spec(

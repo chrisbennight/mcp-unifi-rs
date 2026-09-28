@@ -719,9 +719,10 @@ async fn camera_settings_update_returns_controller_readback_error() {
         "id": "cam-front", "modelKey": "camera", "name": "Front Door",
         "state": "CONNECTED", "micVolume": 40
     });
+    let detail = format!("{}settings-response-tail", "y".repeat(60_000));
     let after = serde_json::json!({
         "id": "cam-front", "modelKey": "camera", "name": "Front Door",
-        "state": "CONNECTED", "micVolume": 70
+        "state": "CONNECTED", "micVolume": 70, "controllerOnly": detail
     });
     let failure = format!(
         "settings read failed: {}settings-readback-tail",
@@ -745,7 +746,7 @@ async fn camera_settings_update_returns_controller_readback_error() {
         .expect(1)
         .mount(&server)
         .await;
-    let output = handler_for(&server)
+    let result = handler_for(&server)
         .call(
             &call(
                 "cameras.settings.update",
@@ -757,11 +758,13 @@ async fn camera_settings_update_returns_controller_readback_error() {
             None,
         )
         .await
-        .expect("settings changed")
-        .structured_content
-        .expect("structured");
+        .expect("settings changed");
+    let output = result.structured_content.expect("structured");
     assert_eq!(output["applied"], true);
-    assert_eq!(output["response"]["micVolume"], 70);
+    assert_eq!(output["responseInContent"], true);
+    assert!(result.content.iter().any(|item| matches!(item,
+        ContentBlock::Text(text) if text.text.contains(&detail)
+    )));
     assert_eq!(
         output["readbackError"],
         format!("controller returned HTTP 503: {failure}")
@@ -875,7 +878,7 @@ async fn camera_settings_update_sends_named_fields_and_verifies_readback() {
         .expect("settings read")
         .structured_content
         .expect("structured");
-    assert_eq!(status["videoMode"], "highFps");
+    assert_eq!(status["camera"]["videoMode"], "highFps");
 }
 
 #[tokio::test]
@@ -916,6 +919,111 @@ async fn camera_settings_preview_does_not_patch() {
         .expect("structured");
     assert_eq!(output["applied"], false);
     assert_eq!(output["requested"]["micVolume"], 70);
+}
+
+#[tokio::test]
+async fn camera_lcd_message_keeps_null_timeout_and_complete_controller_records() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED",
+        "lcdMessage":{"type":"DO_NOT_DISTURB"}, "controllerOnly":{"version":"before"}
+    });
+    let after = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED",
+        "lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":null},
+        "controllerOnly":{"version":"after"}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .and(body_json(serde_json::json!({"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":null}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(&call("cameras.settings.update", &serde_json::json!({
+            "camera":"cam-front", "changes":{"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":null}}, "confirm":true
+        })), None)
+        .await
+        .expect("LCD message updated")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true);
+    assert_eq!(output["before"], before);
+    assert_eq!(output["response"], after);
+    assert_eq!(output["after"], after);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn camera_settings_read_moves_large_complete_record_to_content() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let detail = format!("{}camera-record-tail", "x".repeat(60_000));
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED",
+            "controllerOnly":detail
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.read",
+                &serde_json::json!({"camera":"cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("complete camera record");
+    let structured = result.structured_content.expect("structured");
+    assert_eq!(structured["cameraInContent"], true);
+    assert!(result.content.iter().any(|item| matches!(item,
+        ContentBlock::Text(text) if text.text.contains(&detail)
+    )));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn camera_lcd_message_requires_text_for_custom_and_image_types() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for kind in ["CUSTOM_MESSAGE", "IMAGE"] {
+        handler
+            .call(
+                &call(
+                    "cameras.settings.update",
+                    &serde_json::json!({
+                        "camera":"cam-front", "changes":{"lcdMessage":{"type":kind}}, "confirm":true
+                    }),
+                ),
+                None,
+            )
+            .await
+            .expect_err("missing documented text field");
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
