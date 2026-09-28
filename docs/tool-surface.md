@@ -140,6 +140,8 @@ category/key substring and client MAC filters and paginates those matches.
 additional upstream rows. Narrow the time window or severity when it is set.
 Rows include `time` in epoch milliseconds, `key`, `message`, `category`,
 `severity`, and `clientMac` when available. Missing timestamps fail decoding.
+If a received page violates its pagination contract, the error includes the
+complete accepted controller response and the validation diagnostic.
 Known entity placeholders in messages are replaced literally; messages are
 limited to 256 characters with a visible ellipsis when shortened.
 

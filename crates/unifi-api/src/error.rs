@@ -157,6 +157,10 @@ impl ApiError {
                 path,
                 response: Some(BoundedMessage::from_controller_bytes(bytes)),
             },
+            Self::Decode(diagnostic) => Self::DecodeResponse {
+                response: BoundedMessage::from_controller_bytes(bytes),
+                diagnostic,
+            },
             other => other,
         }
     }
