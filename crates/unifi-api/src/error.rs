@@ -59,8 +59,8 @@ impl From<String> for BoundedMessage {
 /// Pair a decoder failure with the controller's bounded response body.
 pub(crate) fn decode_failure(error: &impl std::fmt::Display, bytes: &[u8]) -> ApiError {
     ApiError::Decode(BoundedMessage::new(&format!(
-        "{error}; controller response: {}",
-        String::from_utf8_lossy(bytes)
+        "controller response: {}; decode error: {error}",
+        String::from_utf8_lossy(bytes),
     )))
 }
 
@@ -111,7 +111,7 @@ pub enum ApiError {
     /// Valid JSON did not match the endpoint's typed wire contract. The path
     /// identifies the mismatch and a bounded controller body accompanies it
     /// when the mismatch happened during wire decoding.
-    #[error("response from {endpoint} did not match its schema at {path}{response_suffix}", response_suffix = controller_response_suffix(response.as_ref()))]
+    #[error("response from {endpoint} did not match its schema{response_suffix} at {path}", response_suffix = controller_response_suffix(response.as_ref()))]
     SchemaMismatch {
         endpoint: &'static str,
         path: BoundedMessage,

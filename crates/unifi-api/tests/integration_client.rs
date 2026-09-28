@@ -469,6 +469,34 @@ async fn a_successful_response_that_cannot_decode_keeps_the_controller_body() {
 }
 
 #[tokio::test]
+async fn a_long_decode_diagnostic_cannot_hide_the_controller_response() {
+    let server = MockServer::start().await;
+    let body = format!(
+        "{{\"context\":\"controller changed this field\",\"offset\":\"{}\",\"limit\":1,\"count\":0,\"totalCount\":0,\"data\":[]}}",
+        "x".repeat(600)
+    );
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server)
+        .sites(PageRequest {
+            offset: 0,
+            limit: 1,
+        })
+        .await
+        .expect_err("invalid offset");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("controller changed this field"),
+        "{rendered}"
+    );
+    assert!(rendered.contains(" [truncated]"), "{rendered}");
+}
+
+#[tokio::test]
 async fn an_over_limit_multibyte_error_message_is_truncated_without_panicking() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
