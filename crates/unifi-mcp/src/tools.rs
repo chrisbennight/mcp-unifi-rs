@@ -4578,7 +4578,7 @@ impl UnifiMcp {
         }
         let mut output = FirewallPoliciesDeleteOutput {
             policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
-            preview: policy_preview_coverage(&record),
+            preview: policy_preview_coverage(&record, self.redact()),
             applied: false,
             verified_absent: None,
             warnings: vec![
@@ -6443,7 +6443,10 @@ fn bounded_policy_view(mut policy: PolicyView) -> PolicyView {
 
 /// Include the official policy fields that affect matching or explain the
 /// deletion. Unknown controller fields remain named but are not echoed.
-fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
+fn policy_preview_coverage(
+    record: &Map<String, Value>,
+    secrets: &[Zeroizing<String>],
+) -> PolicyPreviewCoverage {
     const DETAIL_FIELDS: &[&str] = &[
         "source",
         "destination",
@@ -6464,7 +6467,11 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
     for name in DETAIL_FIELDS {
         if let Some(value) = record.get(*name) {
             let bytes = name.len() + value.to_string().len();
-            if detail_bytes + bytes <= DETAIL_BUDGET {
+            // The shared result redactor handles controller-provided values,
+            // while JSON property names are normally server-owned. A detail
+            // with a controller-provided secret-bearing key cannot cross that
+            // boundary, so omit the whole field and report the omission.
+            if !contains_secret_key(value, secrets) && detail_bytes + bytes <= DETAIL_BUDGET {
                 detail_bytes += bytes;
                 details.insert((*name).to_owned(), value.clone());
             } else {
@@ -6510,6 +6517,24 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
         complete: omitted_fields.is_empty() && !omitted_fields_truncated,
         omitted_fields,
         omitted_fields_truncated,
+    }
+}
+
+fn contains_secret_key(value: &Value, secrets: &[Zeroizing<String>]) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.keys().any(|key| {
+                secrets
+                    .iter()
+                    .any(|secret| !secret.is_empty() && key.contains(secret.as_str()))
+            }) || fields
+                .values()
+                .any(|nested| contains_secret_key(nested, secrets))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|nested| contains_secret_key(nested, secrets)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
     }
 }
 

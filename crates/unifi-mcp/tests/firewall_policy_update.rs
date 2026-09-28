@@ -387,6 +387,66 @@ async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
 }
 
 #[tokio::test]
+async fn policy_delete_omits_details_with_credential_bearing_keys() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut record = stored(true, "BLOCK");
+    record["source"]
+        .as_object_mut()
+        .expect("source object")
+        .insert(PASSWORD.to_owned(), serde_json::json!("controller-value"));
+    record["metadata"] = serde_json::json!({"nested": [{}]});
+    record["metadata"]["nested"][0]
+        .as_object_mut()
+        .expect("nested metadata object")
+        .insert(PASSWORD.to_owned(), serde_json::json!("controller-value"));
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    for confirm in [false, true] {
+        let output = handler
+            .call(
+                &delete(&serde_json::json!({"policy": POLICY, "confirm": confirm})),
+                None,
+            )
+            .await
+            .expect("secret-bearing detail omitted")
+            .structured_content
+            .expect("structured");
+        assert!(!output.to_string().contains(PASSWORD));
+        assert_eq!(output["preview"]["complete"], false);
+        assert!(
+            output["preview"]["omittedFields"]
+                .to_string()
+                .contains("source")
+        );
+        assert!(
+            output["preview"]["omittedFields"]
+                .to_string()
+                .contains("metadata")
+        );
+        assert_eq!(output["applied"], confirm);
+    }
+}
+
+#[tokio::test]
 async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
     let server = MockServer::start().await;
     let record = stored(true, "BLOCK");
