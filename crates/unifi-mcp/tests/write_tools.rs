@@ -268,40 +268,24 @@ async fn a_passphrase_change_reports_requested_and_observed_values() {
 }
 
 #[tokio::test]
-async fn encrypting_a_network_requires_the_key_in_the_same_call() {
-    let server = MockServer::start().await;
-    // Nothing is mounted at all: a request that can never be applied must be
-    // refused before the controller is touched, and a preview of it must be
-    // refused exactly as a confirmed call is.
-    for confirm in [false, true] {
-        let error = handler_for(&server)
-            .call(
-                &update(&serde_json::json!({
-                    "wlan": WLAN_ID,
-                    "changes": {"security": "wpapsk"},
-                    "confirm": confirm,
-                })),
-                None,
-            )
-            .await
-            .expect_err("key not stated");
-        assert!(
-            error.message.contains("passphrase in the same call"),
-            "confirm={confirm}: {}",
-            error.message
-        );
-    }
-}
-
-#[tokio::test]
-async fn a_keyless_network_cannot_be_encrypted_without_a_stated_key() {
+async fn selecting_wpapsk_can_retain_the_existing_passphrase() {
     let server = MockServer::start().await;
     logged_in(&server).await;
-    let mut keyless = wlan_row("Guest", true, false);
-    keyless["security"] = serde_json::json!("open");
-    keyless["x_passphrase"] = serde_json::json!("");
-    mount_reads(&server, &keyless, &keyless).await;
-    let error = handler_for(&server)
+    let mut before = wlan_row("Guest", true, false);
+    before["security"] = serde_json::json!("open");
+    let mut after = before.clone();
+    after["security"] = serde_json::json!("wpapsk");
+    mount_reads(&server, &before, &after).await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{LEGACY}/rest/wlanconf/{WLAN_ID}")))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!({"security": "wpapsk"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
         .call(
             &update(&serde_json::json!({
                 "wlan": WLAN_ID,
@@ -311,12 +295,48 @@ async fn a_keyless_network_cannot_be_encrypted_without_a_stated_key() {
             None,
         )
         .await
-        .expect_err("key not stated");
-    assert!(
-        error.message.contains("passphrase in the same call"),
-        "{}",
-        error.message
-    );
+        .expect("existing passphrase retained")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true, "{output}");
+    assert_eq!(output["fields"][0]["field"], "security");
+    assert_eq!(output["fields"][0]["previous"], "open");
+    assert_eq!(output["fields"][0]["observed"], "wpapsk");
+}
+
+#[tokio::test]
+async fn a_keyless_network_mode_rejected_by_controller_is_reported_as_dropped() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let mut keyless = wlan_row("Guest", true, false);
+    keyless["security"] = serde_json::json!("open");
+    keyless["x_passphrase"] = serde_json::json!("");
+    mount_reads(&server, &keyless, &keyless).await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{LEGACY}/rest/wlanconf/{WLAN_ID}")))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!({"security": "wpapsk"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "wlan": WLAN_ID,
+                "changes": {"security": "wpapsk"},
+                "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("controller acknowledged the patch")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verified"], false);
+    assert_eq!(output["fields"][0]["status"], "dropped");
 }
 
 #[tokio::test]

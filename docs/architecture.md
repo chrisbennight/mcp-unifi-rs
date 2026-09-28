@@ -137,11 +137,10 @@ accepted write proves nothing. Every write tool shares one path:
   hardware address, never by a renameable attribute. A client is addressed by
   MAC because a blocked one is absent from the connected list, so no name
   identifies it in every state the tool handles.
-- **Self-sufficient requests.** Where a change is only safe in combination —
-  turning encryption on needs a key — the caller states both and one request
-  carries them. Reusing a value read earlier would make the outcome depend on
-  that read still being current, which no read here is atomic with the write
-  that follows it.
+- **Partial wireless updates.** An omitted passphrase is not sent. The
+  controller can retain an existing key or reject a security mode that lacks
+  one; the read-back reports which fields persisted instead of guessing from
+  the acknowledgement.
 
 ### Voucher readback
 
