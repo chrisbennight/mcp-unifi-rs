@@ -1699,7 +1699,9 @@ struct FirewallPoliciesDeleteOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PolicyPreviewCoverage {
-    /// False if the controller record has fields the policy projection omits.
+    /// Full values for the official policy fields that the compact summary omits.
+    details: Map<String, Value>,
+    /// False if the controller record has fields the preview omits.
     complete: bool,
     omitted_fields: Vec<String>,
     omitted_fields_truncated: bool,
@@ -6408,21 +6410,30 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
     }
 }
 
-/// Tell callers when the bounded policy projection leaves controller fields
-/// out. Field names are metadata; values stay in the typed projection.
+/// Include the official policy fields that affect matching or explain the
+/// deletion. Unknown controller fields remain named but are not echoed.
 fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
-    const MODELED_TOP_LEVEL: &[&str] = &[
-        "id",
-        "name",
-        "enabled",
-        "action",
-        "index",
-        "ipProtocolScope",
+    const DETAIL_FIELDS: &[&str] = &[
         "source",
         "destination",
+        "ipProtocolScope",
+        "connectionStateFilter",
+        "ipsecFilter",
+        "schedule",
+        "loggingEnabled",
+        "description",
+        "metadata",
     ];
-    const MODELED_ENDPOINT: &[&str] = &["zoneId", "port"];
+    const SUMMARY_FIELDS: &[&str] = &["id", "name", "enabled", "action", "index"];
     const FIELD_LIMIT: usize = 16;
+    let details = DETAIL_FIELDS
+        .iter()
+        .filter_map(|name| {
+            record
+                .get(*name)
+                .map(|value| ((*name).to_owned(), value.clone()))
+        })
+        .collect();
     let mut omitted_fields = Vec::new();
     let mut omitted_fields_truncated = false;
     let mut add = |name: String| {
@@ -6433,33 +6444,24 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
         }
     };
     for (name, value) in record {
-        if !MODELED_TOP_LEVEL.contains(&name.as_str()) {
-            add(name.clone());
-        } else if matches!(name.as_str(), "source" | "destination") {
-            if let Some(fields) = value.as_object() {
-                for (key, value) in fields {
-                    if !MODELED_ENDPOINT.contains(&key.as_str())
-                        || (!value.is_null() && !value.is_string())
-                    {
-                        add(format!("{name}.{key}"));
-                    }
-                }
-            } else if !value.is_null() {
-                add(name.clone());
-            }
-        } else if !value.is_null()
-            && match name.as_str() {
-                "enabled" => !value.is_boolean(),
-                "index" => value
-                    .as_u64()
-                    .is_none_or(|index| u32::try_from(index).is_err()),
-                _ => !value.is_string(),
-            }
+        if DETAIL_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        if !SUMMARY_FIELDS.contains(&name.as_str())
+            || (!value.is_null()
+                && match name.as_str() {
+                    "enabled" => !value.is_boolean(),
+                    "index" => value
+                        .as_u64()
+                        .is_none_or(|index| u32::try_from(index).is_err()),
+                    _ => !value.is_string(),
+                })
         {
             add(name.clone());
         }
     }
     PolicyPreviewCoverage {
+        details,
         complete: omitted_fields.is_empty() && !omitted_fields_truncated,
         omitted_fields,
         omitted_fields_truncated,

@@ -449,9 +449,11 @@ result says that verification was unavailable.
 `firewall.policies.delete` removes a zone-based policy by id. It previews the
 policy's match and action, then sends one DELETE when confirmed. A following
 read distinguishes a policy that is absent from one the controller retained.
-The preview marks whether its bounded policy projection covers the controller
-record and names omitted fields when it does not; those fields may change the
-policy's effect.
+The preview shows full source, destination, protocol, connection-state, IPsec,
+and schedule conditions alongside the compact policy summary. It also shows
+the official descriptive and metadata fields when present. It marks whether
+these bounded views cover the controller record and names unknown omitted
+fields when they do not; those fields may change the policy's effect.
 
 ## Remaining rule workflows
 

@@ -249,7 +249,13 @@ async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
 #[tokio::test]
 async fn policy_delete_previews_scope_without_sending_delete() {
     let server = MockServer::start().await;
-    let record = stored(true, "BLOCK");
+    let mut record = stored(true, "BLOCK");
+    record["ipProtocolScope"] = serde_json::json!({
+        "ipVersion": "IPV4", "protocolFilter": {"type": "PRESET", "name": "TCP_UDP"}
+    });
+    record["connectionStateFilter"] = serde_json::json!(["NEW", "RELATED"]);
+    record["source"]["networkFilter"] =
+        serde_json::json!({"type": "NETWORKS", "networkIds": ["network-1"]});
     reads(&server, &record, &record).await;
     let output = handler_for(&server)
         .call(&delete(&serde_json::json!({"policy": POLICY})), None)
@@ -259,17 +265,25 @@ async fn policy_delete_previews_scope_without_sending_delete() {
         .expect("structured");
     assert_eq!(output["applied"], false);
     assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
-    assert_eq!(output["preview"]["complete"], false);
-    assert!(
-        output["preview"]["omittedFields"]
-            .to_string()
-            .contains("schedule")
+    assert_eq!(output["preview"]["details"]["schedule"], record["schedule"]);
+    assert_eq!(
+        output["preview"]["details"]["ipsecFilter"],
+        record["ipsecFilter"]
     );
-    assert!(
-        output["preview"]["omittedFields"]
-            .to_string()
-            .contains("ipsecFilter")
+    assert_eq!(output["preview"]["details"]["source"], record["source"]);
+    assert_eq!(
+        output["preview"]["details"]["destination"],
+        record["destination"]
     );
+    assert_eq!(
+        output["preview"]["details"]["ipProtocolScope"],
+        record["ipProtocolScope"]
+    );
+    assert_eq!(
+        output["preview"]["details"]["connectionStateFilter"],
+        record["connectionStateFilter"]
+    );
+    assert_eq!(output["preview"]["complete"], true);
 }
 
 #[tokio::test]
