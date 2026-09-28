@@ -412,3 +412,237 @@ async fn viewer_patch_readback_error_keeps_the_controller_failure() {
     );
     server.verify().await;
 }
+
+#[tokio::test]
+async fn liveview_create_previews_a_typed_layout_without_an_upstream_call() {
+    let server = MockServer::start().await;
+    let changes = serde_json::json!({
+        "name":"Lobby", "layout":1,
+        "slots":[{"cameras":["camera-1"],"cycleMode":"time","cycleInterval":10}]
+    });
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"create", "changes":changes
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("create preview")
+        .structured_content
+        .expect("structured preview");
+    assert_eq!(result["operation"], "create");
+    assert_eq!(result["applied"], false);
+    assert_eq!(result["requested"], changes);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn liveview_create_returns_the_complete_response_and_verifies_readback() {
+    let server = MockServer::start().await;
+    let changes = serde_json::json!({
+        "name":"Lobby", "isGlobal":true, "layout":1,
+        "slots":[{"cameras":["camera-1"],"cycleMode":"time","cycleInterval":10}]
+    });
+    let response = serde_json::json!({
+        "id":"view-1", "name":"Lobby", "isGlobal":true, "layout":1.0,
+        "slots":[{"cameras":["camera-1"],"cycleMode":"time","cycleInterval":10.0,"futureSlotField":"kept"}],
+        "futureField":{"kept":[1,2]}
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/liveviews")))
+        .and(body_json(&changes))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"create", "changes":changes, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("created live view");
+    assert_eq!(
+        result.meta.expect("metadata").0["io.modelcontextprotocol/trust-annotations"]["sensitive"],
+        true
+    );
+    let body = result.structured_content.expect("structured create result");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["liveviewId"], "view-1");
+    assert_eq!(body["verified"], true);
+    assert_eq!(body["response"], response);
+    assert_eq!(body["after"], response);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn liveview_update_patches_only_named_fields_and_reads_back() {
+    let server = MockServer::start().await;
+    let before = serde_json::json!({"id":"view-1","name":"Old","layout":4,"isGlobal":false});
+    let response = serde_json::json!({"id":"view-1","name":"New","layout":4,"isGlobal":true,"futureField":"kept"});
+    let after = response.clone();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
+    let first = before.clone();
+    let second = after.clone();
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .respond_with(move |_: &wiremock::Request| {
+            if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200).set_body_json(&first)
+            } else {
+                ResponseTemplate::new(200).set_body_json(&second)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let changes = serde_json::json!({"name":"New","isGlobal":true});
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .and(body_json(&changes))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"update", "liveviewId":"view-1", "changes":changes, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("updated live view")
+        .structured_content
+        .expect("structured update result");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["before"], before);
+    assert_eq!(result["response"], response);
+    assert_eq!(result["after"], after);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn rejected_liveview_create_keeps_the_complete_controller_error() {
+    let server = MockServer::start().await;
+    let error_body = format!("{}upstream-liveview-tail", "x".repeat(900));
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/liveviews")))
+        .respond_with(ResponseTemplate::new(409).set_body_string(&error_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"create", "changes":{"name":"Lobby"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect_err("controller conflict");
+    assert!(error.message.contains(&error_body));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn accepted_liveview_create_without_an_id_keeps_its_result() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!({"created":true,"controllerSpecific":"unrepeatable-result"});
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/liveviews")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"create", "changes":{"name":"Lobby"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted create response")
+        .structured_content
+        .expect("structured create result");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["response"], response);
+    assert!(result.get("liveviewId").is_none());
+    assert!(
+        result["readbackError"]
+            .as_str()
+            .expect("readback diagnostic")
+            .contains("no live-view id")
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn large_liveview_create_response_remains_available_in_content() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!({
+        "id":"view-1","name":"Lobby","futureField":"liveview-tail".repeat(5000)
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/liveviews")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/liveviews/view-1")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id":"view-1","name":"Lobby"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.liveviews.configure",
+                &serde_json::json!({
+                    "operation":"create", "changes":{"name":"Lobby"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("large accepted response");
+    let body = result.structured_content.expect("structured create result");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["verified"], true);
+    assert_eq!(body["responseInContent"], true);
+    assert!(result.content.iter().any(|item| matches!(item,
+        rmcp::model::ContentBlock::Text(text) if text.text.contains(&response.to_string())
+    )));
+    server.verify().await;
+}

@@ -349,6 +349,19 @@ move to labeled content blocks so a successful PATCH can still return its
 response; the corresponding `InContent` flags identify those fields. The
 gateway decides who may use the action and see its records.
 
+`protect.liveviews.configure` accepts `operation: "create"` or `"update"`.
+Its typed `changes` cover the documented name, default and global scope,
+owner, layout, and per-slot camera lists and cycling settings. The API also
+documents `id` and `modelKey` in the live-view object; callers can supply
+these fields in `changes` when needed. An update uses an exact `liveviewId`.
+The default preview returns the requested configuration and, for updates, the
+complete current record. Confirmation sends one POST or PATCH and returns the
+complete accepted result. When the result supplies an id, a separate GET
+checks whether the requested fields appear in the stored view. A missing id,
+failed read-back, or timed-out read-back is reported without claiming
+verification. Controller failures retain their full bodies, and large
+accepted records move to labeled content blocks with corresponding flags.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It

@@ -851,6 +851,42 @@ impl ProtectClient {
         .await
     }
 
+    /// Create one live view and return the complete accepted controller result.
+    /// The POST is never retried after an ambiguous transport result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or response decoding failures.
+    pub async fn liveview_create(&self, configuration: &Value) -> Result<Value, ApiError> {
+        let request = self
+            .request(Method::POST, &["liveviews"])?
+            .json(configuration);
+        self.send_json_once(request, "protect.liveviews.create")
+            .await
+    }
+
+    /// Patch one live view and return the complete accepted controller result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn liveview_patch(
+        &self,
+        liveview_id: &str,
+        changes: &Value,
+    ) -> Result<Value, ApiError> {
+        validate_identifier("protect.liveviews.patch", liveview_id)?;
+        let request = self
+            .request(Method::PATCH, &["liveviews", liveview_id])?
+            .json(changes);
+        let (liveview, bytes): (Value, Vec<u8>) = self
+            .send_json_once_with_response(request, "protect.liveviews.patch")
+            .await?;
+        validate_resource_record("protect.liveviews.patch", &liveview, Some(liveview_id))
+            .map_err(|error| error.with_controller_response(&bytes))?;
+        Ok(liveview)
+    }
+
     /// Patch one camera's documented settings once. The caller reads back
     /// the camera to check which fields the console persisted.
     ///
