@@ -971,11 +971,9 @@ pub(crate) async fn read_jpeg(response: Response) -> Result<Vec<u8>, ApiError> {
         limits.max_image_height = Some(8192);
         limits.max_alloc = Some(128 * 1024 * 1024);
         reader.limits(limits);
-        reader.decode().map_err(|_| {
-            ApiError::Decode(BoundedMessage::new(
-                "image response was not a decodable JPEG",
-            ))
-        })?;
+        reader
+            .decode()
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         Ok(bytes)
     })
     .await

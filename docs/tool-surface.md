@@ -234,6 +234,8 @@ metadata, so an agent can inspect a frame without receiving a base64 string
 as text. The `channel` input chooses `main` (default) or `package`; the latter
 is for cameras with a package camera. `highQuality` requests 1080p or higher
 when available. A response above 4 MiB fails explicitly.
+An invalid JPEG returns the accepted controller bytes in base64 with the
+decoder diagnostic; the same behavior applies to event thumbnails.
 
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
