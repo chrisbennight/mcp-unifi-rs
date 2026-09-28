@@ -84,6 +84,38 @@ async fn guest_action_validation_keeps_the_exact_controller_body() {
 }
 
 #[tokio::test]
+async fn invalid_dpi_name_selection_keeps_the_exact_controller_body() {
+    let server = MockServer::start().await;
+    let body = serde_json::json!({
+        "offset": 0, "limit": 50, "count": 1, "totalCount": 2112,
+        "data": [{"id": 7, "name": "Unexpected"}],
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-dpi-tail"
+    })
+    .to_string();
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/dpi/applications")))
+        .and(query_param("filter", "id.in(196649)"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server)
+        .dpi_names(&[196_649], false)
+        .await
+        .expect_err("unexpected DPI row");
+    let ApiError::DecodeResponse {
+        response,
+        diagnostic,
+    } = error
+    else {
+        panic!("expected controller response, got {error:?}");
+    };
+    assert_eq!(response.as_str(), body);
+    assert_eq!(diagnostic.as_str(), "unexpected DPI name selection");
+}
+
+#[tokio::test]
 async fn every_request_authenticates_with_the_api_key_header() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

@@ -176,12 +176,21 @@ impl UnifiMcp {
             std::cmp::Reverse(u128::from(row.bytes_received) + u128::from(row.bytes_transmitted))
         });
         applications.truncate(usize::from(top));
-        let (top_applications, names_status) = if input.report == StatsReport::DpiApplications {
-            let (rows, status) = self.activity_names(applications).await;
-            (Some(rows), status)
-        } else {
-            (None, "notRequested")
-        };
+        let (top_applications, names_status, name_errors) =
+            if input.report == StatsReport::DpiApplications {
+                let (rows, status, errors) = self.activity_names(applications).await;
+                (Some(rows), status, errors)
+            } else {
+                (None, "notRequested", Vec::new())
+            };
+        let mut source_errors: Vec<_> = graph_error
+            .into_iter()
+            .map(|error| StatsSourceError {
+                source: "graph",
+                error: error.to_string(),
+            })
+            .collect();
+        source_errors.extend(name_errors);
         structured_stats(StatsQueryOutput {
             report: report_name(input.report),
             coverage: TrafficCoverage {
@@ -212,13 +221,7 @@ impl UnifiMcp {
                 names_status,
                 limitations: "The Activity view reports Internet usage, not LAN association counters. Its aggregate response has no per-client observed timestamps, reset markers, or collection-completeness proof. Site graph gaps are unknown, not zero. IPv6, UDP/QUIC, VPN encapsulation, gateway-originated traffic, proxy attribution, and interface accounting may contribute to differences; this source does not identify their contributions. Application names describe classifier labels, not a verified service or process. Pages re-read a mutable source; reuse fixed timestamps. This read creates no retained history.",
             }),
-            source_errors: graph_error
-                .into_iter()
-                .map(|error| StatsSourceError {
-                    source: "graph",
-                    error: error.to_string(),
-                })
-                .collect(),
+            source_errors,
             source_errors_in_content: None,
             activity_in_content: None,
         })
@@ -227,9 +230,9 @@ impl UnifiMcp {
     async fn activity_names(
         &self,
         rows: Vec<ApplicationActivity>,
-    ) -> (Vec<TopApplicationRow>, &'static str) {
+    ) -> (Vec<TopApplicationRow>, &'static str, Vec<StatsSourceError>) {
         if rows.is_empty() {
-            return (Vec::new(), "empty");
+            return (Vec::new(), "empty", Vec::new());
         }
         let ids: Vec<_> = rows
             .iter()
@@ -245,9 +248,22 @@ impl UnifiMcp {
             .collect();
         let app_names = self.integration().dpi_names(&ids, false).await;
         let cat_names = self.integration().dpi_names(&cats, true).await;
-        // Taxonomy enrichment is optional: a failed lookup must not discard the
-        // measured bytes. Its failure is explicit in the result and operator log.
-        let failed = app_names.is_err() || cat_names.is_err();
+        // Taxonomy enrichment is optional: retain the measured bytes and report
+        // each failed lookup with its controller response.
+        let errors: Vec<_> = app_names
+            .as_ref()
+            .err()
+            .map(|error| StatsSourceError {
+                source: "dpiApplications",
+                error: error.to_string(),
+            })
+            .into_iter()
+            .chain(cat_names.as_ref().err().map(|error| StatsSourceError {
+                source: "dpiCategories",
+                error: error.to_string(),
+            }))
+            .collect();
+        let failed = !errors.is_empty();
         if failed {
             tracing::warn!(
                 endpoint = "network.dpi_names",
@@ -292,6 +308,7 @@ impl UnifiMcp {
             } else {
                 "partial"
             },
+            errors,
         )
     }
 
