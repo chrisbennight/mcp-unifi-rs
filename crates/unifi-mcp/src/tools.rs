@@ -2550,49 +2550,7 @@ impl UnifiMcp {
         let input = parse::<CameraSelectorInput>(params)?;
         let selector = camera_selector(&input.camera)?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
-        let local_state = inventory.local_state;
-        let cameras = inventory.cameras;
-        // An id is unique on the console; a name is only unique if it happens
-        // to be, so an ambiguous name is refused rather than resolved by
-        // position.
-        let mut matches: Vec<CameraView> = cameras
-            .iter()
-            .filter(|camera| camera.id == selector)
-            .cloned()
-            .collect();
-        if matches.is_empty() {
-            if matches!(
-                local_state,
-                LocalEnrichmentState::Partial | LocalEnrichmentState::Unavailable
-            ) {
-                return Err(McpError::invalid_params(
-                    "camera name selection requires complete local Protect inventory; select by id",
-                    None,
-                ));
-            }
-            let normalized_selector = selector.to_lowercase();
-            matches = cameras
-                .into_iter()
-                .filter(|camera| {
-                    camera
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| camera_name_matches(name, &normalized_selector))
-                        || camera_name_matches(&camera.display_name, &normalized_selector)
-                })
-                .collect();
-        }
-        match matches.len() {
-            0 => Err(McpError::invalid_params(
-                "no camera on this console has that id or name",
-                None,
-            )),
-            1 => structured(matches.remove(0)),
-            count => Err(McpError::invalid_params(
-                format!("{count} cameras share that name; select by id"),
-                None,
-            )),
-        }
+        structured(camera_by_selector(inventory, selector)?)
     }
 
     async fn cameras_snapshot(
@@ -2604,40 +2562,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let mut matches: Vec<&CameraView> = inventory
-            .cameras
-            .iter()
-            .filter(|camera| camera.id == selector)
-            .collect();
-        if matches.is_empty() {
-            let normalized = selector.to_lowercase();
-            matches = inventory
-                .cameras
-                .iter()
-                .filter(|camera| {
-                    camera
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| camera_name_matches(name, &normalized))
-                        || camera_name_matches(&camera.display_name, &normalized)
-                })
-                .collect();
-        }
-        let camera_id = match matches.as_slice() {
-            [] => {
-                return Err(McpError::invalid_params(
-                    "no camera on this console has that id or name",
-                    None,
-                ));
-            }
-            [camera] => camera.id.clone(),
-            _ => {
-                return Err(McpError::invalid_params(
-                    "multiple cameras share that name; select by id",
-                    None,
-                ));
-            }
-        };
+        let camera_id = camera_by_selector(inventory, selector)?.id;
         let channel = input.channel.as_str();
         let bytes = self
             .protect()
@@ -4372,6 +4297,47 @@ fn resolve_camera_id(
 
 fn camera_name_matches(candidate: &str, normalized_selector: &str) -> bool {
     candidate.trim().to_lowercase() == normalized_selector
+}
+
+fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<CameraView, McpError> {
+    let CameraInventory {
+        cameras,
+        local_state,
+        ..
+    } = inventory;
+    // A camera id is unique; an apparent name match is unsafe when local
+    // inventory is incomplete because another camera's name may be missing.
+    if let Some(camera) = cameras.iter().find(|camera| camera.id == selector) {
+        return Ok(camera.clone());
+    }
+    if matches!(
+        local_state,
+        LocalEnrichmentState::Partial | LocalEnrichmentState::Unavailable
+    ) {
+        return Err(McpError::invalid_params(
+            "camera name selection requires complete local Protect inventory; select by id",
+            None,
+        ));
+    }
+    let normalized_selector = selector.to_lowercase();
+    let mut matches = cameras.into_iter().filter(|camera| {
+        camera
+            .name
+            .as_deref()
+            .is_some_and(|name| camera_name_matches(name, &normalized_selector))
+            || camera_name_matches(&camera.display_name, &normalized_selector)
+    });
+    match (matches.next(), matches.next()) {
+        (None, _) => Err(McpError::invalid_params(
+            "no camera on this console has that id or name",
+            None,
+        )),
+        (Some(camera), None) => Ok(camera),
+        (Some(_), Some(_)) => Err(McpError::invalid_params(
+            "multiple cameras share that name; select by id",
+            None,
+        )),
+    }
 }
 
 fn camera_selector(raw: &str) -> Result<&str, McpError> {

@@ -576,6 +576,60 @@ async fn camera_snapshot_accepts_a_display_name_from_local_inventory() {
 }
 
 #[tokio::test]
+async fn camera_snapshot_refuses_name_when_local_inventory_is_partial() {
+    let server = MockServer::start().await;
+    console_with(
+        &server,
+        serde_json::json!([
+            {"id": "cam-front", "modelKey": "camera", "name": "Side", "state": "CONNECTED"},
+            {"id": "cam-back", "modelKey": "camera", "name": null, "state": "CONNECTED"}
+        ]),
+    )
+    .await;
+    let mut bootstrap = sample_bootstrap();
+    bootstrap["cameras"]
+        .as_array_mut()
+        .expect("cameras")
+        .truncate(1);
+    local_console_with(&server, bootstrap).await;
+    let handler = handler_with_events(&server);
+
+    let error = handler
+        .call(
+            &call("cameras.snapshot", &serde_json::json!({"camera": "Side"})),
+            None,
+        )
+        .await
+        .expect_err("name cannot be proven unique");
+    assert!(
+        error
+            .message
+            .contains("requires complete local Protect inventory")
+    );
+
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg_fixture(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let by_id = handler
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("exact id works with partial inventory");
+    assert_eq!(
+        by_id.structured_content.expect("metadata")["cameraId"],
+        "cam-front"
+    );
+}
+
+#[tokio::test]
 async fn a_blank_public_name_keeps_a_separate_usable_local_display_name() {
     let server = MockServer::start().await;
     console_with(
