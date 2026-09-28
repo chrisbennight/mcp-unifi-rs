@@ -70,8 +70,8 @@ List the server's tools, then call `clients.search` with `{}` for Network or
 result. An empty result means no matching devices; an unsupported API or failed
 request returns an explicit error. Neither call changes the controller.
 
-Writes and secret disclosure are disabled in independent modes until the
-operator grants them. See [permissions and troubleshooting](transports.md).
+The gateway controls caller access. Direct HTTP requires its own bearer, and
+stdio trusts the process owner. See [connecting a client](transports.md).
 
 ## HTTP and containers
 

@@ -105,16 +105,10 @@ impl LegacyClient {
                 site,
                 &["stat", "report", "hourly.site"],
                 Some(body),
-                &[],
             )
             .await?;
         if let Some(rejected) = super::envelope_rejection(&bytes) {
-            if rejected.code.as_deref() == Some(super::LOGIN_REQUIRED_CODE) {
-                return Err(super::login_required_error());
-            }
-            // Rejected envelopes are errors, not traffic records. Their message
-            // can reflect authentication values and must never enter the archive.
-            return Err(ApiError::Decode("WAN report rejected".into()));
+            return Err(super::rejection(rejected.code.as_deref(), &bytes));
         }
         Ok(bytes)
     }

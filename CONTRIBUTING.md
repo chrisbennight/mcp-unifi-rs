@@ -2,7 +2,7 @@
 
 Start with an issue that describes the task a UniFi operator needs to perform,
 the current behavior, and the expected result. For a bug, include application
-versions, the transport and surface, a minimal tool call, and redacted output.
+versions, the transport and surface, a minimal synthetic tool call, and relevant output using fake values.
 Do not include credentials, Wi-Fi passwords, voucher codes, or private
 controller inventories. See [support](SUPPORT.md) and [security](SECURITY.md).
 
@@ -49,7 +49,7 @@ and require an operator's explicit permission for any real-network changes.
 Keep a pull request focused on a complete behavior. Search for an existing
 abstraction before adding one. Add a regression test that fails without the
 fix, and update examples or documentation when a contract changes. Preserve
-bounds, redaction, mutation previews, and explicit uncertain outcomes.
+bounds, response fidelity, mutation previews, and explicit uncertain outcomes.
 
 The [architecture](docs/architecture.md) explains the crate boundaries; the
 [tool reference](docs/tool-surface.md) and registry define the public tool

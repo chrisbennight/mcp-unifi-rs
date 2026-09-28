@@ -84,7 +84,7 @@ the controller no longer provides.
 Schema version `1` retains every JSON field and its numeric spelling from the
 supported sources: Network Activity `v2/traffic`, its `app-traffic-rate` graph,
 and the hourly WAN report response (including its envelope metadata). Report
-data is unredacted, including identifiers, names, fingerprints, unknown fields,
+data is complete, including identifiers, names, fingerprints, unknown fields,
 and application detail. Collection is restricted to these report endpoints;
 it is not a generic API proxy. Authentication headers and session credentials
 are not part of report data.
@@ -158,7 +158,7 @@ was acknowledged. Empty reports count as retrieved reports. Source status is
 also stored in `unifi_interval` for dashboard use.
 
 Traffic records and credentials are excluded from this status file. Protect the
-state directory nevertheless: `pending.json` holds the unredacted report. Reading
+state directory nevertheless: `pending.json` holds the complete report. Reading
 the destination or interactive MCP reports remains governed by downstream access
 policy; collection does not introduce privacy modes or alter MCP authorization.
 

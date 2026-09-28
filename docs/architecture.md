@@ -2,8 +2,8 @@
 
 ## System context
 
-Independent clients connect over stdio or direct Streamable HTTP with fixed
-operator-granted write and secret-disclosure permissions. See
+Independent clients connect over stdio or direct Streamable HTTP. Gateway
+mode applies the gateway's caller policy. See
 [Connecting a client](transports.md).
 
 ```mermaid
@@ -35,7 +35,7 @@ The local account is required for Network and optional for Protect enrichment.
   always distinguish "unsupported on this console" from an empty result.
 - **`unifi-mcp`** — everything model-visible: typed flat parameter structs
   rejecting unknown fields, normalized bounded responses, the executable tool
-  registry with MCP annotations, dispatch, redaction, and the mutation
+  registry with MCP annotations, dispatch, and the mutation
   safety pipeline (preview/confirm, read-back verification).
 - **`unifi-server`** — environment configuration, gateway or direct bearer
   authentication, bounded stdio, the stateless Streamable HTTP mount, `/healthz`, the
@@ -130,20 +130,8 @@ accepted write proves nothing. Every write tool shares one path:
   rejoins before the check reads as connected — rather than asserting the
   action succeeded. Claiming field-level verification where none exists would
   be the same false confidence the classification exists to prevent.
-- **Redaction round trip.** A write carrying the `[redacted]` marker is
-  refused before anything is interpreted, so a redacted read cannot overwrite
-  the secret it stands for. The read side and the guard share one definition.
-- **Secrets stay out of results.** A secret field reports its status and
-  neither value. Configured credentials are scrubbed from the string values of
-  every result, and a check that none survived covers the same string values
-  and nothing else — reading property names instead would let a credential that
-  spelled one withhold results forever. Substituting the marker can compose a
-  string that matches a different configured secret, and such a match can run
-  arbitrarily far into the surrounding text, so no number of further passes is
-  the right number: a value the substitution cannot clear is replaced outright
-  by the marker. That resolves in one step for any input and costs one field's
-  text rather than the whole result. The one value that could survive its own
-  replacement, being part of the marker, is refused at startup instead.
+- **Response fidelity.** Selected controller values and error details reach
+  the caller without credential substitution. The gateway controls caller access.
 - **Stable selection.** A write addresses a resource by its controller id or
   hardware address, never by a renameable attribute. A client is addressed by
   MAC because a blocked one is absent from the connected list, so no name
@@ -162,8 +150,8 @@ reads each identified voucher back to compare its id and code. A failed
 readback is reported alongside the creation response. `vouchers.search` and
 `vouchers.status` let callers retrieve codes later without minting again.
 
-The creation response preserves rows even when a batch check fails. A code
-containing a configured controller credential is redacted and reported. Input
+The creation response preserves rows even when a batch check fails.
+Input
 bounds are checked before minting. All tool results have a response budget;
 an unusually large creation response fails loudly, and the voucher reads can
 recover its codes in bounded pages.

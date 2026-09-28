@@ -2,7 +2,7 @@ use reqwest::StatusCode;
 
 use super::{
     CSRF_HEADER, ConsoleKind, LegacyClient, MAXIMUM_RETRY_AFTER, RequestClass, is_login_required,
-    login_required_error, translate_failure,
+    translate_failure,
 };
 use crate::{
     ApiError, BoundedMessage, http,
@@ -31,6 +31,7 @@ impl LegacyClient {
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.execute_system_log(site, query).await
@@ -93,28 +94,21 @@ impl LegacyClient {
         self.capture_csrf(&response).await;
         let status = response.status();
         if !status.is_success() {
-            // The HTTP status survives even if a legacy error envelope is
-            // subsequently translated to a generic controller rejection.
+            // The status and controller detail both reach the caller.
             tracing::warn!(
                 endpoint = "network.system_log",
                 status = status.as_u16(),
                 "Network system-log HTTP read failed"
             );
         }
-        if status == StatusCode::UNAUTHORIZED {
-            return Err(login_required_error());
-        }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         let bytes = http::read_bounded_body(response).await?;
         if !status.is_success() {
             return Err(translate_failure(
                 status.as_u16(),
                 &bytes,
-                &[self.password.as_str()],
                 RequestClass::IdempotentRead,
             ));
         }

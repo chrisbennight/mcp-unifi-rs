@@ -15,7 +15,6 @@ type EnvironmentLookup<'a> = dyn Fn(&'static str) -> Result<String, env::VarErro
 
 /// Complete runtime configuration, including the gateway ingress credentials
 /// supplied by environment.
-#[derive(Debug)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
@@ -31,7 +30,6 @@ pub struct Settings {
 }
 
 /// Upstream configuration for the one console family this process serves.
-#[derive(Debug)]
 pub enum RuntimeSettings {
     Network(ControllerSettings),
     Protect(ProtectSettings),
@@ -39,9 +37,6 @@ pub enum RuntimeSettings {
 
 /// Connection settings for the one controller this server fronts.
 ///
-/// Credentials never appear in diagnostic output: the derived container
-/// `Debug` shows them redacted through `Zeroizing`, and the whole struct is
-/// only formatted through [`Settings`]' derived output.
 pub struct ControllerSettings {
     /// Operator-chosen controller name used in logs and tool responses.
     pub name: String,
@@ -56,19 +51,6 @@ pub struct ControllerSettings {
     pub timeout: Duration,
     /// Legacy API site short name, such as `default`.
     pub site: String,
-}
-
-impl std::fmt::Debug for ControllerSettings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ControllerSettings")
-            .field("name", &self.name)
-            .field("base_url", &self.base_url.as_str())
-            .field("username", &"<redacted>")
-            .field("site", &self.site)
-            .field("timeout", &self.timeout)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Connection settings for the Protect-only runtime.
@@ -95,18 +77,6 @@ pub struct ProtectSettings {
 pub struct ProtectLegacySettings {
     pub username: String,
     pub password: Zeroizing<String>,
-}
-
-impl std::fmt::Debug for ProtectSettings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProtectSettings")
-            .field("name", &self.name)
-            .field("base_url", &self.base_url.as_str())
-            .field("legacy", &self.legacy.as_ref().map(|_| "<configured>"))
-            .field("timeout", &self.timeout)
-            .finish_non_exhaustive()
-    }
 }
 
 /// The subset of configuration the healthcheck probe needs.
@@ -311,9 +281,9 @@ fn controller_from_environment(
     Ok(ControllerSettings {
         name: value_or(environment, "UNIFI_MCP_CONTROLLER_NAME", "unifi"),
         base_url,
-        api_key: required_scrubbed_secret(environment, "UNIFI_MCP_CONTROLLER_API_KEY")?,
+        api_key: required_secret(environment, "UNIFI_MCP_CONTROLLER_API_KEY")?,
         username: required(environment, "UNIFI_MCP_CONTROLLER_USERNAME")?,
-        password: required_scrubbed_secret(environment, "UNIFI_MCP_CONTROLLER_PASSWORD")?,
+        password: required_secret(environment, "UNIFI_MCP_CONTROLLER_PASSWORD")?,
         tls,
         timeout: Duration::from_secs(parse_number(
             environment,
@@ -356,7 +326,7 @@ fn protect_from_environment(
         });
     }
     let username = optional(environment, "UNIFI_MCP_PROTECT_USERNAME");
-    let password = optional_scrubbed_secret(environment, "UNIFI_MCP_PROTECT_PASSWORD")?;
+    let password = optional_secret(environment, "UNIFI_MCP_PROTECT_PASSWORD")?;
     let legacy = match (username, password) {
         (None, None) => None,
         (Some(username), Some(password)) => Some(ProtectLegacySettings { username, password }),
@@ -372,7 +342,7 @@ fn protect_from_environment(
     Ok(ProtectSettings {
         name: value_or(environment, "UNIFI_MCP_PROTECT_NAME", "protect"),
         base_url,
-        api_key: required_scrubbed_secret(environment, "UNIFI_MCP_PROTECT_API_KEY")?,
+        api_key: required_secret(environment, "UNIFI_MCP_PROTECT_API_KEY")?,
         tls,
         timeout: Duration::from_secs(parse_number(
             environment,
@@ -556,46 +526,6 @@ fn validate_secret(
         return Err(SettingsError::SecretEnvironment(variable));
     }
     Ok(Zeroizing::new(value))
-}
-
-/// A controller credential, which additionally has to be redactable.
-///
-/// These two values are the scrub set: every result is searched for them. One
-/// that survives its own redaction would make every result mentioning it
-/// unreturnable, and on a write that cannot be repeated that destroys what the
-/// write produced. Refusing it here turns that into a startup failure.
-///
-/// The gateway bearers are not in that set and carry no such constraint, so
-/// they go through the plain check.
-fn validate_scrubbed_secret(
-    variable: &'static str,
-    value: String,
-) -> Result<Zeroizing<String>, SettingsError> {
-    let value = validate_secret(variable, value)?;
-    if unifi_mcp::survives_its_own_redaction(&value) {
-        return Err(SettingsError::SecretEnvironment(variable));
-    }
-    Ok(value)
-}
-
-fn required_scrubbed_secret(
-    environment: &EnvironmentLookup<'_>,
-    variable: &'static str,
-) -> Result<Zeroizing<String>, SettingsError> {
-    let value = environment(variable).map_err(|_| SettingsError::SecretEnvironment(variable))?;
-    validate_scrubbed_secret(variable, value)
-}
-
-fn optional_scrubbed_secret(
-    environment: &EnvironmentLookup<'_>,
-    variable: &'static str,
-) -> Result<Option<Zeroizing<String>>, SettingsError> {
-    match environment(variable) {
-        Ok(value) if value.is_empty() => Ok(None),
-        Ok(value) => validate_scrubbed_secret(variable, value).map(Some),
-        Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => Err(SettingsError::SecretEnvironment(variable)),
-    }
 }
 
 fn required(
@@ -822,7 +752,8 @@ mod tests {
             ("UNIFI_MCP_PROTECT_URL", "https://192.0.2.66"),
         ]);
         let error = Settings::from_environment(&keyless)
-            .expect_err("a console without a key must fail closed");
+            .err()
+            .expect("a console without a key must fail closed");
         assert!(
             format!("{error}").contains("UNIFI_MCP_PROTECT_API_KEY"),
             "{error}"
@@ -929,25 +860,17 @@ mod tests {
     }
 
     #[test]
-    fn a_secret_that_survives_its_own_redaction_fails_closed_at_load() {
-        // Scrubbing replaces such a value with a marker that still contains
-        // it, so the survivor check withholds every result mentioning it.
-        // Reaching that at runtime on `vouchers.create` would destroy codes
-        // the controller had already issued and will not repeat.
-        for value in ["redacted", "[redacted]", "edact"] {
+    fn credential_values_do_not_limit_startup_when_within_bounds() {
+        for value in ["sample-alpha", "acted", "[", "sample-beta"] {
             let environment = move |variable: &'static str| match variable {
                 "UNIFI_MCP_CONTROLLER_PASSWORD" => Ok(value.to_owned()),
                 other => complete_environment(other),
             };
-            assert!(
-                matches!(
-                    Settings::from_environment(&environment),
-                    Err(SettingsError::SecretEnvironment(
-                        "UNIFI_MCP_CONTROLLER_PASSWORD"
-                    ))
-                ),
-                "{value}"
-            );
+            let settings = Settings::from_environment(&environment).expect("settings");
+            let RuntimeSettings::Network(controller) = settings.runtime else {
+                panic!("Network runtime")
+            };
+            assert_eq!(controller.password.as_str(), value);
         }
     }
 
@@ -1082,18 +1005,6 @@ mod tests {
     }
 
     #[test]
-    fn controller_debug_output_never_contains_credentials() {
-        let settings = Settings::from_environment(&complete_environment).expect("settings");
-        let RuntimeSettings::Network(controller) = settings.runtime else {
-            panic!("Network runtime")
-        };
-        let rendered = format!("{controller:?}");
-        assert!(!rendered.contains("controller-api-key"));
-        assert!(!rendered.contains("controller-password"));
-        assert!(!rendered.contains("svc-mcp"));
-    }
-
-    #[test]
     fn valid_settings_construct_a_verifier() {
         let settings = Settings::from_environment(&complete_environment).expect("settings");
         assert!(IdentityVerifier::new(settings.identity).is_ok());
@@ -1205,7 +1116,8 @@ mod tests {
             _ => Err(env::VarError::NotPresent),
         };
         let error = super::controller_from_environment(&environment)
-            .expect_err("pinned over plaintext")
+            .err()
+            .expect("pinned over plaintext")
             .to_string();
         assert!(error.contains("requires an https"), "{error}");
         assert!(error.contains("http"), "{error}");

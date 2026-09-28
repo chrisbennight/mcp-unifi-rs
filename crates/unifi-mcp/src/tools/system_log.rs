@@ -13,9 +13,7 @@ pub(super) fn log_window(hours: u32) -> Result<(u64, u64), McpError> {
 }
 
 pub(super) fn read_error(error: ApiError) -> McpError {
-    let mut error = api_error(error);
-    error.message = format!("Network system-log read failed: {}", error.message).into();
-    error
+    api_error(error)
 }
 
 pub(super) fn event_row(entry: SystemLogEntry) -> EventRow {

@@ -41,7 +41,7 @@ use unifi_api::{
 use zeroize::Zeroizing;
 
 use crate::{
-    IdentityPrincipal, MCP_ADMIN_GROUP,
+    IdentityPrincipal,
     handler::UnifiMcp,
     mutation::{self, FieldOutcome, PlannedChange},
     registry::{ToolBehavior, ToolKind, ToolSpec},
@@ -1235,10 +1235,6 @@ struct FirewallReadInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct NetworksReadInput {
-    /// Disclose wireless passphrases instead of redacting them. Requires
-    /// membership in the mcp-admins group.
-    #[serde(default)]
-    include_secrets: bool,
     /// Restrict the response to one section when the whole configuration
     /// would exceed the response budget.
     section: Option<NetworksSection>,
@@ -1384,8 +1380,8 @@ struct WlanView {
     hidden: Option<bool>,
     /// Backing network name resolved from configuration.
     network: Option<String>,
-    /// `[redacted]` unless secrets were explicitly and authorizedly
-    /// requested; absent when the network has no passphrase.
+    /// Controller-reported passphrase, when present. The gateway classifies
+    /// this tool's result as sensitive.
     #[serde(skip_serializing_if = "Option::is_none")]
     passphrase: Option<String>,
 }
@@ -2453,7 +2449,7 @@ impl UnifiMcp {
     pub async fn call(
         &self,
         params: &CallToolRequestParams,
-        principal: Option<&IdentityPrincipal>,
+        _principal: Option<&IdentityPrincipal>,
     ) -> Result<CallToolResult, McpError> {
         let spec = crate::registry::tools_for_surface(self.surface())
             .find(|spec| spec.name == params.name.as_ref())
@@ -2463,27 +2459,6 @@ impl UnifiMcp {
                     None,
                 )
             })?;
-        if self.local_access().is_some_and(|access| !access.writes)
-            && spec.kind.requires_write_access()
-        {
-            return Err(McpError::invalid_request(
-                "write access is not enabled for this client",
-                None,
-            ));
-        }
-        if self.local_access().is_some_and(|access| !access.secrets)
-            && (spec.kind.discloses_existing_credentials()
-                || params
-                    .arguments
-                    .as_ref()
-                    .and_then(|args| args.get("includeSecrets"))
-                    == Some(&serde_json::Value::Bool(true)))
-        {
-            return Err(McpError::invalid_request(
-                "secret disclosure is not enabled for this client",
-                None,
-            ));
-        }
         let result = match spec.kind {
             ToolKind::NetworkOverview => self.network_overview(params).await,
             ToolKind::ClientsSearch => self.clients_search(params).await,
@@ -2491,7 +2466,7 @@ impl UnifiMcp {
             ToolKind::DevicesSearch => self.devices_search(params).await,
             ToolKind::DevicesStatus => self.devices_status(params).await,
             ToolKind::FirewallRead => self.firewall_read(params).await,
-            ToolKind::NetworksRead => self.networks_read(params, principal).await,
+            ToolKind::NetworksRead => self.networks_read(params).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
@@ -2519,7 +2494,7 @@ impl UnifiMcp {
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
-        result.and_then(|result| finalize(result, self.redact(), spec.behavior))
+        result.and_then(|result| finalize(result, spec.behavior))
     }
 
     async fn network_overview(
@@ -3826,23 +3801,8 @@ impl UnifiMcp {
     async fn networks_read(
         &self,
         params: &CallToolRequestParams,
-        principal: Option<&IdentityPrincipal>,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworksReadInput>(params)?;
-        if input.include_secrets {
-            let authorized = principal.is_some_and(|principal| {
-                principal
-                    .groups
-                    .iter()
-                    .any(|group| group == MCP_ADMIN_GROUP)
-            });
-            if !authorized {
-                return Err(McpError::invalid_params(
-                    "includeSecrets requires membership in the mcp-admins group",
-                    None,
-                ));
-            }
-        }
 
         // The network list also backs wireless name resolution, so it is
         // always fetched; the section filter controls only what is emitted.
@@ -3894,16 +3854,7 @@ impl UnifiMcp {
                     .as_ref()
                     .and_then(|id| network_names.get(id).cloned())
                     .flatten(),
-                // The passphrase is disclosed only through the group-gated
-                // opt-in above; a present secret otherwise renders as the
-                // marker so its existence stays visible.
-                passphrase: wlan.x_passphrase.map(|passphrase| {
-                    if input.include_secrets {
-                        passphrase
-                    } else {
-                        mutation::REDACTION_MARKER.to_owned()
-                    }
-                }),
+                passphrase: wlan.x_passphrase,
             })
             .collect();
         structured(NetworksReadOutput {
@@ -4297,11 +4248,6 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        // Runs on the raw arguments: a redacted read must never become a
-        // write, whichever field carries the marker.
-        if let Some(arguments) = params.arguments.as_ref() {
-            mutation::reject_redacted_input(&Value::Object(arguments.clone()))?;
-        }
         reject_unknown_change_fields(params, WLAN_CHANGE_FIELDS)?;
         let input = parse::<WlansUpdateInput>(params)?;
         let requested = requested_fields(&input.changes);
@@ -4318,27 +4264,19 @@ impl UnifiMcp {
         let patch = wlan_patch(&input.changes)?;
 
         let (current, before_digest) = self.wlan_snapshot(&input.wlan).await?;
-        // Every secret this call touches: the one submitted and the one
-        // stored. Hiding the field named `passphrase` does not help if the
-        // same bytes surface as an ssid the caller set, or as a value the
-        // controller coerced elsewhere.
-        let secrets = wlan_secrets(&input.changes, &current);
         let before = wlan_projection(&current);
         let warnings = wlan_warnings(&requested, &before);
         if !input.confirm.unwrap_or(false) {
-            return structured_without_secrets(
-                &secrets,
-                WlansUpdateOutput {
-                    wlan: input.wlan,
-                    ssid: current.name,
-                    applied: false,
-                    changes: Some(mutation::plan(&requested, &before, WLAN_SECRET_FIELDS)),
-                    fields: None,
-                    unexpected_changes: None,
-                    verified: None,
-                    warnings,
-                },
-            );
+            return structured(WlansUpdateOutput {
+                wlan: input.wlan,
+                ssid: current.name,
+                applied: false,
+                changes: Some(mutation::plan(&requested, &before)),
+                fields: None,
+                unexpected_changes: None,
+                verified: None,
+                warnings,
+            });
         }
 
         // The digest covers every property the controller stores, including
@@ -4351,28 +4289,24 @@ impl UnifiMcp {
         // One read per side, so the field statuses and the collateral report
         // describe the same moment rather than two moments a round trip apart.
         let (after_record, after_digest) = self.wlan_snapshot(&input.wlan).await?;
-        let secrets = [secrets, wlan_secrets(&input.changes, &after_record)].concat();
         let after = wlan_projection(&after_record);
-        let fields = mutation::verify(&requested, &before, &after, WLAN_SECRET_FIELDS);
+        let fields = mutation::verify(&requested, &before, &after);
         let unexpected =
             unrequested_changes(&before_digest, &after_digest, &requested, WLAN_WIRE_NAMES);
         let verified = unexpected.is_empty()
             && fields
                 .iter()
                 .all(|outcome| outcome.status == mutation::FieldStatus::Persisted);
-        structured_without_secrets(
-            &secrets,
-            WlansUpdateOutput {
-                wlan: input.wlan,
-                ssid: after_record.name,
-                applied: true,
-                changes: None,
-                fields: Some(fields),
-                unexpected_changes: Some(unexpected),
-                verified: Some(verified),
-                warnings,
-            },
-        )
+        structured(WlansUpdateOutput {
+            wlan: input.wlan,
+            ssid: after_record.name,
+            applied: true,
+            changes: None,
+            fields: Some(fields),
+            unexpected_changes: Some(unexpected),
+            verified: Some(verified),
+            warnings,
+        })
     }
 
     /// Change one port forward, previewing unless the caller confirms.
@@ -4380,12 +4314,6 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        // Every returned string is scrubbed of configured credential material,
-        // so a name read back can carry the marker. Writing one over the real
-        // value is the round trip this refuses, whichever field carries it.
-        if let Some(arguments) = params.arguments.as_ref() {
-            mutation::reject_redacted_input(&Value::Object(arguments.clone()))?;
-        }
         reject_unknown_change_fields(params, PORT_FORWARD_CHANGE_FIELDS)?;
         let input = parse::<PortForwardsUpdateInput>(params)?;
         let requested = requested_port_forward_fields(&input.changes);
@@ -4407,7 +4335,7 @@ impl UnifiMcp {
             return structured(PortForwardsUpdateOutput {
                 forward: port_forward_view(current),
                 applied: false,
-                changes: Some(mutation::plan(&requested, &before, &[])),
+                changes: Some(mutation::plan(&requested, &before)),
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
@@ -4423,7 +4351,7 @@ impl UnifiMcp {
         // describe the same moment rather than two moments a round trip apart.
         let (after_record, after_digest) = self.port_forward_snapshot(&input.port_forward).await?;
         let after = port_forward_projection(&after_record);
-        let fields = mutation::verify(&requested, &before, &after, &[]);
+        let fields = mutation::verify(&requested, &before, &after);
         let unexpected = unrequested_changes(
             &before_digest,
             &after_digest,
@@ -4513,7 +4441,7 @@ impl UnifiMcp {
             return structured(FirewallPoliciesUpdateOutput {
                 policy: policy_view_from_record(&input.policy, &record),
                 applied: false,
-                changes: Some(mutation::plan(&requested, &before, &[])),
+                changes: Some(mutation::plan(&requested, &before)),
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
@@ -4564,7 +4492,7 @@ impl UnifiMcp {
             .map_err(api_error)?;
         let after_record = parsed_record(&after_raw);
         let after = policy_projection(&after_record);
-        let fields = mutation::verify(&requested, &before, &after, &[]);
+        let fields = mutation::verify(&requested, &before, &after);
         let unexpected =
             unrequested_changes(&before_digest, &after_digest, &requested, POLICY_WIRE_NAMES);
         let verified = unexpected.is_empty()
@@ -4825,47 +4753,7 @@ impl UnifiMcp {
                 code: voucher.code.unwrap_or_default(),
             })
             .collect();
-        // Configured credential material is scrubbed from every result. Here
-        // that scrub could rewrite a code — a controller-generated string is
-        // free to contain any substring — and a rewritten code is unusable
-        // while looking exactly like a usable one. Scrubbing first lets the
-        // checks see it and say so, rather than returning a corrupted
-        // credential as though it were what the controller produced.
-        let mut vouchers = vouchers;
-        for voucher in &mut vouchers {
-            // The id goes through the same pass, so `allIdentified` and the
-            // advice below describe the voucher the caller receives rather
-            // than the one the controller sent.
-            // Any change at all makes an id useless: it no longer names the
-            // voucher on the controller, and a modified id is harder to act
-            // on than an absent one because it looks like it should work.
-            if voucher
-                .id
-                .as_ref()
-                .is_some_and(|id| scrub_text(id, self.redact()).is_some())
-            {
-                voucher.id = None;
-            }
-            if let Some(scrubbed) = scrub_text(&voucher.code, self.redact()) {
-                voucher.code = scrubbed;
-                // What to do next depends on whether this voucher can still be
-                // named. Promising a revocation for one the caller cannot
-                // identify would be worse than admitting it is unreachable.
-                warnings.push(if voucher.id.is_some() {
-                    "a code contained configured credential material and was redacted, so \
-                     it is not the code the controller issued and that voucher cannot be \
-                     used; its id is here, so revoke it on the controller and mint a \
-                     replacement"
-                        .to_owned()
-                } else {
-                    "a code contained configured credential material and was redacted, and \
-                     the controller gave this voucher no id, so it can be neither used nor \
-                     found; look for it among the site's vouchers by creation time"
-                        .to_owned()
-                });
-            }
-        }
-        // The checks describe the ids and codes as they will be returned.
+        // The checks describe the ids and codes returned by the controller.
         let checks = voucher_checks(input.count, &vouchers);
         let well_formed = checks.count_matches
             && checks.all_identified
@@ -5507,9 +5395,6 @@ fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<Came
 fn camera_settings_patch(
     changes: &CameraSettingsChanges,
 ) -> Result<ProtectCameraSettingsPatch, McpError> {
-    let raw = serde_json::to_value(changes)
-        .map_err(|_| McpError::internal_error("camera settings could not be encoded", None))?;
-    mutation::reject_redacted_input(&raw)?;
     if changes.name.as_ref().is_some_and(|name| {
         name.trim().is_empty() || name.chars().count() > 128 || name.len() > 512
     }) {
@@ -6313,8 +6198,6 @@ fn client_control_warnings(action: ClientControl, connected: bool) -> Vec<String
     warnings
 }
 
-/// Fields whose values never appear in a result, in either direction.
-const WLAN_SECRET_FIELDS: &[&str] = &["passphrase"];
 /// Every field `changes` accepts. A misspelling is the likeliest way a caller
 /// loses a change, so the rejection names what was accepted.
 const WLAN_CHANGE_FIELDS: &[&str] = &["ssid", "enabled", "security", "hidden", "passphrase"];
@@ -6552,12 +6435,7 @@ fn voucher_checks(requested: u32, vouchers: &[VoucherView]) -> VoucherChecks {
         all_distinct: codes.len() == distinct,
         all_well_formed: vouchers.iter().all(|voucher| {
             let code = voucher.code.chars().count();
-            code > 0
-                && code <= VOUCHER_CODE_MAX
-                && !voucher.code.chars().any(char::is_whitespace)
-                // A redacted code is not the code the controller issued, so it
-                // is unusable in exactly the way this check reports.
-                && !voucher.code.contains(mutation::REDACTION_MARKER)
+            code > 0 && code <= VOUCHER_CODE_MAX && !voucher.code.chars().any(char::is_whitespace)
         }),
         code_lengths: lengths,
     }
@@ -7247,30 +7125,6 @@ fn requested_fields(changes: &WlanChanges) -> Map<String, Value> {
     requested
 }
 
-/// Every secret value in play for one call: submitted and stored.
-fn wlan_secrets(changes: &WlanChanges, current: &WlanConf) -> Vec<Zeroizing<String>> {
-    changes
-        .passphrase
-        .iter()
-        .chain(current.x_passphrase.iter())
-        .filter(|key| !key.is_empty())
-        .map(|key| Zeroizing::new(key.clone()))
-        .collect()
-}
-
-/// Serialize a result and remove any secret value from it, wherever it
-/// appears. Field-level omission covers the fields known to hold a secret;
-/// this covers the same bytes turning up somewhere else.
-fn structured_without_secrets<T: Serialize>(
-    secrets: &[Zeroizing<String>],
-    output: T,
-) -> Result<CallToolResult, McpError> {
-    let mut value = serde_json::to_value(output)
-        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
-    scrub_and_verify(&mut value, secrets)?;
-    Ok(CallToolResult::structured(value))
-}
-
 /// Consequences an operator should see before confirming.
 fn wlan_warnings(requested: &Map<String, Value>, current: &Value) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -7309,8 +7163,8 @@ fn wlan_patch(changes: &WlanChanges) -> Result<WlanPatch, McpError> {
     // Encryption is turned on by one request carrying both the mode and the
     // key. Reusing a key read earlier would make the outcome depend on that
     // read still being current, which no read on this API can guarantee, so
-    // the caller states it. `networks.read` with `includeSecrets` is how an
-    // authorized caller obtains the current one.
+    // the caller states it. `networks.read` supplies the
+    // current value when the caller needs it.
     if changes.security == Some(WlanSecurity::Wpapsk) && changes.passphrase.is_none() {
         return Err(McpError::invalid_params(
             "setting security to wpapsk requires the passphrase in the same \
@@ -7390,18 +7244,12 @@ pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpE
     Ok(CallToolResult::structured(value))
 }
 
-/// Finalize one successful result in a fixed order: scrub configured secret
-/// values, verify none remain in the serialized form, enforce the response
-/// budget on exactly what would be returned, then apply trust labels.
-fn finalize(
-    result: CallToolResult,
-    secrets: &[Zeroizing<String>],
-    behavior: ToolBehavior,
-) -> Result<CallToolResult, McpError> {
-    let Some(mut value) = result.structured_content else {
+/// Enforce the response budget on the values returned by the tool, then
+/// attach the gateway's sensitivity and trust labels.
+fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolResult, McpError> {
+    let Some(value) = result.structured_content else {
         return Ok(trust_annotated(result, behavior));
     };
-    scrub_and_verify(&mut value, secrets)?;
     if value.to_string().len() > MAXIMUM_RESULT_BYTES {
         return Err(McpError::invalid_params(
             "result exceeds the response budget; narrow the query or lower the limit",
@@ -7418,129 +7266,6 @@ fn finalize(
     Ok(trust_annotated(finalized, behavior))
 }
 
-/// Replace any occurrence of a configured secret value in string values
-/// with a redaction marker. Output keys are typed and server-owned; only
-/// string values can carry controller-reflected data.
-/// Remove every secret from a result and refuse to return it if any survived.
-///
-/// The survivor check is the guarantee, not the replacement: substitution can
-/// reintroduce a secret that is itself a substring of the marker, and no
-/// replacement scheme is safe against that. Configuration refuses such a value
-/// at load, which leaves the two in agreement — within the string values the
-/// scrub covers, nothing can survive it. Both the configured controller
-/// credentials and the secrets one call happens to handle go through here, so
-/// neither is scrubbed more weakly than the other.
-fn scrub_and_verify(value: &mut Value, secrets: &[Zeroizing<String>]) -> Result<(), McpError> {
-    scrub_value(value, secrets);
-    // The scrub resolves every string it touches, so reaching this is a bug in
-    // it rather than a property of the data. It stays because withholding is
-    // the right answer to that, and because a check that can only fire on a
-    // defect is the one worth keeping.
-    if secret_survives(value, secrets) {
-        return Err(McpError::internal_error(
-            "result withheld: credential material could not be redacted",
-            None,
-        ));
-    }
-    Ok(())
-}
-
-/// Whether any secret is still present where the scrub was responsible for
-/// removing it.
-///
-/// The check has to cover the same ground as the scrub and no more. Searching
-/// the serialized form instead would also read property names, which are
-/// server-authored constants rather than anywhere controller data can appear —
-/// so a configured secret that happened to spell one would withhold every
-/// result carrying that property, no matter what the controller sent. Numbers
-/// and booleans are typed and carry no text at all.
-fn secret_survives(value: &Value, secrets: &[Zeroizing<String>]) -> bool {
-    match value {
-        Value::String(text) => secrets
-            .iter()
-            .any(|secret| !secret.is_empty() && text.contains(secret.as_str())),
-        Value::Array(items) => items.iter().any(|item| secret_survives(item, secrets)),
-        Value::Object(map) => map.values().any(|item| secret_survives(item, secrets)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
-    }
-}
-
-/// Replace every occurrence of every secret with the marker.
-///
-/// Occurrences are located first and their ranges merged, then the text is
-/// rebuilt once. Replacing one secret at a time lets the first replacement
-/// consume part of a longer secret's match and leave the remainder behind,
-/// which happens whenever one secret contains or overlaps another.
-fn scrub_value(value: &mut Value, secrets: &[Zeroizing<String>]) {
-    match value {
-        Value::String(text) => {
-            if let Some(scrubbed) = scrub_text(text, secrets) {
-                *text = scrubbed;
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                scrub_value(item, secrets);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                scrub_value(item, secrets);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
-
-/// The text with every secret occurrence replaced, or `None` when none match.
-fn scrub_text(text: &str, secrets: &[Zeroizing<String>]) -> Option<String> {
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for secret in secrets {
-        if secret.is_empty() {
-            continue;
-        }
-        let mut from = 0;
-        while let Some(offset) = text[from..].find(secret.as_str()) {
-            let start = from + offset;
-            ranges.push((start, start + secret.len()));
-            from = start + 1;
-            while from < text.len() && !text.is_char_boundary(from) {
-                from += 1;
-            }
-        }
-    }
-    if ranges.is_empty() {
-        return None;
-    }
-    ranges.sort_unstable();
-    let mut scrubbed = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for (start, end) in ranges {
-        if start >= cursor {
-            scrubbed.push_str(&text[cursor..start]);
-            scrubbed.push_str(mutation::REDACTION_MARKER);
-            cursor = end;
-        } else if end > cursor {
-            cursor = end;
-        }
-    }
-    scrubbed.push_str(&text[cursor..]);
-    // Substituting the marker can compose a string that matches a different
-    // configured secret, and the composed match can extend arbitrarily far
-    // into the surrounding text — so no number of further passes is the right
-    // number. When the substitution leaves a secret behind, the value's
-    // remaining text is what made that possible, and none of it is worth
-    // keeping: the whole value becomes the marker. That resolves in one step,
-    // for any input, and costs one field's text rather than the result.
-    if secrets
-        .iter()
-        .any(|secret| !secret.is_empty() && scrubbed.contains(secret.as_str()))
-    {
-        return Some(mutation::REDACTION_MARKER.to_owned());
-    }
-    Some(scrubbed)
-}
-
 fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
     let trust = serde_json::json!({
         "sensitive": behavior.result_sensitive,
@@ -7554,9 +7279,7 @@ fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallTo
     result
 }
 
-/// Preserve the fixed recovery instruction for an unsplittable event boundary.
-/// Every other API diagnostic still passes through the generic redacting
-/// adapter, so controller-originated text cannot cross the MCP boundary.
+/// Preserve the recovery instruction for an unsplittable event boundary.
 fn protect_events_api_error(error: ApiError) -> McpError {
     match error {
         ApiError::Config(message)
@@ -7572,29 +7295,9 @@ fn protect_events_api_error(error: ApiError) -> McpError {
     }
 }
 
-// `Result::map_err` passes ownership to its adapter; the by-value signature
-// keeps call sites non-capturing and drops the source error after conversion
-// to the safe vocabulary.
-//
-// JSON-RPC errors cannot carry the result trust labels, so this channel uses
-// server-authored text only: controller-influenced message and code text
-// never reaches it. The numeric HTTP status is the only upstream-derived
-// datum. Protect transports log only endpoint and structural failure context;
-// controller-provided values are deliberately discarded.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn api_error(error: ApiError) -> McpError {
-    let message = match &error {
-        ApiError::Config(_) => "invalid controller configuration".to_owned(),
-        ApiError::Status { status, .. } => format!("controller returned HTTP {status}"),
-        ApiError::RateLimited { .. } => "controller rate limited the request".to_owned(),
-        ApiError::Rejected { .. } => "controller rejected the request".to_owned(),
-        ApiError::Transport(_) => "controller transport failure".to_owned(),
-        ApiError::ResponseTooLarge { .. }
-        | ApiError::InvalidJson { .. }
-        | ApiError::SchemaMismatch { .. }
-        | ApiError::Decode(_) => "unexpected controller response".to_owned(),
-    };
-    McpError::internal_error(message, None)
+    McpError::internal_error(error.to_string(), None)
 }
 
 #[cfg(test)]
@@ -7603,8 +7306,6 @@ mod tests {
 
     use rmcp::model::CallToolRequestParams;
     use serde_json::{Map, Value, json};
-
-    use zeroize::Zeroizing;
 
     use super::{
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
@@ -7825,14 +7526,13 @@ mod tests {
 
     #[test]
     fn over_budget_results_return_the_recovery_error_not_a_dump() {
-        // The budget applies to the final scrubbed form, so a result that
-        // grows past the ceiling during redaction is still refused.
+        // The budget applies to the values returned by the tool.
         let oversized = structured(vec!["x".repeat(1024); MAXIMUM_RESULT_BYTES / 1024 + 2])
             .expect("built result");
-        let error = finalize(oversized, &[], ToolBehavior::read()).expect_err("over budget");
+        let error = finalize(oversized, ToolBehavior::read()).expect_err("over budget");
         assert!(error.message.contains("narrow the query"));
         let small = structured(vec!["small"]).expect("built result");
-        assert!(finalize(small, &[], ToolBehavior::read()).is_ok());
+        assert!(finalize(small, ToolBehavior::read()).is_ok());
     }
 
     #[test]
@@ -7852,75 +7552,14 @@ mod tests {
     }
 
     #[test]
-    fn surviving_credentials_withhold_the_result_fail_closed() {
-        // A credential that is a substring of the redaction marker survives
-        // replacement; the independent verification must withhold the result.
-        let secrets = [Zeroizing::new("edacted".to_owned())];
-        let reflected =
-            structured(serde_json::json!({"version": "9.x+edacted"})).expect("built result");
-        let error =
-            finalize(reflected, &secrets, ToolBehavior::read()).expect_err("withheld result");
-        assert!(error.message.contains("result withheld"));
-        // An ordinary reflected credential is scrubbed and the result kept.
-        let ordinary = [Zeroizing::new("super-secret-key".to_owned())];
-        let scrubbed =
-            structured(serde_json::json!({"version": "9.x+super-secret-key"})).expect("built");
-        let kept = finalize(scrubbed, &ordinary, ToolBehavior::read()).expect("kept result");
-        assert_eq!(
-            kept.structured_content.expect("structured")["version"],
-            "9.x+[redacted]"
-        );
-    }
-
-    #[test]
-    fn a_substitution_that_composes_another_secret_resolves_without_withholding() {
-        // Substituting the marker can build a string matching a different
-        // configured secret, and the composed match can run arbitrarily far
-        // into the surrounding text — so no pass count is the right one. Each
-        // case here would need a different number: the value is resolved
-        // outright instead, and the result is never withheld.
-        for (secrets, text) in [
-            (
-                vec![
-                    Zeroizing::new("X".to_owned()),
-                    Zeroizing::new("[redacted]Y".to_owned()),
-                ],
-                "XY",
-            ),
-            (
-                vec![Zeroizing::new("[redacted]A".to_owned())],
-                "[redacted]AAAAAAAAAA",
-            ),
-        ] {
-            let result = structured(serde_json::json!({"code": text})).expect("built result");
-            let kept = finalize(result, &secrets, ToolBehavior::read()).expect("kept result");
-            let code = kept.structured_content.expect("structured")["code"]
-                .as_str()
-                .expect("code")
-                .to_owned();
-            for secret in &secrets {
-                assert!(!code.contains(secret.as_str()), "{code}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_credential_spelling_a_property_name_does_not_withhold_the_result() {
-        // Property names are server-authored constants, not anywhere
-        // controller data can appear, so the scrub leaves them alone. A check
-        // that read the serialized form would find one there and withhold
-        // every result carrying that property — permanently, and worst on a
-        // write whose output cannot be produced again.
-        let secrets = [Zeroizing::new("allIdentified".to_owned())];
-        let result = structured(serde_json::json!({
-            "allIdentified": true,
-            "code": "1234567890",
-        }))
-        .expect("built result");
-        let kept = finalize(result, &secrets, ToolBehavior::read()).expect("kept result");
-        let content = kept.structured_content.expect("structured");
-        assert_eq!(content["allIdentified"], true);
-        assert_eq!(content["code"], "1234567890");
+    fn finalizer_preserves_controller_values_and_property_names() {
+        let supplied = serde_json::json!({
+            "nested": {"controller-key": "controller-value"},
+            "code": "controller-code",
+        });
+        let result = structured(supplied.clone()).expect("built result");
+        let returned = finalize(result, ToolBehavior::read()).expect("returned result");
+        assert_eq!(returned.structured_content, Some(supplied));
     }
 
     #[test]

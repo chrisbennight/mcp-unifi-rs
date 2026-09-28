@@ -6,11 +6,10 @@ file through a shell or Docker Compose. Missing required values and invalid
 bounds fail startup. Controller connections are lazy, so liveness does not
 prove that a controller is reachable.
 
-Controller credentials are environment-injected, never selected by tool input,
-and scrubbed from results. Secret values are limited to 16384 bytes. A controller
-key or password that cannot survive the result redactor is refused at startup.
-For independent client permissions and HTTP bearer settings, see
-[Connecting a client](transports.md#permissions).
+Controller credentials are environment-injected and never selected by tool
+input. Secret values are limited to 16384 bytes. Selected controller response
+fields and error details are returned faithfully. See
+[Connecting a client](transports.md#access-and-limits).
 
 ## Runtime and listener
 
@@ -33,15 +32,12 @@ The healthcheck reads only listener coordinates and needs no credentials.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `UNIFI_MCP_ALLOW_WRITES` | `false` | Exactly `true` permits mutation tools, including previews |
-| `UNIFI_MCP_ALLOW_SECRET_DISCLOSURE` | `false` | Exactly `true` permits `networks.read` with `includeSecrets` |
 | `UNIFI_MCP_HTTP_BEARER_CURRENT` | Required for direct HTTP | Dedicated bearer, at least 32 bytes, no whitespace; never reuse a controller key |
 | `UNIFI_MCP_HTTP_BEARER_PREVIOUS` | Unset | Optional distinct old bearer during rotation |
 | `UNIFI_MCP_ALLOWED_HOSTS` | Direct HTTP: localhost, 127.0.0.1 and [::1], with and without the configured port | Comma-separated exact Host values; configure the proxy hostname for remote access |
 | `UNIFI_MCP_ALLOWED_ORIGINS` | Empty | Comma-separated trusted Origin values; any supplied Origin is rejected unless listed |
 
-Permission flags accept only `true` and `false`. They do not change gateway
-policy. Stdio requires no incoming bearer. Direct HTTP uses fixed, preconfigured
+Stdio requires no incoming bearer. Direct HTTP uses fixed, preconfigured
 bearer authentication; it has no OAuth discovery endpoint. Its local socket is
 plaintext: remote access needs HTTPS termination and a restricted proxy-to-server
 connection. See [HTTP setup](transports.md#direct-streamable-http).

@@ -59,7 +59,6 @@ pub fn build_handler(runtime: &RuntimeSettings) -> Result<UnifiMcp, ApiError> {
                 Arc::new(legacy),
                 &controller.name,
                 &controller.site,
-                vec![controller.api_key.clone(), controller.password.clone()],
             ))
         }
         RuntimeSettings::Protect(console) => {
@@ -70,12 +69,10 @@ pub fn build_handler(runtime: &RuntimeSettings) -> Result<UnifiMcp, ApiError> {
                 tls: console.tls.clone(),
                 timeout: console.timeout,
             })?;
-            let mut redact = vec![console.api_key.clone()];
             let protect_events = console
                 .legacy
                 .as_ref()
                 .map(|credentials| {
-                    redact.push(credentials.password.clone());
                     LegacyClient::new(&LegacyConfig {
                         name: console.name.clone(),
                         base_url: console.base_url.clone(),
@@ -91,7 +88,6 @@ pub fn build_handler(runtime: &RuntimeSettings) -> Result<UnifiMcp, ApiError> {
                 &console.name,
                 Arc::new(protect),
                 protect_events,
-                redact,
             ))
         }
     }
@@ -264,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handler_construction_wires_and_scrubs_the_protect_event_session() {
+    async fn handler_construction_preserves_protect_event_values() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/proxy/protect/integration/v1/meta/info"))
@@ -332,6 +328,6 @@ mod tests {
         );
         let result = handler.call(&request, None).await.expect("Protect events");
         let output = result.structured_content.expect("structured result");
-        assert_eq!(output["rows"][0]["kind"], "[redacted]");
+        assert_eq!(output["rows"][0]["kind"], "protect-local-password");
     }
 }

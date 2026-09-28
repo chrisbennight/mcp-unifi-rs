@@ -8,7 +8,7 @@ part of that import. This review covers the tracked source, fixtures, Docker
 build context, image publication and transport boundaries. It does not certify
 the safety of data outside that scope.
 
-The initial imported-code review used Gitleaks 8.30.1 with fully redacted output
+The initial imported-code review used Gitleaks 8.30.1 with findings kept out of the report
 on an exported tracked snapshot. It returned zero findings. CI repeats the scan
 for each candidate with the pinned official image in the workflow. A text sweep
 also checked private service references, credential assignments and key blocks;
@@ -58,15 +58,15 @@ server runtime.
 
 Ingress authenticates before dispatch. Direct HTTP rejects missing, wrong or
 duplicate bearers and unlisted Host/Origin values; caller-supplied identity
-metadata cannot grant independent clients write or disclosure permissions.
+metadata cannot replace the verified gateway identity.
 Stdio trusts the process owner and bounds input framing. Tool annotations do
-not authorize a call. Request limits and redaction remain enforced in the server.
+not authorize a call. Request limits remain enforced in the server.
 
 The transport regression suite exercises malformed protocol metadata, denied
-access, separate grants, successful inventory calls, oversized messages,
+access, successful inventory calls, oversized messages,
 stdout framing and payload-log suppression. Controller text is treated as data,
 not an interpreter input. Clients still need to resist instructions embedded
-in tool results; redaction is not a prompt-injection detector.
+in tool results.
 
 Mutation tests cover preview, validation before writes, read-back failures,
 ambiguous outcomes, and voucher lifecycle results. Voucher list and detail reads

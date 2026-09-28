@@ -461,15 +461,6 @@ pub struct ProtectClient {
     api_key: Zeroizing<String>,
 }
 
-impl std::fmt::Debug for ProtectClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProtectClient")
-            .field("base", &self.base.as_str())
-            .finish_non_exhaustive()
-    }
-}
-
 impl ProtectClient {
     /// Build a client for one Protect console.
     ///
@@ -820,6 +811,7 @@ impl ProtectClient {
             Ok(response) => response,
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
+                ..
             }) if delay <= crate::client::MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
                 self.send(self.request(Method::GET, segments)?, endpoint)
@@ -911,31 +903,22 @@ impl ProtectClient {
                 error_kind = "rate_limited",
                 "Protect request failed"
             );
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
-        // A Protect error body is controller-reported data. Read it only so
-        // diagnostics retain a bounded byte count; values from it never enter
-        // the public error surface.
         let status_code = status.as_u16();
-        match http::read_bounded_body(response).await {
-            Ok(bytes) => {
-                warn!(
-                    endpoint,
-                    status = status_code,
-                    response_bytes = bytes.len(),
-                    error_kind = "http_status",
-                    "Protect request failed"
-                );
-            }
-            Err(error) => {
-                log_response_rejection(endpoint, status_code, &error);
-            }
-        }
+        let bytes = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| log_response_rejection(endpoint, status_code, error))?;
+        warn!(
+            endpoint,
+            status = status_code,
+            response_bytes = bytes.len(),
+            error_kind = "http_status",
+            "Protect request failed"
+        );
         Err(ApiError::Status {
             status: status_code,
-            message: BoundedMessage::new("controller returned an unsuccessful status"),
+            message: BoundedMessage::new(&String::from_utf8_lossy(&bytes)),
         })
     }
 }

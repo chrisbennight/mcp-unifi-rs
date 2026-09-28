@@ -37,16 +37,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![
-            Zeroizing::new(API_KEY.to_owned()),
-            Zeroizing::new(PASSWORD.to_owned()),
-        ],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -316,8 +307,8 @@ async fn activity_permission_and_session_errors_do_not_become_missing_data() {
             .call(&call("stats.query", &args("dpiApplications")), None)
             .await
             .expect_err("authorization error");
-        assert!(!error.message.contains("private upstream"));
-        assert!(!error.message.contains(PASSWORD));
+        assert!(error.message.contains("private upstream"));
+        assert!(error.message.contains(PASSWORD));
         assert!(
             server
                 .received_requests()

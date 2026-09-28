@@ -2,8 +2,7 @@ use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 
 use super::{
-    CSRF_HEADER, ConsoleKind, LegacyClient, RequestClass, is_login_required, login_required_error,
-    translate_failure,
+    CSRF_HEADER, ConsoleKind, LegacyClient, RequestClass, is_login_required, translate_failure,
 };
 use crate::{
     ApiError, BoundedMessage, http,
@@ -115,13 +114,8 @@ impl LegacyClient {
         })?;
         self.capture_csrf(&response).await;
         let status = response.status();
-        if status == StatusCode::UNAUTHORIZED {
-            return Err(login_required_error());
-        }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ApiError::RateLimited {
-                retry_after: http::retry_after(&response),
-            });
+            return Err(http::rate_limited(response).await?);
         }
         let bytes = http::read_bounded_body(response).await?;
         if matches!(status.as_u16(), 404 | 405) {
@@ -131,7 +125,6 @@ impl LegacyClient {
             return Err(translate_failure(
                 status.as_u16(),
                 &bytes,
-                &[self.password.as_str()],
                 RequestClass::IdempotentRead,
             ));
         }

@@ -17,7 +17,7 @@ use rmcp::model::{CallToolRequestParams, ContentBlock};
 use unifi_api::{
     ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, ProtectClient, TlsMode,
 };
-use unifi_mcp::{UnifiMcp, handler::LocalAccess};
+use unifi_mcp::UnifiMcp;
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -59,16 +59,7 @@ fn handler_without_protect(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![
-            Zeroizing::new(API_KEY.to_owned()),
-            Zeroizing::new(PASSWORD.to_owned()),
-        ],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn handler_for(server: &MockServer) -> UnifiMcp {
@@ -81,12 +72,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("protect client");
-    UnifiMcp::new_protect(
-        "cameras",
-        Arc::new(protect),
-        None,
-        vec![Zeroizing::new(PROTECT_KEY.to_owned())],
-    )
+    UnifiMcp::new_protect("cameras", Arc::new(protect), None)
 }
 
 fn handler_with_events(server: &MockServer) -> UnifiMcp {
@@ -108,15 +94,7 @@ fn handler_with_events(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("Protect event client");
-    UnifiMcp::new_protect(
-        "cameras",
-        Arc::new(protect),
-        Some(Arc::new(events)),
-        vec![
-            Zeroizing::new(PROTECT_KEY.to_owned()),
-            Zeroizing::new(PASSWORD.to_owned()),
-        ],
-    )
+    UnifiMcp::new_protect("cameras", Arc::new(protect), Some(Arc::new(events)))
 }
 
 fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -144,7 +122,7 @@ async fn console_with(server: &MockServer, cameras: serde_json::Value) {
 }
 
 #[tokio::test]
-async fn stream_list_returns_handles_and_requires_local_secret_disclosure() {
+async fn stream_list_returns_handles_on_independent_transport() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
     Mock::given(method("GET"))
@@ -160,16 +138,8 @@ async fn stream_list_returns_handles_and_requires_local_secret_disclosure() {
         "cameras.streams.list",
         &serde_json::json!({"camera": "Front Door"}),
     );
-    let denied = handler_for(&server)
-        .with_local_access(LocalAccess {
-            writes: true,
-            secrets: false,
-        })
-        .call(&request, None)
-        .await
-        .expect_err("local secret grant required");
-    assert!(denied.message.contains("secret disclosure"));
     let output = handler_for(&server)
+        .with_local_transport()
         .call(&request, None)
         .await
         .expect("streams")
@@ -387,28 +357,6 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
     assert_eq!(started["applied"], true);
     assert_eq!(started["session"]["codec"], "opus");
     assert_eq!(started["session"]["samplingRate"], 24000);
-    let local = handler_for(&server).with_local_access(LocalAccess {
-        writes: false,
-        secrets: true,
-    });
-    for request in [
-        call(
-            "cameras.streams.update",
-            &serde_json::json!({
-                "camera": "cam-front", "action": "remove", "qualities": ["high"]
-            }),
-        ),
-        call(
-            "cameras.talkback.start",
-            &serde_json::json!({"camera": "cam-front"}),
-        ),
-    ] {
-        let denied = local
-            .call(&request, None)
-            .await
-            .expect_err("local write grant required");
-        assert!(denied.message.contains("write access"));
-    }
 }
 
 #[tokio::test]
@@ -726,7 +674,7 @@ async fn ptz_stop_verifies_the_reported_idle_state() {
 }
 
 #[tokio::test]
-async fn ptz_rejects_invalid_action_shape_and_independent_write_denial() {
+async fn ptz_rejects_invalid_action_shape() {
     let server = MockServer::start().await;
     let handler = handler_for(&server);
     for arguments in [
@@ -741,21 +689,6 @@ async fn ptz_rejects_invalid_action_shape_and_independent_write_denial() {
                 .is_err()
         );
     }
-    let local = handler.with_local_access(LocalAccess {
-        writes: false,
-        secrets: false,
-    });
-    let error = local
-        .call(
-            &call(
-                "cameras.ptz.control",
-                &serde_json::json!({"camera":"cam-front","action":"stopPatrol"}),
-            ),
-            None,
-        )
-        .await
-        .expect_err("local write denied");
-    assert!(error.message.contains("write access"));
 }
 
 fn sample_cameras() -> serde_json::Value {

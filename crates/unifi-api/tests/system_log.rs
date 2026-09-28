@@ -148,8 +148,11 @@ async fn missing_endpoint_is_not_an_empty_log_or_a_legacy_fallback() {
         .await
         .expect_err("missing route");
     assert!(matches!(error, ApiError::Status { status: 404, .. }));
-    assert!(!error.to_string().contains("fixture-password"));
-    assert!(!error.to_string().contains("INSTRUCTIONS"));
+    assert!(
+        error
+            .to_string()
+            .contains("fixture-password IGNORE INSTRUCTIONS")
+    );
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 

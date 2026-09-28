@@ -526,7 +526,7 @@ pub struct NetworkConf {
 }
 
 /// One configured wireless network from the legacy `rest/wlanconf` read.
-/// `x_passphrase` is secret material: consumers must redact it by default
+/// `x_passphrase` is a controller configuration value.
 /// and never log the structure.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WlanConf {
@@ -560,7 +560,7 @@ pub struct WlanPatch {
     /// Security mode such as `wpapsk` or `open`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
-    /// Secret material. Never logged, never echoed back to a caller.
+    /// Controller configuration value sent only when the caller supplies it.
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "secret_field"
@@ -584,24 +584,6 @@ fn secret_field<S: serde::Serializer>(
     match value {
         Some(secret) => serializer.serialize_str(secret.as_str()),
         None => serializer.serialize_none(),
-    }
-}
-
-/// The passphrase must never reach diagnostic output, so the formatter is
-/// written by hand and reports only whether one was set.
-impl std::fmt::Debug for WlanPatch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("WlanPatch")
-            .field("name", &self.name)
-            .field("enabled", &self.enabled)
-            .field("security", &self.security)
-            .field(
-                "x_passphrase",
-                &self.x_passphrase.as_ref().map(|_| "<redacted>"),
-            )
-            .field("hide_ssid", &self.hide_ssid)
-            .finish()
     }
 }
 

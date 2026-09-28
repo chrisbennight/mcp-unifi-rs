@@ -357,16 +357,25 @@ async fn rate_limited_reads_without_an_acceptable_delay_surface_the_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/info")))
-        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "600"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "600")
+                .set_body_json(serde_json::json!({"message":"controller says wait"})),
+        )
         .expect(1)
         .mount(&server)
         .await;
 
     let error = client_for(&server).info().await.expect_err("rate limited");
-    let ApiError::RateLimited { retry_after } = error else {
+    let ApiError::RateLimited {
+        retry_after,
+        message,
+    } = error
+    else {
         panic!("expected RateLimited, got {error:?}");
     };
     assert_eq!(retry_after, Some(Duration::from_mins(10)));
+    assert!(message.as_str().contains("controller says wait"));
 }
 
 #[tokio::test]
@@ -409,7 +418,7 @@ async fn upstream_errors_are_bounded_and_carry_the_extracted_message() {
 }
 
 #[tokio::test]
-async fn an_echoed_api_key_is_redacted_from_error_messages() {
+async fn an_upstream_error_message_is_returned_unchanged() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/info")))
@@ -425,11 +434,7 @@ async fn an_echoed_api_key_is_redacted_from_error_messages() {
     let ApiError::Status { message, .. } = error else {
         panic!("expected Status, got {error:?}");
     };
-    assert!(
-        !message.as_str().contains(API_KEY),
-        "credential must never survive into the error surface"
-    );
-    assert_eq!(message.as_str(), "invalid key <redacted> rejected");
+    assert_eq!(message.as_str(), format!("invalid key {API_KEY} rejected"));
 }
 
 #[tokio::test]
@@ -455,9 +460,11 @@ async fn an_over_limit_multibyte_error_message_is_truncated_without_panicking() 
         "message must respect the byte budget"
     );
     assert!(!message.as_str().is_empty());
+    assert!(message.as_str().ends_with(" [truncated]"));
     assert!(
         message
             .as_str()
+            .trim_end_matches(" [truncated]")
             .chars()
             .all(|character| character == '\u{e9}')
     );

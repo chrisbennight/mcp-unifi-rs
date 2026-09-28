@@ -13,36 +13,24 @@ under test.
 Run each task against the configured server through the selected transport, and keep the
 tool-call transcript. The transcript is the artifact; the answer is secondary.
 
-**Redact credentials out of the transcript before keeping it.** One task mints
-real guest passes, and the codes appear in a result the
-registry classifies as sensitive. A kept transcript would hold working
-credentials for as long as the file survives, which the live response does not.
-Replace each code with a placeholder as you record the run; what the eval needs
-is that codes were returned and how the agent treated them, never the codes
-themselves.
+**Store the transcript with access controls appropriate to its contents.**
+A task can mint working guest passes, and the registry classifies those results
+as sensitive. Keep the complete tool response for evaluation and limit who can
+read the resulting artifact.
 
 Read each transcript against the task's expected path and record which of these
 happened:
 
-- **Wrong tool.** The agent reached for something that could not answer the
-  question. The name or description misleads.
-- **Guessed parameter.** The agent passed a value the schema rejected, or
-  passed the right value under the wrong name. The parameter is misnamed or the
-  description does not say what it accepts.
-- **Extra round trip.** The agent needed a call this surface should have made
-  unnecessary — usually a read to find an identifier that another tool should
-  have accepted directly.
-- **Dead end.** The agent could not get there at all, or gave up and asked the
-  operator for something the tools could have told it.
-- **Clarified.** The agent asked the operator for something no tool could have
-  supplied — a choice that is the operator's to make, like how many guest
-  passes to mint. Several tasks below are deliberately vague in exactly this
-  way, and asking is the right move rather than a failure. Not a finding about
-  the surface. It becomes one only if the agent had to ask because a schema
-  never said the field was required.
-- **Model error.** The agent went wrong with everything it needed in front of
-  it. Not a finding about the surface.
-- **Clean.** The expected path, first try.
+- **Wrong tool.** The agent chose a tool that could not answer the question.
+- **Guessed parameter.** The agent passed a value the schema rejected, or used
+  the wrong parameter name.
+- **Extra round trip.** The agent needed an avoidable call, such as a separate
+  lookup for an identifier the first tool could have accepted directly.
+- **Dead end.** The agent could not complete the task with available tools.
+- **Clarified.** The agent asked for a choice only the operator could make.
+  This is appropriate when the tools could not supply the answer.
+- **Model error.** The agent had the needed tool information and went wrong.
+- **Clean.** The agent followed the expected path on the first try.
 
 ### Telling a surface defect from a model error
 
@@ -196,9 +184,8 @@ this task is the one that would catch it.
 
 **"Are any of our wireless networks insecure?"**
 Expected: read the networks, reason about the security modes.
-Watches for: an agent that treats a redacted passphrase as a finding. Redaction
-is not weakness, and the result should make that obvious enough that it does
-not get reported as one.
+Watches for: whether the agent reasons about the configured security mode
+and uses passphrase values only as needed for the requested task.
 
 **"We're on the zone-based firewall now — can you still see the old rules?"**
 Expected: an answer that names the console's generation. What form that takes

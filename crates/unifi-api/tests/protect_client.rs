@@ -561,7 +561,7 @@ async fn a_rejected_credential_is_never_reported_as_an_absent_api() {
 }
 
 #[tokio::test]
-async fn a_controller_error_body_does_not_enter_the_safe_error() {
+async fn a_controller_error_body_reaches_the_caller() {
     const CONTROLLER_VALUE: &str = "synthetic-controller-device-id";
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -574,12 +574,8 @@ async fn a_controller_error_body_does_not_enter_the_safe_error() {
 
     let error = client_for(&server).cameras().await.expect_err("rejected");
     let rendered = error.to_string();
-    assert!(!rendered.contains(API_KEY), "{rendered}");
-    assert!(!rendered.contains(CONTROLLER_VALUE), "{rendered}");
-    assert!(
-        rendered.contains("controller returned an unsuccessful status"),
-        "{rendered}"
-    );
+    assert!(rendered.contains(API_KEY), "{rendered}");
+    assert!(rendered.contains(CONTROLLER_VALUE), "{rendered}");
 }
 
 #[tokio::test]
@@ -617,7 +613,7 @@ async fn rate_limited_reads_without_an_acceptable_delay_surface_the_error() {
         .await;
 
     let error = client_for(&server).info().await.expect_err("rate limited");
-    let ApiError::RateLimited { retry_after } = error else {
+    let ApiError::RateLimited { retry_after, .. } = error else {
         panic!("expected RateLimited, got {error:?}");
     };
     assert_eq!(retry_after, Some(Duration::from_mins(10)));

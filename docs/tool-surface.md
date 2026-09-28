@@ -94,11 +94,10 @@ scan with `sectionOffset` taken from `nextSectionOffset`.
 
 ### `networks.read`
 
-`includeSecrets`, `section`.
+`section`.
 
 Configured networks and wireless networks: VLANs, subnets, DHCP scopes, SSIDs,
-and security modes. Passphrases are redacted by default; `includeSecrets`
-discloses them and requires the `mcp-admins` group.
+security modes, and passphrases. The gateway controls access to these values.
 
 ### `wifi.diagnose`
 
@@ -304,13 +303,6 @@ before any request, and the rejection names what would have been accepted.
 **Is never retried.** Writes are classed as mutations in the transport, so an
 ambiguous transport result is surfaced rather than resent.
 
-The field writes additionally refuse a redaction round trip. Every
-returned string is scrubbed of configured credential material, so a value read
-back can carry the `[redacted]` marker; a change carrying that marker is
-refused rather than persisting it over the real value. The actions take
-an enum and a hardware address or id, with no free text for a marker to travel
-in.
-
 ### Field writes: `wlans.update`, `port_forwards.update`
 
 These take a resource id and a `changes` object, and only the named fields are
@@ -364,14 +356,6 @@ instead of them. A row the controller returned without an identity is reported
 the same way — the identity check exists to say so, which it can only do if
 that row survives to be reported.
 
-One code does not come back: one that contains a configured controller
-credential. Returning it would hand that credential to the caller, which no
-guarantee here outranks. The voucher's id is returned where it survives
-untouched, so it can be revoked on the controller and another call mints a
-replacement; an id the scrub altered is dropped instead, because a rewritten id
-addresses nothing while looking like it should. The result says which case
-applies rather than leaving a marker to be puzzled over.
-
 The guarantee is about what this server receives. A response that never
 arrives — a timeout, a reset connection, a body past the transport's read
 ceiling — cannot be delivered by any design, and the vouchers it described
@@ -383,13 +367,6 @@ would only move the failure.
 The standard response budget applies to creation too. If a controller returns
 an unusually large batch that exceeds it, the call fails loudly and the codes
 can be retrieved through the bounded voucher reads.
-
-The credential scrub runs over the codes before the checks do. Every result
-here is scrubbed of configured controller credentials, and a
-controller-generated code is free to contain any substring; a code the scrub
-rewrote looks exactly like a usable one. Running it first means such a code
-fails the form check and carries a warning saying it is not what the controller
-issued, rather than being handed back as though it were.
 
 For the same reason, everything that can refuse a batch refuses it before
 minting: the count and validity bounds and the label's length are decided from

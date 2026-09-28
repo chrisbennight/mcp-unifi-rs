@@ -53,7 +53,7 @@ firewall generation. Those checks do not extend the supported version range.
 An absent endpoint, authentication failure, malformed response, and an empty
 inventory are different outcomes; failures are not converted into an empty
 list. File a compatibility issue with the application version, tool, and
-redacted error if the documented setup does not work.
+controller error if the documented setup does not work.
 
 ## Traffic counter evidence
 

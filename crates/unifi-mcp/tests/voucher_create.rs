@@ -38,13 +38,7 @@ fn handler_for(server: &MockServer) -> UnifiMcp {
         timeout: Duration::from_secs(5),
     })
     .expect("legacy client");
-    UnifiMcp::new(
-        Arc::new(integration),
-        Arc::new(legacy),
-        "home",
-        "default",
-        vec![Zeroizing::new(PASSWORD.to_owned())],
-    )
+    UnifiMcp::new(Arc::new(integration), Arc::new(legacy), "home", "default")
 }
 
 fn create(arguments: &serde_json::Value) -> CallToolRequestParams {
@@ -274,11 +268,7 @@ async fn a_row_the_controller_did_not_identify_still_yields_its_code() {
 }
 
 #[tokio::test]
-async fn a_voucher_whose_id_was_redacted_is_not_described_as_recoverable() {
-    // The identity check and the recovery advice have to describe the voucher
-    // the caller receives. An id the scrub rewrites is not a handle to
-    // anything, so reporting it as one would send an operator looking for a
-    // voucher that cannot be found by that name.
+async fn a_voucher_id_and_code_are_returned_exactly() {
     let server = MockServer::start().await;
     mount_site(&server).await;
     Mock::given(method("POST"))
@@ -286,9 +276,6 @@ async fn a_voucher_whose_id_was_redacted_is_not_described_as_recoverable() {
             "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            // The id merely contains the credential rather than being it, so a
-            // partial rewrite would leave something that looks like an id and
-            // addresses nothing.
             "vouchers": [{"id": format!("v-{PASSWORD}-1"), "code": PASSWORD}],
         })))
         .mount(&server)
@@ -308,14 +295,13 @@ async fn a_voucher_whose_id_was_redacted_is_not_described_as_recoverable() {
         .expect("returned, not withheld")
         .structured_content
         .expect("structured");
-    assert!(output["vouchers"][0].get("id").is_none(), "{output}");
-    assert_eq!(output["checks"]["allIdentified"], false, "{output}");
-    assert!(
-        output["warnings"]
-            .to_string()
-            .contains("can be neither used nor found"),
+    assert_eq!(
+        output["vouchers"][0]["id"],
+        format!("v-{PASSWORD}-1"),
         "{output}"
     );
+    assert_eq!(output["vouchers"][0]["code"], PASSWORD, "{output}");
+    assert_eq!(output["checks"]["allIdentified"], true, "{output}");
 }
 
 #[tokio::test]
@@ -361,10 +347,7 @@ async fn a_batch_far_larger_than_the_response_budget_fails_loudly() {
 }
 
 #[tokio::test]
-async fn a_code_the_credential_scrub_rewrote_is_reported_rather_than_passed_off() {
-    // Every result is scrubbed of configured credential material, and a
-    // controller-generated code is free to contain any substring. A rewritten
-    // code looks exactly like a usable one, so the result has to say it is not.
+async fn controller_generated_codes_are_returned_exactly() {
     let server = MockServer::start().await;
     mints(&server, &batch(&["1234567890", PASSWORD])).await;
 
@@ -384,18 +367,9 @@ async fn a_code_the_credential_scrub_rewrote_is_reported_rather_than_passed_off(
         .expect("structured");
     assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 2);
     assert_eq!(output["vouchers"][0]["code"], "1234567890", "{output}");
-    assert_eq!(output["vouchers"][1]["code"], "[redacted]", "{output}");
-    assert_eq!(output["checks"]["allWellFormed"], false, "{output}");
-    assert_eq!(output["wellFormed"], false, "{output}");
-    let warnings = output["warnings"].to_string();
-    assert!(
-        warnings.contains("configured credential material"),
-        "{output}"
-    );
-    // The loss has to be recoverable, which is the only reason it is
-    // acceptable: the voucher is identified so it can be revoked, and the
-    // result says to mint a replacement.
-    assert!(warnings.contains("revoke it on the controller"), "{output}");
+    assert_eq!(output["vouchers"][1]["code"], PASSWORD, "{output}");
+    assert_eq!(output["checks"]["allWellFormed"], true, "{output}");
+    assert_eq!(output["wellFormed"], true, "{output}");
     assert_eq!(output["vouchers"][1]["id"], "voucher-1", "{output}");
 }
 
