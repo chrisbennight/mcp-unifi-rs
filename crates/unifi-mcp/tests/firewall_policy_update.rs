@@ -186,6 +186,30 @@ async fn policy_delete_rejects_an_empty_id_before_controller_io() {
     }
 }
 
+#[tokio::test]
+async fn policy_delete_preserves_a_mismatched_controller_record() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut response = stored(true, "BLOCK");
+    response["id"] = serde_json::json!("another-policy");
+    response["controllerDetail"] = serde_json::json!("policy-identity-tail".repeat(100));
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(&delete(&serde_json::json!({"policy": POLICY})), None)
+        .await
+        .expect_err("wrong policy id");
+    assert!(error.message.contains("different firewall policy"));
+    assert!(error.message.contains(&response.to_string()));
+}
+
 /// The policy as it reads before the write, and again after.
 async fn reads(server: &MockServer, before: &serde_json::Value, after: &serde_json::Value) {
     mount_site(server).await;
@@ -244,6 +268,100 @@ async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
         output["changes"],
         serde_json::json!([{"field": "enabled", "from": true, "to": false}])
     );
+}
+
+#[tokio::test]
+async fn policy_update_does_not_write_a_record_for_another_id() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut response = stored(true, "BLOCK");
+    response["id"] = serde_json::json!("another-policy");
+    response["controllerDetail"] = serde_json::json!("wrong-policy-before-write".repeat(100));
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect_err("wrong policy record");
+    assert!(error.message.contains(&response.to_string()));
+    assert!(error.message.contains("different firewall policy"));
+}
+
+#[tokio::test]
+async fn policy_update_keeps_a_wrong_id_readback_after_the_write() {
+    let server = MockServer::start().await;
+    let before = stored(true, "BLOCK");
+    let mut after = stored(false, "BLOCK");
+    after["id"] = serde_json::json!("another-policy");
+    after["controllerDetail"] = serde_json::json!("wrong-policy-after-write".repeat(100));
+    reads(&server, &before, &after).await;
+    let mut expected = before.clone();
+    expected["enabled"] = serde_json::json!(false);
+    accepts_the_write(&server, &expected).await;
+
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("write was accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verified").is_none());
+    assert_eq!(output["policy"]["id"], POLICY);
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&after.to_string())
+    );
+}
+
+#[tokio::test]
+async fn policy_update_retains_a_large_wrong_id_readback_after_an_accepted_write() {
+    let server = MockServer::start().await;
+    let mut before = stored(true, "BLOCK");
+    before["name"] = serde_json::json!("large-policy-name".repeat(4_000));
+    let mut after = stored(false, "BLOCK");
+    after["id"] = serde_json::json!("another-policy");
+    after["controllerDetail"] = serde_json::json!("large-readback".repeat(4_000));
+    reads(&server, &before, &after).await;
+    let mut expected = before.clone();
+    expected["enabled"] = serde_json::json!(false);
+    accepts_the_write(&server, &expected).await;
+
+    let result = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("accepted write must retain its result");
+    let output = result.structured_content.expect("structured result");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(output.get("verified").is_none());
+    assert!(result.content.iter().any(|item| {
+        matches!(item, rmcp::model::ContentBlock::Text(text) if text.text.contains(&after.to_string()))
+    }));
 }
 
 #[tokio::test]
@@ -488,7 +606,8 @@ async fn policy_delete_preserves_controller_detail_keys_and_values() {
 #[tokio::test]
 async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
     let server = MockServer::start().await;
-    let record = stored(true, "BLOCK");
+    let mut record = stored(true, "BLOCK");
+    record["controllerDetail"] = serde_json::json!("retained-policy-tail".repeat(100));
     reads(&server, &record, &record).await;
     Mock::given(method("DELETE"))
         .and(path(format!(
@@ -509,6 +628,58 @@ async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
         .expect("structured");
     assert_eq!(output["applied"], true);
     assert_eq!(output["verifiedAbsent"], false);
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&record.to_string())
+    );
+}
+
+#[tokio::test]
+async fn policy_delete_does_not_claim_absence_from_a_wrong_id_readback() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stored(true, "BLOCK")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let mut response = stored(true, "BLOCK");
+    response["id"] = serde_json::json!("another-policy");
+    response["controllerDetail"] = serde_json::json!("wrong-policy-readback-tail".repeat(100));
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verifiedAbsent").is_none());
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&response.to_string())
+    );
 }
 
 /// A property whose value no JSON value model represents exactly.
