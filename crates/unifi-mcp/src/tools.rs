@@ -5174,9 +5174,9 @@ impl UnifiMcp {
             ));
         }
         let site_id = self.site_id().await?;
-        let page = self
+        let (page, response) = self
             .integration()
-            .vouchers(
+            .vouchers_with_response(
                 &site_id,
                 PageRequest {
                     offset: u64::from(input.offset),
@@ -5190,9 +5190,9 @@ impl UnifiMcp {
             || page.data.len() > usize::from(input.limit)
             || page.offset.saturating_add(page.count) > page.total_count
         {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 "controller returned an inconsistent voucher page",
-                None,
             ));
         }
         let next = page
@@ -5200,9 +5200,9 @@ impl UnifiMcp {
             .checked_add(page.count)
             .filter(|next| *next < page.total_count);
         if next.is_some() && page.data.is_empty() {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 "controller returned an empty incomplete voucher page",
-                None,
             ));
         }
         structured(VouchersSearchOutput {
@@ -5221,15 +5221,15 @@ impl UnifiMcp {
         let input = parse::<VoucherIdInput>(params)?;
         let id = voucher_id(&input.voucher_id)?;
         let site_id = self.site_id().await?;
-        let voucher = self
+        let (voucher, response) = self
             .integration()
-            .voucher(&site_id, id)
+            .voucher_with_response(&site_id, id)
             .await
             .map_err(api_error)?;
         if voucher.id != id {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 "controller returned a different voucher id",
-                None,
             ));
         }
         structured(VoucherReadView::from(voucher))
@@ -5242,15 +5242,15 @@ impl UnifiMcp {
         let input = parse::<VoucherRevokeInput>(params)?;
         let id = voucher_id(&input.voucher_id)?;
         let site_id = self.site_id().await?;
-        let voucher = self
+        let (voucher, response) = self
             .integration()
-            .voucher(&site_id, id)
+            .voucher_with_response(&site_id, id)
             .await
             .map_err(api_error)?;
         if voucher.id != id {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 "controller returned a different voucher id",
-                None,
             ));
         }
         let mut result = VoucherRevokeOutput {
@@ -5272,26 +5272,44 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
         result.applied = true;
-        let mut upstream_error = None;
-        let persisted = match self.integration().voucher(&site_id, id).await {
-            Err(error @ ApiError::Status { status: 404, .. }) => {
-                result.readback_error = Some(error.to_string());
-                upstream_error = Some(error);
-                false
-            }
-            Ok(_) => true,
-            Err(error) => {
-                result.readback_error = Some(error.to_string());
-                return structured_with_mutation_readback_error(result, Some(&error));
-            }
-        };
+        let (persisted, upstream_error) =
+            match self.integration().voucher_with_response(&site_id, id).await {
+                Err(error @ ApiError::Status { status: 404, .. }) => {
+                    result.readback_error = Some(error.to_string());
+                    (false, error)
+                }
+                Ok((voucher, response)) => {
+                    if voucher.id != id {
+                        let error = ApiError::DecodeResponse {
+                            response,
+                            diagnostic: BoundedMessage::new(
+                                "controller voucher readback returned a different id",
+                            ),
+                        };
+                        result.readback_error = Some(error.to_string());
+                        return structured_with_mutation_readback_error(result, Some(&error));
+                    }
+                    let error = ApiError::DecodeResponse {
+                        response,
+                        diagnostic: BoundedMessage::new(
+                            "controller acknowledged deletion but the voucher still exists",
+                        ),
+                    };
+                    result.readback_error = Some(error.to_string());
+                    (true, error)
+                }
+                Err(error) => {
+                    result.readback_error = Some(error.to_string());
+                    return structured_with_mutation_readback_error(result, Some(&error));
+                }
+            };
         result.verified = Some(!persisted);
         if persisted {
             result
                 .warnings
                 .push("controller acknowledged deletion but the voucher still exists".to_owned());
         }
-        structured_with_mutation_readback_error(result, upstream_error.as_ref())
+        structured_with_mutation_readback_error(result, Some(&upstream_error))
     }
 
     async fn verify_created_vouchers_before_deadline(
@@ -5331,9 +5349,33 @@ impl UnifiMcp {
                 result.stop_reason = Some("deadline");
                 break;
             }
-            match tokio::time::timeout_at(deadline, self.integration().voucher(site_id, id)).await {
-                Ok(Ok(persisted)) if persisted.id == id && persisted.code == code => {}
-                Ok(Ok(_)) => result.verified = false,
+            match tokio::time::timeout_at(
+                deadline,
+                self.integration().voucher_with_response(site_id, id),
+            )
+            .await
+            {
+                Ok(Ok((persisted, _))) if persisted.id == id && persisted.code == code => {}
+                Ok(Ok((_, response))) => {
+                    result.verified = false;
+                    let message = ApiError::DecodeResponse {
+                        response,
+                        diagnostic: BoundedMessage::new(
+                            "created voucher readback disagrees with the creation response",
+                        ),
+                    }
+                    .to_string();
+                    error_bytes += message.len();
+                    result.errors.push(VoucherReadbackFailure {
+                        voucher_id: id.to_owned(),
+                        error: message,
+                    });
+                    if error_bytes >= MAXIMUM_RESULT_BYTES && index + 1 < vouchers.len() {
+                        result.complete = false;
+                        result.stop_reason = Some("responseBudget");
+                        break;
+                    }
+                }
                 Ok(Err(error)) => {
                     result.verified = false;
                     let message = error.to_string();

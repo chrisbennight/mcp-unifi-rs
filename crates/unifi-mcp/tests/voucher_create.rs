@@ -675,6 +675,46 @@ async fn creation_verifies_the_code_from_the_detail_endpoint() {
 }
 
 #[tokio::test]
+async fn creation_preserves_the_controller_detail_when_readback_disagrees() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890"])).await;
+    let response = serde_json::json!({
+        "id": "voucher-0", "code": "different-code", "name": "guests",
+        "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+        "authorizedGuestCount": 0, "timeLimitMinutes": 60,
+        "controllerDetail": "voucher-readback-tail".repeat(100),
+    });
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-0"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 1, "timeLimitMinutes": 60, "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("created code remains available")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], false);
+    assert_eq!(output["vouchers"][0]["code"], "1234567890");
+    assert!(
+        output["readbackErrors"][0]["error"]
+            .as_str()
+            .expect("readback error")
+            .contains(&response.to_string())
+    );
+}
+
+#[tokio::test]
 async fn duplicate_created_ids_cannot_verify_as_two_persisted_vouchers() {
     let server = MockServer::start().await;
     mount_site(&server).await;
