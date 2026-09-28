@@ -16,8 +16,8 @@ these names, descriptions, and classifications; this page explains them.
 
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read`, `networks.read`, `radius_profiles.list`, the official Wi-Fi
-broadcast reads, and Protect reads.
+`firewall.read`, `networks.read`, `radius_profiles.list`, the Network inventory
+and switching detail reads, the official Wi-Fi broadcast reads, and Protect reads.
 The gateway decides who can receive these controller values.
 
 ### `network.overview`
@@ -110,6 +110,24 @@ The result includes the controller's page metadata and `nextOffset` until the
 list is complete. An over-budget result fails explicitly; lower `limit` to
 continue with smaller pages. Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
+
+### `network.inventory.list` and `network.switching.detail`
+
+These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
+`network.inventory.list` accepts a `kind` of `countries`, `deviceTags`,
+`lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
+`siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
+The documented `filter` query is available except for WAN interfaces, whose
+endpoint has no filter parameter. Countries are controller-wide; other kinds
+use the selected site. Each page returns complete controller records, page
+counts, and `nextOffset`. Large pages retain their records in MCP content
+and mark `recordsInContent` in the structured result. Invalid page metadata
+returns the complete controller response with a separate diagnostic.
+
+`network.switching.detail` accepts `kind` (`lag`, `mcLagDomain`, or
+`switchStack`) and the official `id`, returning the complete controller
+record. A large record is carried in MCP content and marked by
+`recordInContent`.
 
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 

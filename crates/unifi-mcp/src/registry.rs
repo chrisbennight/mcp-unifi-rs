@@ -37,6 +37,8 @@ pub enum ToolKind {
     FirewallRead,
     NetworksRead,
     RadiusProfilesList,
+    NetworkInventoryList,
+    NetworkSwitchingDetail,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
     CamerasSearch,
@@ -122,6 +124,8 @@ impl ToolKind {
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::RadiusProfilesList
+            | Self::NetworkInventoryList
+            | Self::NetworkSwitchingDetail
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
@@ -189,6 +193,8 @@ impl ToolKind {
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::RadiusProfilesList
+            | Self::NetworkInventoryList
+            | Self::NetworkSwitchingDetail
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
@@ -624,6 +630,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
     ),
     sensitive_read_spec(
+        ToolKind::NetworkInventoryList,
+        "network.inventory.list",
+        "Page through countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns every field in each controller record with page metadata and a continuation offset.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworkSwitchingDetail,
+        "network.switching.detail",
+        "Read one complete LAG, MC-LAG domain, or switch stack record by its official id.",
+    ),
+    sensitive_read_spec(
         ToolKind::WifiBroadcastsList,
         "wifi.broadcasts.list",
         "Page through Wi-Fi broadcasts from the official Network API. Returns every controller field in each selected row with page metadata and a continuation offset.",
@@ -769,6 +785,8 @@ mod tests {
         ToolKind::FirewallRead,
         ToolKind::NetworksRead,
         ToolKind::RadiusProfilesList,
+        ToolKind::NetworkInventoryList,
+        ToolKind::NetworkSwitchingDetail,
         ToolKind::WifiBroadcastsList,
         ToolKind::WifiBroadcastsStatus,
         ToolKind::CamerasSearch,
@@ -883,6 +901,8 @@ mod tests {
                 | ToolKind::FirewallRead
                 | ToolKind::NetworksRead
                 | ToolKind::RadiusProfilesList
+                | ToolKind::NetworkInventoryList
+                | ToolKind::NetworkSwitchingDetail
                 | ToolKind::WifiBroadcastsList
                 | ToolKind::WifiBroadcastsStatus
                 | ToolKind::CamerasSearch
