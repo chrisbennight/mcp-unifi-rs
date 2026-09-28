@@ -49,7 +49,8 @@ Reads: `network.overview`, `clients.search`, `clients.context`,
 `wifi.broadcasts.status`, `events.search`, `stats.query`, `cameras.search`,
 `cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
 `protect.overview`, `protect.events`, `protect.event.thumbnail`,
-`protect.devices.list`, `protect.devices.status`.
+`protect.devices.list`, `protect.devices.status`, `protect.users.list`,
+`protect.users.status`.
 
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).

@@ -283,6 +283,24 @@ empty inventory has `totalCount: 0`. The upstream endpoints return complete
 arrays; this server pages the bounded response locally. If a page exceeds the
 MCP result budget, lower `limit`.
 
+### `protect.users.list` and `protect.users.status`
+
+These tools read the Protect `users` and UniFi Identity `ulp-users` resources
+documented in the Protect 7.3.53 API. `kind` is `user` or `identityUser`. The
+list accepts `offset` and `limit` (1-200, default 50), returns complete records
+for that page, and gives
+`totalCount` and `nextOffset` until the inventory is complete. The detail tool
+accepts the exact `userId` and returns its complete controller record. The
+upstream Protect `users` endpoint filters users by its access permissions;
+`ulp-users` lists only UniFi Identity users with enrolled credentials. The
+documented Identity user `email` field is an empty string when no address is
+set. Controller fields remain present, including fields unknown to this
+server. A wrong-id detail or malformed inventory returns the accepted response
+with a validation diagnostic. An absent API route remains an upstream error,
+while an empty inventory has `totalCount: 0`. The upstream endpoints return
+complete arrays; this server pages the bounded response locally. If a page
+exceeds the MCP result budget, lower `limit`.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It
