@@ -227,6 +227,95 @@ struct DevicesSearchInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PendingDevicesListInput {
+    #[serde(default)]
+    offset: u64,
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+    filter: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct PendingDevicesListOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    devices: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    devices_in_content: Option<bool>,
+    offset: u64,
+    limit: u64,
+    count: u64,
+    total_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DevicesAdoptInput {
+    mac_address: String,
+    ignore_device_limit: bool,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DevicesAdoptOutput {
+    mac_address: String,
+    ignore_device_limit: bool,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DevicesRemoveInput {
+    device_id: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DevicesRemoveOutput {
+    device_id: String,
+    /// Online devices are reset to factory defaults by the controller.
+    warning: &'static str,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DeviceSelectorInput {
     /// Device id, MAC address, or exact name of one adopted device.
     device: String,
@@ -3460,6 +3549,11 @@ impl ToolSpec {
             ToolKind::ClientsContext => tool::<ClientSelectorInput, ClientContextOutput>(self),
             ToolKind::DevicesSearch => tool::<DevicesSearchInput, DevicesSearchOutput>(self),
             ToolKind::DevicesStatus => tool::<DeviceSelectorInput, DeviceStatusOutput>(self),
+            ToolKind::PendingDevicesList => {
+                tool::<PendingDevicesListInput, PendingDevicesListOutput>(self)
+            }
+            ToolKind::DevicesAdopt => tool::<DevicesAdoptInput, DevicesAdoptOutput>(self),
+            ToolKind::DevicesRemove => tool::<DevicesRemoveInput, DevicesRemoveOutput>(self),
             ToolKind::FirewallRead => tool::<FirewallReadInput, FirewallReadOutput>(self),
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
             ToolKind::RadiusProfilesList => {
@@ -3787,6 +3881,9 @@ impl UnifiMcp {
             ToolKind::ClientsContext => self.clients_context(params).await,
             ToolKind::DevicesSearch => self.devices_search(params).await,
             ToolKind::DevicesStatus => self.devices_status(params).await,
+            ToolKind::PendingDevicesList => self.pending_devices_list(params).await,
+            ToolKind::DevicesAdopt => self.devices_adopt(params).await,
+            ToolKind::DevicesRemove => self.devices_remove(params).await,
             ToolKind::FirewallRead => self.firewall_read(params).await,
             ToolKind::NetworksRead => self.networks_read(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
@@ -4104,6 +4201,219 @@ impl UnifiMcp {
             next_offset,
             inventory_truncated: inventory_truncated.then_some(true),
         })
+    }
+
+    async fn pending_devices_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<PendingDevicesListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        if input
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.len() > 2048)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be at most 2048 bytes",
+                None,
+            ));
+        }
+        let (page, response) = self
+            .integration()
+            .pending_devices(
+                PageRequest {
+                    offset: input.offset,
+                    limit: u32::from(input.limit),
+                },
+                input.filter.as_deref(),
+            )
+            .await
+            .map_err(api_error)?;
+        let count = page.data.len() as u64;
+        if page.offset != input.offset
+            || page.limit == 0
+            || page.limit > u64::from(input.limit)
+            || count > page.limit
+            || page.count != count
+        {
+            return Err(page_validation_error(
+                &response,
+                format!(
+                    "pending device page reported offset {}, limit {}, count {}, and {} rows for requested offset {} and limit {}",
+                    page.offset, page.limit, page.count, count, input.offset, input.limit
+                ),
+            ));
+        }
+        let next = input
+            .offset
+            .checked_add(count)
+            .ok_or_else(|| page_validation_error(&response, "pending device offset overflow"))?;
+        if next > page.total_count || (next < page.total_count && page.data.is_empty()) {
+            return Err(page_validation_error(
+                &response,
+                format!(
+                    "pending device page through offset {next} conflicts with reported total {}",
+                    page.total_count
+                ),
+            ));
+        }
+        pending_devices_list_result(PendingDevicesListOutput {
+            devices: Some(page.data),
+            devices_in_content: None,
+            offset: page.offset,
+            limit: page.limit,
+            count: page.count,
+            total_count: page.total_count,
+            next_offset: (next < page.total_count).then_some(next),
+        })
+    }
+
+    async fn devices_adopt(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<DevicesAdoptInput>(params)?;
+        if input.mac_address.trim().is_empty()
+            || input.mac_address.len() > 64
+            || input.mac_address.chars().any(char::is_control)
+        {
+            return Err(McpError::invalid_params(
+                "macAddress must be a nonempty address of at most 64 bytes",
+                None,
+            ));
+        }
+        let mut output = DevicesAdoptOutput {
+            mac_address: input.mac_address,
+            ignore_device_limit: input.ignore_device_limit,
+            submitted: false,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+        let site_id = self.site_id().await?;
+        let accepted = self
+            .integration()
+            .adopt_device(&site_id, &output.mac_address, output.ignore_device_limit)
+            .await
+            .map_err(api_error)?;
+        let accepted_id = accepted
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        output.submitted = true;
+        output.accepted = Some(accepted);
+        if let Some(id) = accepted_id {
+            let budget = self
+                .request_timeout()
+                .saturating_sub(started.elapsed())
+                .saturating_sub(DEVICE_LIFECYCLE_RESPONSE_RESERVE)
+                .min(DEVICE_LIFECYCLE_READBACK_BUDGET);
+            if budget.is_zero() {
+                output.readback_error =
+                    Some("device readback skipped near request deadline".to_owned());
+            } else {
+                match tokio::time::timeout(
+                    budget,
+                    self.integration().device_detail_raw(&site_id, &id),
+                )
+                .await
+                {
+                    Ok(Ok(after)) => {
+                        output.verified =
+                            Some(after.get("id").and_then(Value::as_str) == Some(id.as_str()));
+                        output.after = Some(after);
+                    }
+                    Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                    Err(_) => output.readback_error = Some("device readback timed out".to_owned()),
+                }
+            }
+        } else {
+            output.readback_error =
+                Some("accepted device record had no id for readback".to_owned());
+        }
+        devices_adopt_result(output)
+    }
+
+    async fn devices_remove(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<DevicesRemoveInput>(params)?;
+        if input.device_id.trim().is_empty()
+            || input.device_id.len() > 256
+            || matches!(input.device_id.as_str(), "." | "..")
+        {
+            return Err(McpError::invalid_params(
+                "deviceId must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
+        let mut output = DevicesRemoveOutput {
+            device_id: input.device_id,
+            warning: "removing an online device resets it to factory defaults",
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+        let site_id = self.site_id().await?;
+        let (status, body) = self
+            .integration()
+            .remove_device(&site_id, &output.device_id)
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(DEVICE_LIFECYCLE_RESPONSE_RESERVE)
+            .min(DEVICE_LIFECYCLE_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("device readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration()
+                    .device_detail_raw(&site_id, &output.device_id),
+            )
+            .await
+            {
+                Ok(Ok(after)) => {
+                    output.after = Some(after);
+                    output.verified_absent = Some(false);
+                }
+                Ok(Err(error @ ApiError::Status { status: 404, .. })) => {
+                    output.verified_absent = Some(true);
+                    output.readback_error = Some(error.to_string());
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("device readback timed out".to_owned()),
+            }
+        }
+        devices_remove_result(output)
     }
 
     async fn devices_status(
@@ -9597,6 +9907,8 @@ const CAMERA_SETTINGS_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Leave time to return a successful firewall deletion after checking absence.
 const FIREWALL_DELETE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const FIREWALL_DELETE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+const DEVICE_LIFECYCLE_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const DEVICE_LIFECYCLE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -11240,6 +11552,87 @@ fn protect_arm_operation_result(
     Ok(result)
 }
 
+fn pending_devices_list_result(
+    mut output: PendingDevicesListOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+    {
+        let devices = output.devices.take().expect("page records exist");
+        output.devices_in_content = Some(true);
+        let mut result = structured(output)?;
+        result.content.push(ContentBlock::text(format!(
+            "devices: {}",
+            Value::Array(devices)
+        )));
+        return Ok(result);
+    }
+    Ok(full)
+}
+
+fn devices_adopt_result(mut output: DevicesAdoptOutput) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &DevicesAdoptOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(accepted) = output.accepted.take()
+    {
+        output.accepted_in_content = Some(true);
+        content.push(ContentBlock::text(format!("accepted: {accepted}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn devices_remove_result(mut output: DevicesRemoveOutput) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &DevicesRemoveOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn arm_profiles_list_result(
     mut output: ProtectArmProfilesListOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -11882,6 +12275,8 @@ mod tests {
         ("clients.control", false, false, false),
         // Each restart restarts; no secret is involved.
         ("devices.control", false, false, false),
+        ("devices.adopt", false, true, true),
+        ("devices.remove", false, false, true),
         // Reauthorization replaces the grant and resets traffic counters.
         ("guests.authorize", false, false, true),
         // Revocation disconnects the client and returns the revoked grant.

@@ -16,8 +16,8 @@ these names, descriptions, and classifications; this page explains them.
 
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read`, `networks.read`, `radius_profiles.list`, the official Wi-Fi
-broadcast reads, and Protect reads.
+`firewall.read`, `networks.read`, `radius_profiles.list`,
+`devices.pending.list`, the official Wi-Fi broadcast reads, and Protect reads.
 The gateway decides who can receive these controller values.
 
 ### `network.overview`
@@ -77,6 +77,15 @@ One device's status: identity, state, firmware, uptime, CPU and memory, uplink
 rates, and summarized port and radio tables. If the optional statistics read
 fails, `statisticsError` carries the controller response while identity and
 interface state remain available.
+
+### `devices.pending.list`
+
+`offset`, `limit` (1-200, default 50), and the official `filter` query page
+devices pending adoption across the controller. Each row retains every field
+returned by the controller, including its MAC address and support state.
+`nextOffset` identifies the next page. Large pages carry their records in MCP
+content and set `devicesInContent`. An unsupported endpoint is reported as an
+upstream error, not an empty pending inventory.
 
 ### `firewall.read`
 
@@ -549,6 +558,8 @@ it.
 | `wlans.update` | yes | yes | yes |
 | `clients.control` | no | no | no |
 | `devices.control` | no | no | no |
+| `devices.adopt` | no | yes | yes |
+| `devices.remove` | no | no | yes |
 | `guests.authorize` | **no** | no | yes |
 | `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |
@@ -747,6 +758,25 @@ action, so a port can never be sent with an action that would ignore it. A
 restart takes longer than the read, so the state afterwards usually still shows
 the prior value — it records what the controller showed, not that the action
 finished.
+
+### `devices.adopt` and `devices.remove`
+
+These tools use the [official Network device API](https://developer.ui.com/network/v10.4.57/openapi.json).
+`devices.adopt` accepts a `macAddress` from `devices.pending.list` and an
+explicit `ignoreDeviceLimit` boolean. It previews by default. A confirmed
+call makes one adoption request and returns the complete accepted device
+record. When that record has an id, it reads the device back and reports the
+complete observed record and whether the id matches. An upstream rejection
+or ambiguous transport failure is returned without retry.
+
+`devices.remove` accepts an adopted `deviceId` and previews by default. The
+preview states that removing an online device resets it to factory defaults.
+A confirmed call makes one DELETE, returns the controller's accepted HTTP
+status and complete body, then reads the device id back. `verifiedAbsent`
+is true only when that read returns HTTP 404; another returned record makes it
+false. Readback failures retain the upstream response in `readbackError` and
+leave absence unverified. Large accepted or observed records move into MCP
+content with explicit markers.
 
 `guests.authorize` returns the granted record and any grant it replaced.
 Repeating authorization replaces the active grant and resets traffic counters,
