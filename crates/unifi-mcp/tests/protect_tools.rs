@@ -9,7 +9,13 @@
 
 #![recursion_limit = "256"]
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
@@ -419,6 +425,171 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
     assert_eq!(started["applied"], true);
     assert_eq!(started["session"]["codec"], "opus");
     assert_eq!(started["session"]["samplingRate"], 24000);
+}
+
+#[tokio::test]
+async fn camera_microphone_disable_previews_and_returns_full_controller_results() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&reads);
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(move |_: &wiremock::Request| {
+            let enabled = count.fetch_add(1, Ordering::SeqCst) < 2;
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id":"cam-front", "modelKey":"camera", "name":"Front Door",
+                "state":"CONNECTED", "isMicEnabled":enabled,
+                "extra":{"controllerField":"preserved"}
+            }))
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+    let accepted = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "isMicEnabled":false,
+        "extra":{"acceptedField":"preserved"}
+    });
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/disable-mic-permanently"
+        )))
+        .and(header("X-API-Key", PROTECT_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    let preview = handler
+        .call(
+            &call(
+                "cameras.microphone.disable",
+                &serde_json::json!({"camera":"Front Door"}),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["submitted"], false);
+    assert_eq!(preview["before"]["extra"]["controllerField"], "preserved");
+    let confirmed = handler
+        .call(
+            &call(
+                "cameras.microphone.disable",
+                &serde_json::json!({"camera":"Front Door","confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("disabled")
+        .structured_content
+        .expect("structured");
+    assert_eq!(confirmed["submitted"], true);
+    assert_eq!(confirmed["acceptedStatus"], 200);
+    assert_eq!(confirmed["verified"], true);
+    assert_eq!(confirmed["after"]["extra"]["controllerField"], "preserved");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            confirmed["responseBody"].as_str().expect("body")
+        )
+        .expect("JSON"),
+        accepted
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn camera_microphone_disable_preserves_controller_rejection() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id":"cam-front", "modelKey":"camera", "isMicEnabled":true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rejected = r#"{"error":"camera locked","details":{"reason":"controller policy"}}"#;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/disable-mic-permanently"
+        )))
+        .respond_with(ResponseTemplate::new(409).set_body_string(rejected))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "cameras.microphone.disable",
+                &serde_json::json!({"camera":"cam-front","confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("controller rejection");
+    assert!(error.to_string().contains(rejected));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn camera_microphone_disable_keeps_large_accepted_body_and_readback_failure() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&reads);
+    let failure = format!("{}camera-readback-tail", "y".repeat(900));
+    let failed_for_mock = failure.clone();
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(move |_: &wiremock::Request| {
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id":"cam-front", "modelKey":"camera", "isMicEnabled":true
+                }))
+            } else {
+                ResponseTemplate::new(503).set_body_string(failed_for_mock.clone())
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let accepted = format!("{}accepted-mic-tail", "x".repeat(60_000));
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{PROTECT}/cameras/cam-front/disable-mic-permanently"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_string(&accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.microphone.disable",
+                &serde_json::json!({"camera":"cam-front","confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted action remains available");
+    let structured = result.structured_content.expect("structured");
+    assert_eq!(structured["submitted"], true);
+    assert_eq!(structured["acceptedStatus"], 200);
+    assert_eq!(structured["responseBodyInContent"], true);
+    assert!(
+        structured["readbackError"]
+            .as_str()
+            .expect("error")
+            .contains(&failure)
+    );
+    assert!(result.content.iter().any(|item| matches!(item,
+        ContentBlock::Text(text) if text.text.contains(&accepted)
+    )));
+    server.verify().await;
 }
 
 #[tokio::test]

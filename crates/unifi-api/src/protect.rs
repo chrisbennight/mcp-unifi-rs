@@ -701,6 +701,49 @@ impl ProtectClient {
         .await
     }
 
+    /// Read one complete camera record for a workflow that returns the
+    /// controller's fields without narrowing them to the inventory model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or bounded response fails.
+    pub async fn camera_raw(&self, camera_id: &str) -> Result<Value, ApiError> {
+        validate_identifier("cameras.by_id", camera_id)?;
+        self.get_json_validated(&["cameras", camera_id], |camera: &Value| {
+            validate_resource_record("cameras.by_id", camera, Some(camera_id))
+        })
+        .await
+    }
+
+    /// Permanently disable one camera microphone with a single POST. The
+    /// accepted controller body is retained in full within the transport bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for an invalid id or an upstream failure.
+    pub async fn camera_disable_mic(
+        &self,
+        camera_id: &str,
+    ) -> Result<ProtectActionResponse, ApiError> {
+        validate_identifier("cameras.microphone.disable", camera_id)?;
+        let response = self
+            .send(
+                self.request(
+                    Method::POST,
+                    &["cameras", camera_id, "disable-mic-permanently"],
+                )?,
+                "cameras.microphone.disable",
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| {
+                log_response_rejection("cameras.microphone.disable", status, error);
+            })?;
+        Ok(ProtectActionResponse { status, body })
+    }
+
     /// Read one documented non-camera device family without discarding fields
     /// that differ across Protect models or application releases.
     ///
