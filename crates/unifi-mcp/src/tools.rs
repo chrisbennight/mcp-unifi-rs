@@ -2530,6 +2530,7 @@ struct NetworkSwitchingDetailOutput {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 enum NetworkPolicyKind {
+    AclRules,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -2537,6 +2538,7 @@ enum NetworkPolicyKind {
 impl NetworkPolicyKind {
     const fn collection(self) -> NetworkPolicyCollection {
         match self {
+            Self::AclRules => NetworkPolicyCollection::AclRules,
             Self::DnsPolicies => NetworkPolicyCollection::DnsPolicies,
             Self::TrafficMatchingLists => NetworkPolicyCollection::TrafficMatchingLists,
         }

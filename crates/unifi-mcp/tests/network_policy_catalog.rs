@@ -59,12 +59,13 @@ async fn mount_site(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn both_policy_collections_page_complete_rows_and_support_filtering() {
+async fn policy_collections_page_complete_rows_and_support_filtering() {
     let server = MockServer::start().await;
     mount_site(&server).await;
-    for (kind, route) in [
-        ("dnsPolicies", "dns/policies"),
-        ("trafficMatchingLists", "traffic-matching-lists"),
+    for (route, record_type) in [
+        ("acl-rules", "IPV4"),
+        ("dns/policies", "A_RECORD"),
+        ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
         Mock::given(method("GET"))
             .and(path(format!("{PREFIX}/sites/{SITE_ID}/{route}")))
@@ -73,14 +74,14 @@ async fn both_policy_collections_page_complete_rows_and_support_filtering() {
             .and(query_param("filter", "name.eq('office')"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "offset": 0, "limit": 1, "count": 1, "totalCount": 2,
-                "data": [{"id": POLICY_ID, "type": kind, "controllerExtension": {"source": "upstream"}}]
+                "data": [{"id": POLICY_ID, "type": record_type, "controllerExtension": {"source": "upstream"}}]
             })))
             .expect(1)
             .mount(&server)
             .await;
     }
     let handler = handler_for(&server);
-    for kind in ["dnsPolicies", "trafficMatchingLists"] {
+    for kind in ["aclRules", "dnsPolicies", "trafficMatchingLists"] {
         let result = handler
             .call(
                 &call(
@@ -103,19 +104,20 @@ async fn both_policy_collections_page_complete_rows_and_support_filtering() {
 }
 
 #[tokio::test]
-async fn both_detail_routes_preserve_fields_and_upstream_errors() {
+async fn policy_detail_routes_preserve_fields_and_upstream_errors() {
     let server = MockServer::start().await;
     mount_site(&server).await;
-    for (kind, route) in [
-        ("dnsPolicies", "dns/policies"),
-        ("trafficMatchingLists", "traffic-matching-lists"),
+    for (route, record_type) in [
+        ("acl-rules", "IPV4"),
+        ("dns/policies", "A_RECORD"),
+        ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
         Mock::given(method("GET"))
             .and(path(format!(
                 "{PREFIX}/sites/{SITE_ID}/{route}/{POLICY_ID}"
             )))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "id": POLICY_ID, "type": kind, "controllerExtension": {"owner": "upstream"}
+                "id": POLICY_ID, "type": record_type, "controllerExtension": {"owner": "upstream"}
             })))
             .expect(1)
             .mount(&server)
@@ -130,7 +132,7 @@ async fn both_detail_routes_preserve_fields_and_upstream_errors() {
         .mount(&server)
         .await;
     let handler = handler_for(&server);
-    for kind in ["dnsPolicies", "trafficMatchingLists"] {
+    for kind in ["aclRules", "dnsPolicies", "trafficMatchingLists"] {
         let result = handler
             .call(
                 &call(

@@ -141,10 +141,10 @@ record. A large record is carried in MCP content and marked by
 
 ### `network.policy.list` and `network.policy.detail`
 
-These tools read [DNS policies and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
-from the official Network Integration API. Choose `kind` as `dnsPolicies` or
-`trafficMatchingLists`. The list accepts `offset`, `limit` (1-200, default 50),
-and the documented `filter` query. It returns complete controller rows, page
+These tools read [ACL rules, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
+from the official Network Integration API. Choose `kind` as `aclRules`,
+`dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
+(1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
 `recordsInContent`. Invalid page metadata returns the complete controller
 response with a separate diagnostic. The detail tool accepts `kind` and the
