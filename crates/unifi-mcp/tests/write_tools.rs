@@ -108,6 +108,36 @@ fn update(arguments: &serde_json::Value) -> CallToolRequestParams {
 }
 
 #[tokio::test]
+async fn invalid_wireless_snapshot_returns_the_controller_response() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let marker = "wireless-controller-field-after-padding";
+    let body = ok_envelope(&serde_json::json!([{
+        "_id": 42,
+        "padding": "x".repeat(700),
+        "controller_field": marker,
+    }]));
+    Mock::given(method("GET"))
+        .and(path(format!("{LEGACY}/rest/wlanconf/{WLAN_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "wlan": WLAN_ID,
+                "changes": {"enabled": false},
+            })),
+            None,
+        )
+        .await
+        .expect_err("invalid wireless snapshot");
+    assert!(error.message.contains(marker), "{}", error.message);
+    assert!(error.message.contains("invalid type"), "{}", error.message);
+}
+
+#[tokio::test]
 async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
     let server = MockServer::start().await;
     logged_in(&server).await;

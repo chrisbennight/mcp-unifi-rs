@@ -670,6 +670,55 @@ async fn logged_in_server() -> MockServer {
 }
 
 #[tokio::test]
+async fn snapshot_conversion_errors_keep_the_original_controller_envelope() {
+    let server = logged_in_server().await;
+    let marker = "controller-field-after-padding";
+    for (endpoint, id) in [
+        (
+            "/proxy/network/api/s/default/rest/wlanconf/wlan-1",
+            "wlan-1",
+        ),
+        ("/proxy/network/api/s/default/rest/portforward/pf-1", "pf-1"),
+    ] {
+        let body = ok_envelope(&serde_json::json!([{
+            "_id": 42,
+            "padding": "x".repeat(700),
+            "unknown_controller_field": marker,
+        }]));
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .mount(&server)
+            .await;
+
+        let error = if id == "wlan-1" {
+            client_for(&server)
+                .wlan_snapshot("default", id)
+                .await
+                .expect_err("invalid wireless network")
+        } else {
+            client_for(&server)
+                .port_forward_snapshot("default", id)
+                .await
+                .expect_err("invalid port forward")
+        };
+        let ApiError::DecodeResponse {
+            response,
+            diagnostic,
+        } = error
+        else {
+            panic!("expected controller response, got {error:?}");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(response.as_str()).expect("response JSON"),
+            body
+        );
+        assert!(response.as_str().contains(marker));
+        assert!(diagnostic.as_str().contains("invalid type"), "{diagnostic}");
+    }
+}
+
+#[tokio::test]
 async fn resource_reads_decode_their_allowlisted_projections() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";

@@ -393,6 +393,10 @@ compared over the controller's whole record rather than the modeled subset;
 and `verified` is true only when every requested field persisted and nothing
 else moved.
 
+If a wireless network or port forward snapshot cannot be decoded into its
+typed record, the error includes the controller's complete accepted response
+and the local decoding error.
+
 Requested fields report their previous, requested, and observed values, including
 passphrases when the caller changes one. The gateway governs access to sensitive
 results.
