@@ -4295,10 +4295,9 @@ impl UnifiMcp {
             ));
         }
 
-        // The patch is a pure function of the request, so it is built and
-        // validated here: a preview must refuse exactly what a confirmed call
-        // would refuse, and nothing invalid reaches the controller at all.
-        let patch = wlan_patch(&input.changes)?;
+        // The patch is a pure function of the request. The controller merges
+        // named fields, so an omitted passphrase remains under its control.
+        let patch = wlan_patch(&input.changes);
 
         let (current, before_digest) = self.wlan_snapshot(&input.wlan).await?;
         let before = wlan_projection(&current);
@@ -7367,11 +7366,10 @@ fn wlan_warnings(requested: &Map<String, Value>, current: &Value) -> Vec<String>
     warnings
 }
 
-/// The patch to send, built from the request alone. Turning encryption on
-/// requires the caller to state the passphrase, so one request carries the
-/// mode and the key and the controller never sees one without the other.
-fn wlan_patch(changes: &WlanChanges) -> Result<WlanPatch, McpError> {
-    let patch = WlanPatch {
+/// The patch to send, built from the request alone. An omitted passphrase is
+/// left unchanged by this partial controller update.
+fn wlan_patch(changes: &WlanChanges) -> WlanPatch {
+    WlanPatch {
         name: changes.ssid.clone(),
         enabled: changes.enabled,
         security: changes.security.map(|mode| mode.wire().to_owned()),
@@ -7380,20 +7378,7 @@ fn wlan_patch(changes: &WlanChanges) -> Result<WlanPatch, McpError> {
             .as_ref()
             .map(|passphrase| Zeroizing::new(passphrase.clone())),
         hide_ssid: changes.hidden,
-    };
-    // Encryption is turned on by one request carrying both the mode and the
-    // key. Reusing a key read earlier would make the outcome depend on that
-    // read still being current, which no read on this API can guarantee, so
-    // the caller states it. `networks.read` supplies the
-    // current value when the caller needs it.
-    if changes.security == Some(WlanSecurity::Wpapsk) && changes.passphrase.is_none() {
-        return Err(McpError::invalid_params(
-            "setting security to wpapsk requires the passphrase in the same \
-             call, so the network is never left encrypted without a key",
-            None,
-        ));
     }
-    Ok(patch)
 }
 
 /// Controller properties that moved without being requested, by the

@@ -312,6 +312,10 @@ sent — an absent field is left alone rather than cleared.
 - `wlans.update` — `wlan`, `changes: {ssid, enabled, security, hidden, passphrase}`
 - `port_forwards.update` — `portForward`, `changes: {name, enabled}`
 
+`wlans.update` can change the security mode without sending a new passphrase.
+The controller retains or rejects its existing key configuration; the read-back
+reports whether the requested mode persisted.
+
 A confirmed change is judged by reading the resource back, not by the
 controller's acknowledgement, because a controller acknowledges writes whose
 fields it discards. Each requested field is reported `persisted`, `dropped`, or
@@ -320,7 +324,9 @@ compared over the controller's whole record rather than the modeled subset;
 and `verified` is true only when every requested field persisted and nothing
 else moved.
 
-Secret fields report their status and neither value.
+Requested fields report their previous, requested, and observed values, including
+passphrases when the caller changes one. The gateway governs access to sensitive
+results.
 
 Where a port forward points — source, destination port, internal host — is
 deliberately not settable. Those fields decide what the rule governs and only
