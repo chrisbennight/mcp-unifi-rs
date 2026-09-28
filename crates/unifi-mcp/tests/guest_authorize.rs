@@ -339,12 +339,9 @@ async fn changed_limit_in_readback_is_visible_and_not_verified() {
     .await;
     let mut observed = grant("2026-09-28T00:00:00Z");
     observed["dataUsageLimitMBytes"] = serde_json::json!(100);
-    mount_detail(
-        &server,
-        &detail(false, None),
-        &detail(true, Some(&observed)),
-    )
-    .await;
+    let mut after = detail(true, Some(&observed));
+    after["controllerDetail"] = serde_json::json!("guest-readback-tail".repeat(100));
+    mount_detail(&server, &detail(false, None), &after).await;
     Mock::given(method("POST"))
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}/actions"
@@ -369,6 +366,12 @@ async fn changed_limit_in_readback_is_visible_and_not_verified() {
     assert_eq!(output["verified"], false);
     assert_eq!(output["grantedAuthorization"]["dataUsageLimitMBytes"], 500);
     assert_eq!(output["observedAuthorization"]["dataUsageLimitMBytes"], 100);
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&after.to_string())
+    );
     assert!(output["warnings"].to_string().contains("not verified"));
 }
 
@@ -397,6 +400,52 @@ async fn guest_status_reports_current_grant_and_usage() {
     assert_eq!(output["authorized"], true);
     assert_eq!(output["authorization"]["dataUsageLimitMBytes"], 500);
     assert_eq!(output["authorization"]["usage"]["bytes"], 10);
+}
+
+#[tokio::test]
+async fn guest_status_preserves_a_controller_detail_that_fails_validation() {
+    for (field, value, diagnostic) in [
+        (
+            "id",
+            serde_json::json!("another-client"),
+            "different connected client",
+        ),
+        (
+            "access",
+            serde_json::json!({"type": "STANDARD", "authorized": false}),
+            "not on guest access",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        mount_clients(
+            &server,
+            &serde_json::json!([{"id": CLIENT_ID, "macAddress": MAC}]),
+            1,
+        )
+        .await;
+        let mut response = detail(false, None);
+        response[field] = value;
+        response["controllerDetail"] = serde_json::json!("guest-detail-tail".repeat(100));
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = handler_for(&server)
+            .call(
+                &call("guests.status", &serde_json::json!({"client": MAC})),
+                None,
+            )
+            .await
+            .expect_err("invalid guest detail");
+        assert!(error.message.contains(diagnostic), "{error}");
+        assert!(error.message.contains(&response.to_string()), "{error}");
+    }
 }
 
 #[tokio::test]

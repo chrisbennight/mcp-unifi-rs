@@ -4510,29 +4510,31 @@ impl UnifiMcp {
         client_id: &str,
         mac: &str,
     ) -> Result<ClientDetail, McpError> {
-        let detail = self
+        let (detail, response) = self
             .integration()
-            .client_detail(site_id, client_id)
+            .client_detail_with_response(site_id, client_id)
             .await
             .map_err(api_error)?;
         if detail.id != client_id
             || detail.mac_address.as_deref().map(normalize_mac).as_deref() != Some(mac)
         {
-            return Err(McpError::internal_error(
+            return Err(api_error(guest_validation_error(
+                response,
                 "controller returned a different connected client",
-                None,
-            ));
+            )));
         }
         match detail.access.as_ref() {
             Some(access) if access.kind == "GUEST" && access.authorized.is_some() => Ok(detail),
             Some(access) if access.kind != "GUEST" => Err(McpError::invalid_params(
-                "the selected client is not on guest access",
+                format!(
+                    "controller response: {response}; validation error: the selected client is not on guest access"
+                ),
                 None,
             )),
-            _ => Err(McpError::internal_error(
+            _ => Err(api_error(guest_validation_error(
+                response,
                 "controller did not report guest authorization state",
-                None,
-            )),
+            ))),
         }
     }
 
@@ -4554,13 +4556,17 @@ impl UnifiMcp {
             None
         } else {
             Some(
-                tokio::time::timeout(budget, self.integration().client_detail(site_id, client_id))
-                    .await,
+                tokio::time::timeout(
+                    budget,
+                    self.integration()
+                        .client_detail_with_response(site_id, client_id),
+                )
+                .await,
             )
         };
         let mut upstream_error = None;
         match readback {
-            Some(Ok(Ok(detail)))
+            Some(Ok(Ok((detail, response))))
                 if detail.id == client_id
                     && detail.mac_address.as_deref().map(normalize_mac).as_deref() == Some(mac) =>
             {
@@ -4588,6 +4594,26 @@ impl UnifiMcp {
                         }
                     });
                 }
+                if output.verified != Some(true) {
+                    let error = guest_validation_error(
+                        response,
+                        "controller guest readback did not confirm the action",
+                    );
+                    output.readback_error = Some(error.to_string());
+                    upstream_error = Some(error);
+                    output.warnings.push(
+                        "the action response was returned, but the current guest state was not verified"
+                            .to_owned(),
+                    );
+                }
+            }
+            Some(Ok(Ok((_, response)))) => {
+                let error = guest_validation_error(
+                    response,
+                    "controller guest readback returned a different connected client",
+                );
+                output.readback_error = Some(error.to_string());
+                upstream_error = Some(error);
             }
             Some(Ok(Err(error))) => {
                 output.readback_error = Some(error.to_string());
@@ -4597,7 +4623,6 @@ impl UnifiMcp {
             None => output
                 .warnings
                 .push("guest readback skipped because the request deadline was near".to_owned()),
-            _ => {}
         }
         if output.verified != Some(true) && upstream_error.is_none() {
             output.warnings.push(
@@ -8404,6 +8429,13 @@ fn page_validation_error(
         response: response.clone(),
         diagnostic: diagnostic.into(),
     })
+}
+
+fn guest_validation_error(response: BoundedMessage, diagnostic: &'static str) -> ApiError {
+    ApiError::DecodeResponse {
+        response,
+        diagnostic: BoundedMessage::new(diagnostic),
+    }
 }
 
 #[cfg(test)]

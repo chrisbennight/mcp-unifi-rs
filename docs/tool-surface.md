@@ -522,7 +522,9 @@ one is authoring a policy rather than operating one.
 `clients.control` and `devices.control` read the controller afterwards and
 report what it showed, along with what that observation is worth.
 Guest actions read the Integration API client detail afterwards and report
-whether the observed access matches the action response.
+whether the observed access matches the action response. A detail response
+that fails identity or guest-state validation remains available in the error
+or `readbackError`, including fields outside the typed client view.
 
 - `clients.control` — `client` (MAC), `action: block | unblock | reconnect`
 - `devices.control` — `device`, `action: restart | locate | endLocate | portCycle`, `port`
