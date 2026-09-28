@@ -355,7 +355,9 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "One camera on the Protect console, selected by id or exact reported \
          display name. Public identity and state remain authoritative; bounded \
          local enrichment supplies hardware, connection, firmware, recording, \
-         audio, and feature facts. Use cameras.snapshot to fetch an image.",
+         audio, and feature facts. Request includeDetails for the complete local
+         camera record or detailFields for selected original fields. Use
+         cameras.snapshot to fetch an image.",
     ),
     sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
@@ -404,7 +406,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          and explicit public/local capability status. A configured local \
          session supplies recording, hardware, health, capacity, and aggregate \
          storage facts; unavailable facts remain absent. The place to start on \
-         a camera question.",
+         a camera question. Request detailFields to inspect selected fields
+         from the original local bootstrap response.",
     ),
     sensitive_read_spec(
         ToolKind::ProtectEvents,

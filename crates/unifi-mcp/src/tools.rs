@@ -1,9 +1,8 @@
 //! Tool schemas, normalization, dispatch, and the shared response machinery.
 //!
-//! Every input rejects unknown fields, every output is a typed bounded
-//! projection with a published schema, and every result carries the gateway
-//! trust labels declared in the registry. Raw controller records never leave
-//! this module.
+//! Every input rejects unknown fields, every result is bounded, and every
+//! result carries the gateway trust labels declared in the registry. Compact
+//! operational views can be expanded with requested controller fields.
 
 use std::{
     borrow::Cow,
@@ -444,6 +443,27 @@ struct CameraSelectorInput {
     camera: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraStatusInput {
+    /// Camera id, exact reported name, or display name from `cameras.search`.
+    camera: String,
+    /// Include the complete local bootstrap camera record.
+    #[serde(default)]
+    include_details: bool,
+    /// Top-level fields to include from the local bootstrap camera record.
+    /// Use this to keep the response small when only a few fields are needed.
+    detail_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectOverviewInput {
+    /// Top-level fields from the local bootstrap response to include.
+    /// Large fields may exceed the response budget; request one field at a time.
+    detail_fields: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CameraSettingsChanges {
@@ -857,6 +877,9 @@ struct CameraView {
     features: Option<CameraFeaturesView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     connection: Option<CameraConnectionView>,
+    /// Original local camera fields, included only when requested by status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Map<String, Value>>,
     /// Whether optional local data enriched this row.
     local_enrichment: String,
 }
@@ -1104,6 +1127,9 @@ struct ProtectOverviewOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     not_recording_count: Option<usize>,
     recorders: Vec<RecorderView>,
+    /// Requested fields from the original local bootstrap response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bootstrap_details: Option<Map<String, Value>>,
     capabilities: ProtectCapabilitiesView,
 }
 
@@ -2278,7 +2304,7 @@ impl ToolSpec {
             ToolKind::FirewallRead => tool::<FirewallReadInput, FirewallReadOutput>(self),
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
-            ToolKind::CamerasStatus => tool::<CameraSelectorInput, CameraView>(self),
+            ToolKind::CamerasStatus => tool::<CameraStatusInput, CameraView>(self),
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -2294,7 +2320,7 @@ impl ToolSpec {
             ToolKind::CamerasTalkbackStart => {
                 tool::<CameraTalkbackInput, CameraTalkbackOutput>(self)
             }
-            ToolKind::ProtectOverview => tool::<EmptyInput, ProtectOverviewOutput>(self),
+            ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::ProtectEventThumbnail => {
                 tool::<ProtectEventThumbnailInput, ProtectEventThumbnailOutput>(self)
@@ -3110,10 +3136,35 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<CameraSelectorInput>(params)?;
+        let input = parse::<CameraStatusInput>(params)?;
+        validate_bootstrap_detail_request(input.include_details, input.detail_fields.as_deref())?;
         let selector = camera_selector(&input.camera)?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
-        structured(camera_by_selector(inventory, selector)?)
+        let details = if input.include_details || input.detail_fields.is_some() {
+            let raw = inventory.local_bootstrap.as_ref().ok_or_else(|| {
+                McpError::invalid_params("local Protect details are unavailable", None)
+            })?;
+            let camera = camera_by_selector_ref(&inventory, selector)?;
+            let row = raw.raw["cameras"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["id"] == camera.id))
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        "selected camera is absent from the local bootstrap",
+                        None,
+                    )
+                })?;
+            Some(select_bootstrap_details(
+                row,
+                input.include_details,
+                input.detail_fields.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        let mut camera = camera_by_selector(&inventory, selector)?;
+        camera.details = details;
+        structured(camera)
     }
 
     async fn cameras_settings_read(
@@ -3125,7 +3176,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let camera = self.protect().camera(&camera_id).await.map_err(api_error)?;
         structured(CameraSettingsState::from(camera))
     }
@@ -3141,7 +3192,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let mut output = CameraSettingsOutput {
             camera_id: camera_id.clone(),
             applied: false,
@@ -3206,7 +3257,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let channel = input.channel.as_str();
         let bytes = self
             .protect()
@@ -3256,7 +3307,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let mut output = CameraPtzOutput {
             camera_id: camera_id.clone(),
             action: input.action,
@@ -3324,7 +3375,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let streams = self
             .protect()
             .camera_streams(&camera_id)
@@ -3347,7 +3398,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let mut output = CameraStreamsUpdateOutput {
             camera_id: camera_id.clone(),
             action: input.action,
@@ -3444,7 +3495,7 @@ impl UnifiMcp {
         let inventory = self
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
-        let camera_id = camera_by_selector(inventory, selector)?.id;
+        let camera_id = camera_by_selector(&inventory, selector)?.id;
         let session = if input.confirm {
             Some(
                 self.protect()
@@ -3468,7 +3519,8 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        parse::<EmptyInput>(params)?;
+        let input = parse::<ProtectOverviewInput>(params)?;
+        validate_bootstrap_detail_request(false, input.detail_fields.as_deref())?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
         let CameraInventory {
             application_version,
@@ -3506,6 +3558,19 @@ impl UnifiMcp {
         let idle: Vec<CameraReferenceView> =
             idle.into_iter().take(IDLE_CAMERA_LIST_CEILING).collect();
 
+        let bootstrap_details = match input.detail_fields.as_deref() {
+            Some(fields) => {
+                let bootstrap = local_bootstrap.as_ref().ok_or_else(|| {
+                    McpError::invalid_params("local Protect details are unavailable", None)
+                })?;
+                Some(select_bootstrap_details(
+                    &bootstrap.raw,
+                    false,
+                    Some(fields),
+                )?)
+            }
+            None => None,
+        };
         structured(ProtectOverviewOutput {
             console: self.protect_name().to_owned(),
             application_version,
@@ -3518,6 +3583,7 @@ impl UnifiMcp {
             not_recording_truncated: (recording_summary_complete && idle_truncated).then_some(true),
             not_recording_count: recording_summary_complete.then_some(idle_count),
             recorders,
+            bootstrap_details,
             capabilities: protect_capabilities(local_state),
         })
     }
@@ -5574,19 +5640,22 @@ fn camera_name_matches(candidate: &str, normalized_selector: &str) -> bool {
     candidate.trim().to_lowercase() == normalized_selector
 }
 
-fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<CameraView, McpError> {
-    let CameraInventory {
-        cameras,
-        local_state,
-        ..
-    } = inventory;
+fn camera_by_selector(inventory: &CameraInventory, selector: &str) -> Result<CameraView, McpError> {
+    camera_by_selector_ref(inventory, selector).cloned()
+}
+
+fn camera_by_selector_ref<'a>(
+    inventory: &'a CameraInventory,
+    selector: &str,
+) -> Result<&'a CameraView, McpError> {
+    let cameras = &inventory.cameras;
     // A camera id is unique; an apparent name match is unsafe when local
     // inventory is incomplete because another camera's name may be missing.
     if let Some(camera) = cameras.iter().find(|camera| camera.id == selector) {
-        return Ok(camera.clone());
+        return Ok(camera);
     }
     if matches!(
-        local_state,
+        inventory.local_state,
         LocalEnrichmentState::Partial | LocalEnrichmentState::Unavailable
     ) {
         return Err(McpError::invalid_params(
@@ -5595,7 +5664,7 @@ fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<Came
         ));
     }
     let normalized_selector = selector.to_lowercase();
-    let mut matches = cameras.into_iter().filter(|camera| {
+    let mut matches = cameras.iter().filter(|camera| {
         camera
             .name
             .as_deref()
@@ -5613,6 +5682,59 @@ fn camera_by_selector(inventory: CameraInventory, selector: &str) -> Result<Came
             None,
         )),
     }
+}
+
+fn validate_bootstrap_detail_request(
+    include_all: bool,
+    fields: Option<&[String]>,
+) -> Result<(), McpError> {
+    if include_all && fields.is_some() {
+        return Err(McpError::invalid_params(
+            "use includeDetails or detailFields, not both",
+            None,
+        ));
+    }
+    if let Some(fields) = fields {
+        if fields.is_empty() || fields.len() > 64 {
+            return Err(McpError::invalid_params(
+                "detailFields must contain 1-64 field names",
+                None,
+            ));
+        }
+        if fields
+            .iter()
+            .any(|field| field.is_empty() || field.len() > 256)
+        {
+            return Err(McpError::invalid_params(
+                "detail field names must contain 1-256 bytes",
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn select_bootstrap_details(
+    raw: &Value,
+    include_all: bool,
+    fields: Option<&[String]>,
+) -> Result<Map<String, Value>, McpError> {
+    let object = raw
+        .as_object()
+        .ok_or_else(|| McpError::invalid_params("local Protect record is not an object", None))?;
+    if include_all {
+        return Ok(object.clone());
+    }
+    let fields =
+        fields.ok_or_else(|| McpError::invalid_params("detailFields is required", None))?;
+    let mut selected = Map::new();
+    for field in fields {
+        let value = object.get(field).ok_or_else(|| {
+            McpError::invalid_params(format!("local Protect record has no {field} field"), None)
+        })?;
+        selected.insert(field.clone(), value.clone());
+    }
+    Ok(selected)
 }
 
 fn camera_settings_patch(
@@ -6856,6 +6978,7 @@ fn camera_view(
         audio,
         features: camera_features(flags, local),
         connection: local.and_then(camera_connection),
+        details: None,
         local_enrichment: local_enrichment_word(local, local_state).to_owned(),
     }
 }

@@ -1266,9 +1266,9 @@ async fn a_read_still_reauthenticates_and_replays_after_the_same_signal() {
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
-    reason = "one full-shape fixture proves both the allowlist and the operational projection"
+    reason = "one full-shape fixture verifies the operational projection and original response"
 )]
-async fn protect_bootstrap_decodes_only_the_bounded_inventory_projection() {
+async fn protect_bootstrap_retains_details_alongside_the_inventory_projection() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/auth/login"))
@@ -1285,7 +1285,7 @@ async fn protect_bootstrap_decodes_only_the_bounded_inventory_projection() {
         .and(path("/proxy/protect/api/bootstrap"))
         .and(header("cookie", "TOKEN=protect-session"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "authUser": {"email": "must-not-enter-the-model@example.invalid"},
+            "authUser": {"email": "operator@example.invalid"},
             "cameras": [{
                 "id": "cam-front", "modelKey": "camera", "guid": "camera-guid",
                 "mac": "aa:bb:cc:dd:ee:ff", "name": "Front Door", "type": "UVC G5 Bullet",
@@ -1311,10 +1311,10 @@ async fn protect_bootstrap_decodes_only_the_bounded_inventory_projection() {
                     "signalQuality": 91, "signalStrength": -48, "phyRate": 866.7,
                     "txRate": 400.5, "channel": 44, "frequency": 5220,
                     "experience": "excellent", "connectivity": "full",
-                    "ssid": "must-not-enter-the-model-ssid",
+                    "ssid": "Studio Wi-Fi",
                     "bssid": "11:22:33:44:55:66", "apName": "private-ap"
                 },
-                "channels": [{"rtspAlias": "must-not-enter-the-model-stream"}]
+                "channels": [{"rtspAlias": "front-door-high"}]
             }],
             "nvr": {
                 "id": "nvr-1", "modelKey": "nvr", "guid": "nvr-guid",
@@ -1400,22 +1400,26 @@ async fn protect_bootstrap_decodes_only_the_bounded_inventory_projection() {
     assert_eq!(recording_types[1].size, None);
     assert!(distributions.resolution_distributions.is_none());
 
-    let debug = format!("{bootstrap:?}");
-    for excluded in [
-        "must-not-enter-the-model@example.invalid",
-        "another-user@example.invalid",
-        "must-not-enter-the-model-stream",
-        "must-not-enter-the-model-ssid",
-        "11:22:33:44:55:66",
-        "private-ap",
-        "private-host",
-        "private-disk-serial",
-    ] {
-        assert!(
-            !debug.contains(excluded),
-            "private value entered wire model"
-        );
-    }
+    assert_eq!(
+        bootstrap.raw["authUser"]["email"],
+        "operator@example.invalid"
+    );
+    assert_eq!(
+        bootstrap.raw["users"][0]["email"],
+        "another-user@example.invalid"
+    );
+    assert_eq!(
+        bootstrap.raw["cameras"][0]["channels"][0]["rtspAlias"],
+        "front-door-high"
+    );
+    assert_eq!(
+        bootstrap.raw["cameras"][0]["wifiConnectionState"]["ssid"],
+        "Studio Wi-Fi"
+    );
+    assert_eq!(
+        bootstrap.raw["nvr"]["systemInfo"]["ustorage"]["disks"][0]["serial"],
+        "private-disk-serial"
+    );
 }
 
 #[tokio::test]

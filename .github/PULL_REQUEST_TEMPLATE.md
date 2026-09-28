@@ -26,7 +26,8 @@ documentation changes.
 ### Security and information flow
 
 Describe caller authentication, gateway authorization, controller credential
-use, upstream requests, model-visible fields, and excluded sensitive fields.
+use, upstream requests, and model-visible fields. The gateway owns access
+decisions for sensitive results.
 
 ### Upstream assumptions
 

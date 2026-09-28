@@ -638,15 +638,14 @@ impl LegacyClient {
         }
     }
 
-    /// Read the narrow camera and recorder projection from the local Protect
-    /// bootstrap. The full bootstrap contains accounts, streams, and other
-    /// structures that are deliberately not represented by this type.
+    /// Read the local Protect bootstrap with typed camera and recorder fields
+    /// for common views and the original bounded response for selected details.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the console is not `UniFi` OS, the
-    /// session or request fails, the response does not match the allowlisted
-    /// model, or the camera count exceeds the hard inventory ceiling.
+    /// session or request fails, required camera or recorder fields cannot be
+    /// decoded, or the camera count exceeds the hard inventory ceiling.
     pub async fn protect_bootstrap(&self) -> Result<ProtectBootstrap, ApiError> {
         let bootstrap = self.protect_bootstrap_projection().await?;
         validate_protect_bootstrap(&bootstrap).inspect_err(|_error| {

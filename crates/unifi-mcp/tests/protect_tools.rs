@@ -711,7 +711,8 @@ fn sample_cameras() -> serde_json::Value {
 
 fn sample_bootstrap() -> serde_json::Value {
     serde_json::json!({
-        "authUser": {"email": "must-not-be-returned@example.invalid"},
+        "authUser": {"email": "operator@example.invalid"},
+        "users": [{"email": "another-user@example.invalid"}],
         "cameras": [
             {
                 "id": "cam-front", "modelKey": "camera", "name": "Local Front Door",
@@ -736,9 +737,10 @@ fn sample_bootstrap() -> serde_json::Value {
                     "signalQuality": 92, "signalStrength": -47, "phyRate": 866.7,
                     "txRate": 433.3, "channel": 44, "frequency": 5220,
                     "experience": "excellent", "connectivity": "full",
-                    "ssid": "must-not-be-returned-ssid"
+                    "ssid": "Studio Wi-Fi"
                 },
-                "channels": [{"rtspAlias": "must-not-be-returned-stream"}]
+                "channels": [{"rtspAlias": "front-door-high"}],
+                "controllerExtension": {"enabled": true}
             },
             {
                 "id": "cam-back", "modelKey": "camera", "marketName": "G5 Bullet",
@@ -785,7 +787,7 @@ fn sample_bootstrap() -> serde_json::Value {
                     ]
                 }
             },
-            "systemInfo": {"ustorage": {"disks": [{"serial": "must-not-be-returned-disk"}]}}
+            "systemInfo": {"ustorage": {"disks": [{"serial": "disk-123"}]}}
         }
     })
 }
@@ -928,18 +930,84 @@ async fn local_bootstrap_restores_camera_filters_and_operational_state() {
         output["capabilities"]["localInventorySource"],
         "authenticatedLocalBootstrap"
     );
-    let serialized = output.to_string();
-    for excluded in [
-        "must-not-be-returned@example.invalid",
-        "must-not-be-returned-ssid",
-        "must-not-be-returned-stream",
-        "must-not-be-returned-disk",
-    ] {
-        assert!(
-            !serialized.contains(excluded),
-            "private bootstrap value leaked"
-        );
-    }
+    assert!(camera.get("details").is_none());
+}
+
+#[tokio::test]
+async fn local_bootstrap_fields_can_be_requested_without_losing_their_values() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    local_console_with(&server, sample_bootstrap()).await;
+    let handler = handler_with_events(&server);
+
+    let camera = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({
+                    "camera": "cam-front", "detailFields": ["channels", "wifiConnectionState"]
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("camera details")
+        .structured_content
+        .expect("structured");
+    assert_eq!(
+        camera["details"]["channels"][0]["rtspAlias"],
+        "front-door-high"
+    );
+    assert_eq!(
+        camera["details"]["wifiConnectionState"]["ssid"],
+        "Studio Wi-Fi"
+    );
+
+    let full_camera = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({
+                    "camera": "cam-front", "includeDetails": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("complete camera record")
+        .structured_content
+        .expect("structured");
+    assert_eq!(
+        full_camera["details"]["controllerExtension"]["enabled"],
+        true
+    );
+
+    let overview = handler
+        .call(
+            &call(
+                "protect.overview",
+                &serde_json::json!({
+                    "detailFields": ["authUser", "nvr", "users"]
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("bootstrap details")
+        .structured_content
+        .expect("structured");
+    assert_eq!(
+        overview["bootstrapDetails"]["authUser"]["email"],
+        "operator@example.invalid"
+    );
+    assert_eq!(
+        overview["bootstrapDetails"]["users"][0]["email"],
+        "another-user@example.invalid"
+    );
+    assert_eq!(
+        overview["bootstrapDetails"]["nvr"]["systemInfo"]["ustorage"]["disks"][0]["serial"],
+        "disk-123"
+    );
 }
 
 #[tokio::test]

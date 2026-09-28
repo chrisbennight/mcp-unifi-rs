@@ -8,11 +8,9 @@
 //! read, the error vocabulary, and the retry class are all shared rather than
 //! reimplemented.
 //!
-//! The models here are deliberately narrower than either API. Official wire
-//! fields are kept separate from the local application's richer operational
-//! fields, and the local bootstrap has an allowlisted camera/NVR projection
-//! rather than a model of the full response. Accounts, network names, disk
-//! identifiers, and unrelated application state never enter these types.
+//! Typed camera and recorder fields support the common operational views. The
+//! bounded local bootstrap also retains its original response so callers can
+//! request details that those views do not yet model.
 
 use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
@@ -207,13 +205,31 @@ pub struct ProtectNvr {
     pub mac: Option<String>,
 }
 
-/// Narrow local-session snapshot used to enrich the official inventory.
-/// Unknown bootstrap sections never enter this model.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Local-session snapshot used to enrich the official inventory.
+#[derive(Debug, Clone)]
 pub struct ProtectBootstrap {
     pub cameras: Vec<ProtectLocalCamera>,
     pub nvr: ProtectLocalNvr,
+    pub raw: serde_json::Value,
+}
+
+impl<'de> Deserialize<'de> for ProtectBootstrap {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Projection {
+            cameras: Vec<ProtectLocalCamera>,
+            nvr: ProtectLocalNvr,
+        }
+
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        let projection: Projection =
+            serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            cameras: projection.cameras,
+            nvr: projection.nvr,
+            raw,
+        })
+    }
 }
 
 /// Operational camera fields available from the authenticated local session.
@@ -290,14 +306,14 @@ pub struct ProtectCameraFeatureFlags {
     pub smart_detect_audio_types: Vec<String>,
 }
 
-/// Wired link facts that do not disclose network configuration.
+/// Wired link facts reported by the local Protect application.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectWiredConnectionState {
     pub phy_rate: Option<f64>,
 }
 
-/// Wi-Fi link facts that do not include the SSID, BSSID, or controller host.
+/// Wi-Fi link facts reported by the local Protect application.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectWifiConnectionState {
@@ -311,8 +327,7 @@ pub struct ProtectWifiConnectionState {
     pub connectivity: Option<String>,
 }
 
-/// Operational recorder fields available from the authenticated local
-/// session. Storage values are aggregate figures, never disk identifiers.
+/// Operational recorder fields available from the authenticated local session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectLocalNvr {
