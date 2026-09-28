@@ -108,7 +108,8 @@ for the selected site. Each profile preserves the fields
 the controller returned, including the id needed for enterprise Wi-Fi setup.
 The result includes the controller's page metadata and `nextOffset` until the
 list is complete. An over-budget result fails explicitly; lower `limit` to
-continue with smaller pages.
+continue with smaller pages. Contradictory page metadata returns the complete
+accepted controller response with a separate validation diagnostic.
 
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 
@@ -119,6 +120,8 @@ returns complete controller fields for each selected row, and supplies
 `broadcastId` from that list and returns its complete controller record,
 including security and network configuration. An over-budget list fails
 explicitly; lower `limit` to receive smaller pages.
+Contradictory page metadata returns the complete accepted controller response
+with a separate validation diagnostic.
 
 ### `wifi.diagnose`
 

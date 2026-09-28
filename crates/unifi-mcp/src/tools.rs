@@ -22,7 +22,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use unifi_api::{
-    ApiError, ProtectAvailability, RecordFingerprint,
+    ApiError, BoundedMessage, ProtectAvailability, RecordFingerprint,
     capability::{self, FirewallGeneration},
     models::{
         ActiveClient, ClientDetail, DeviceStatistics, DeviceSummary, DpiAvailability,
@@ -4239,9 +4239,9 @@ impl UnifiMcp {
             return Err(McpError::invalid_params("limit must be 1-200", None));
         }
         let site_id = self.site_id().await?;
-        let page = self
+        let (page, response) = self
             .integration()
-            .radius_profiles(
+            .radius_profiles_with_response(
                 &site_id,
                 PageRequest {
                     offset: input.offset,
@@ -4257,25 +4257,25 @@ impl UnifiMcp {
             || row_count > page.limit
             || page.count != row_count
         {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 format!(
                     "RADIUS profile page reported offset {}, limit {}, count {}, and {} rows for requested offset {} and limit {}",
                     page.offset, page.limit, page.count, row_count, input.offset, input.limit
                 ),
-                None,
             ));
         }
         let next = input
             .offset
             .checked_add(row_count)
-            .ok_or_else(|| McpError::internal_error("RADIUS profile offset overflow", None))?;
+            .ok_or_else(|| page_validation_error(&response, "RADIUS profile offset overflow"))?;
         if next < page.total_count && page.data.is_empty() {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 format!(
                     "RADIUS profile page at offset {} returned no rows before reported total {}",
                     input.offset, page.total_count
                 ),
-                None,
             ));
         }
         structured(RadiusProfilesListOutput {
@@ -4297,9 +4297,9 @@ impl UnifiMcp {
             return Err(McpError::invalid_params("limit must be 1-200", None));
         }
         let site_id = self.site_id().await?;
-        let page = self
+        let (page, response) = self
             .integration()
-            .wifi_broadcasts(
+            .wifi_broadcasts_with_response(
                 &site_id,
                 PageRequest {
                     offset: input.offset,
@@ -4315,34 +4315,34 @@ impl UnifiMcp {
             || row_count > page.limit
             || page.count != row_count
         {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 format!(
                     "Wi-Fi broadcast page reported offset {}, limit {}, count {}, and {} rows for requested offset {} and limit {}",
                     page.offset, page.limit, page.count, row_count, input.offset, input.limit
                 ),
-                None,
             ));
         }
         let next = input
             .offset
             .checked_add(row_count)
-            .ok_or_else(|| McpError::internal_error("Wi-Fi broadcast offset overflow", None))?;
+            .ok_or_else(|| page_validation_error(&response, "Wi-Fi broadcast offset overflow"))?;
         if next > page.total_count {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 format!(
                     "Wi-Fi broadcast page through offset {next} exceeds reported total {}",
                     page.total_count
                 ),
-                None,
             ));
         }
         if next < page.total_count && page.data.is_empty() {
-            return Err(McpError::internal_error(
+            return Err(page_validation_error(
+                &response,
                 format!(
                     "Wi-Fi broadcast page at offset {} returned no rows before reported total {}",
                     input.offset, page.total_count
                 ),
-                None,
             ));
         }
         structured(WifiBroadcastsListOutput {
@@ -8352,6 +8352,16 @@ fn protect_events_api_error(error: ApiError) -> McpError {
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn api_error(error: ApiError) -> McpError {
     McpError::internal_error(error.to_string(), None)
+}
+
+fn page_validation_error(
+    response: &BoundedMessage,
+    diagnostic: impl Into<BoundedMessage>,
+) -> McpError {
+    api_error(ApiError::DecodeResponse {
+        response: response.clone(),
+        diagnostic: diagnostic.into(),
+    })
 }
 
 #[cfg(test)]

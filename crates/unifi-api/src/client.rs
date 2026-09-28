@@ -150,8 +150,25 @@ impl IntegrationClient {
         site_id: &str,
         page: PageRequest,
     ) -> Result<Page<Map<String, Value>>, ApiError> {
-        self.get_json(&["sites", site_id, "radius", "profiles"], &page_query(page))
+        self.radius_profiles_with_response(site_id, page)
             .await
+            .map(|(page, _)| page)
+    }
+
+    /// Read a RADIUS profile page and retain its complete accepted response
+    /// for caller-side page validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn radius_profiles_with_response(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+    ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
+        self.get_json_with_response(&["sites", site_id, "radius", "profiles"], &page_query(page))
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Page through Wi-Fi broadcasts as the official Network API reports them.
@@ -164,8 +181,25 @@ impl IntegrationClient {
         site_id: &str,
         page: PageRequest,
     ) -> Result<Page<Map<String, Value>>, ApiError> {
-        self.get_json(&["sites", site_id, "wifi", "broadcasts"], &page_query(page))
+        self.wifi_broadcasts_with_response(site_id, page)
             .await
+            .map(|(page, _)| page)
+    }
+
+    /// Read a Wi-Fi broadcast page and retain its complete accepted response
+    /// for caller-side page validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn wifi_broadcasts_with_response(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+    ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
+        self.get_json_with_response(&["sites", site_id, "wifi", "broadcasts"], &page_query(page))
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Complete fields for one Wi-Fi broadcast from the official Network API.

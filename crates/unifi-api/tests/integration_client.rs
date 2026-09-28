@@ -166,6 +166,44 @@ async fn radius_profile_pages_keep_the_controllers_complete_records() {
 }
 
 #[tokio::test]
+async fn network_pages_retain_their_complete_accepted_responses() {
+    for kind in ["radius/profiles", "wifi/broadcasts"] {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "offset": 0, "limit": 1, "count": 1, "totalCount": 1,
+            "data": [{"id": "row-1", "name": "Synthetic"}],
+            "padding": "x".repeat(700),
+            "z_controller_field": "original-page-tail"
+        })
+        .to_string();
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/sites/site-1/{kind}")))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+
+        let request = PageRequest {
+            offset: 0,
+            limit: 1,
+        };
+        let (page, response) = if kind == "radius/profiles" {
+            client_for(&server)
+                .radius_profiles_with_response("site-1", request)
+                .await
+                .expect("RADIUS page")
+        } else {
+            client_for(&server)
+                .wifi_broadcasts_with_response("site-1", request)
+                .await
+                .expect("Wi-Fi broadcast page")
+        };
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(response.as_str(), body);
+    }
+}
+
+#[tokio::test]
 async fn wifi_broadcast_list_and_detail_preserve_controller_fields() {
     let server = MockServer::start().await;
     let row = serde_json::json!({
