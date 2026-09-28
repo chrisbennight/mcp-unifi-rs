@@ -283,6 +283,7 @@ it.
 | `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |
 | `firewall.policies.update` | yes | no | yes |
+| `firewall.policies.delete` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
@@ -443,7 +444,22 @@ The observed grant is returned separately when it can be read. If a disconnected
 client is no longer readable, the action response remains available and the
 result says that verification was unavailable.
 
-## Not on this surface
+### Rule deletion: `firewall.policies.delete`
 
-Creating and deleting rules is out of scope throughout: these tools operate
-configuration an operator already has.
+`firewall.policies.delete` removes a zone-based policy by id. It previews the
+policy's match and action, then sends one DELETE when confirmed. A following
+read distinguishes a policy that is absent from one the controller retained.
+The preview shows full source, destination, protocol, connection-state, IPsec,
+and schedule conditions alongside the compact policy summary. It also shows
+the official descriptive and metadata fields when present. It marks whether
+these bounded views cover the controller record and names omitted fields when
+they do not; those fields may change the policy's effect. Large field values
+are omitted with that signal so the preview and deletion result remain within
+the response bound. Selected controller keys and values, including nested
+keys, are returned as received; the gateway governs caller access to sensitive
+results.
+
+## Remaining rule workflows
+
+Creation, ordering, and the remaining rule lifecycle operations are tracked
+in the Network rule issue.

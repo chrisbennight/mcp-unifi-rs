@@ -58,6 +58,7 @@ pub enum ToolKind {
     GuestsUnauthorize,
     PortForwardsUpdate,
     FirewallPoliciesUpdate,
+    FirewallPoliciesDelete,
     VouchersSearch,
     VouchersStatus,
     VouchersRevoke,
@@ -76,6 +77,7 @@ impl ToolKind {
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
+            | Self::FirewallPoliciesDelete
             | Self::VouchersRevoke
             | Self::CamerasPtzControl
             | Self::CamerasSettingsUpdate
@@ -137,6 +139,7 @@ impl ToolKind {
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
+            | Self::FirewallPoliciesDelete
             | Self::VouchersSearch
             | Self::VouchersStatus
             | Self::VouchersRevoke
@@ -516,6 +519,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         // state. The result reports the zones and ports a policy governs.
         ToolBehavior::write(true).result_sensitive(),
     ),
+    write_spec(
+        ToolKind::FirewallPoliciesDelete,
+        "firewall.policies.delete",
+        "Preview or delete one zone-based firewall policy by id. A confirmed deletion is sent once and checks whether the policy is absent afterward.",
+        ToolBehavior::write(true).result_sensitive(),
+    ),
     credential_read_spec(
         ToolKind::VouchersSearch,
         "vouchers.search",
@@ -589,6 +598,7 @@ mod tests {
         ToolKind::GuestsUnauthorize,
         ToolKind::PortForwardsUpdate,
         ToolKind::FirewallPoliciesUpdate,
+        ToolKind::FirewallPoliciesDelete,
         ToolKind::VouchersSearch,
         ToolKind::VouchersStatus,
         ToolKind::VouchersRevoke,
@@ -630,6 +640,7 @@ mod tests {
                 | ToolKind::GuestsUnauthorize
                 | ToolKind::PortForwardsUpdate
                 | ToolKind::FirewallPoliciesUpdate
+                | ToolKind::FirewallPoliciesDelete
                 | ToolKind::VouchersSearch
                 | ToolKind::VouchersStatus
                 | ToolKind::VouchersRevoke

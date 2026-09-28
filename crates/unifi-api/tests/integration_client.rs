@@ -612,3 +612,19 @@ async fn firewall_policies_decode_the_allowlisted_projection() {
     assert_eq!(page.data[0].enabled, Some(true));
     assert_eq!(page.data[0].action.as_deref(), Some("ALLOW"));
 }
+
+#[tokio::test]
+async fn firewall_policy_delete_uses_the_typed_id_route_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(format!("{PREFIX}/sites/s1/firewall/policies/p1")))
+        .and(header("X-API-Key", API_KEY))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    client_for(&server)
+        .delete_firewall_policy("s1", "p1")
+        .await
+        .expect("delete");
+}

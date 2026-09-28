@@ -1676,6 +1676,39 @@ struct FirewallPoliciesUpdateOutput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPoliciesDeleteInput {
+    /// Zone-based policy id, as `firewall.read` reports it.
+    policy: String,
+    /// Delete the policy. Absent or false previews its scope.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FirewallPoliciesDeleteOutput {
+    policy: PolicyView,
+    preview: PolicyPreviewCoverage,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct PolicyPreviewCoverage {
+    /// Full values for the official policy fields that the compact summary omits.
+    details: Map<String, Value>,
+    /// False if the controller record has fields the preview omits.
+    complete: bool,
+    omitted_fields: Vec<String>,
+    omitted_fields_truncated: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct VouchersCreateInput {
     /// Label the controller stores against the batch.
     name: String,
@@ -2250,6 +2283,9 @@ impl ToolSpec {
             ToolKind::FirewallPoliciesUpdate => {
                 tool::<FirewallPoliciesUpdateInput, FirewallPoliciesUpdateOutput>(self)
             }
+            ToolKind::FirewallPoliciesDelete => {
+                tool::<FirewallPoliciesDeleteInput, FirewallPoliciesDeleteOutput>(self)
+            }
             ToolKind::VouchersSearch => tool::<VouchersSearchInput, VouchersSearchOutput>(self),
             ToolKind::VouchersStatus => tool::<VoucherIdInput, VoucherReadView>(self),
             ToolKind::VouchersRevoke => tool::<VoucherRevokeInput, VoucherRevokeOutput>(self),
@@ -2489,6 +2525,7 @@ impl UnifiMcp {
             ToolKind::GuestsUnauthorize => self.guests_unauthorize(params).await,
             ToolKind::PortForwardsUpdate => self.port_forwards_update(params).await,
             ToolKind::FirewallPoliciesUpdate => self.firewall_policies_update(params).await,
+            ToolKind::FirewallPoliciesDelete => self.firewall_policies_delete(params).await,
             ToolKind::VouchersSearch => self.vouchers_search(params).await,
             ToolKind::VouchersStatus => self.vouchers_status(params).await,
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
@@ -4510,6 +4547,96 @@ impl UnifiMcp {
         })
     }
 
+    async fn firewall_policies_delete(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<FirewallPoliciesDeleteInput>(params)?;
+        if input.policy.trim().is_empty()
+            || input.policy.len() > 256
+            || matches!(input.policy.as_str(), "." | "..")
+        {
+            return Err(McpError::invalid_params(
+                "policy must be a nonempty, non-dot id of at most 256 bytes",
+                None,
+            ));
+        }
+        self.require_zone_based_firewall().await?;
+        let site_id = self.site_id().await?;
+        let (raw, _) = self
+            .integration()
+            .firewall_policy_snapshot(&site_id, &input.policy)
+            .await
+            .map_err(api_error)?;
+        let record = parsed_record(&raw);
+        if record.get("id").and_then(Value::as_str) != Some(input.policy.as_str()) {
+            return Err(McpError::internal_error(
+                "controller returned a different firewall policy",
+                None,
+            ));
+        }
+        let mut output = FirewallPoliciesDeleteOutput {
+            policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
+            preview: policy_preview_coverage(&record),
+            applied: false,
+            verified_absent: None,
+            warnings: vec![
+                "deleting this policy changes how later firewall policies handle matching traffic"
+                    .to_owned(),
+            ],
+        };
+        if !output.preview.complete {
+            output.warnings.push(
+                "this bounded preview omits policy fields, so its match description is incomplete"
+                    .to_owned(),
+            );
+        }
+        if !input.confirm {
+            return structured(output);
+        }
+        // Check the confirmed result shape before the irreversible call.
+        let mut final_shape = output.clone();
+        final_shape.applied = true;
+        final_shape.verified_absent = Some(false);
+        final_shape.warnings.push(
+            "the delete request was accepted, but policy absence was not verified".to_owned(),
+        );
+        finalize(structured(final_shape)?, ToolBehavior::write(false))?;
+        self.integration()
+            .delete_firewall_policy(&site_id, &input.policy)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(FIREWALL_DELETE_RESPONSE_RESERVE)
+            .min(FIREWALL_DELETE_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            None
+        } else {
+            tokio::time::timeout(
+                budget,
+                self.integration()
+                    .firewall_policy_snapshot(&site_id, &input.policy),
+            )
+            .await
+            .ok()
+        };
+        output.verified_absent = match readback {
+            Some(Err(ApiError::Status { status: 404, .. })) => Some(true),
+            Some(Ok(_)) => Some(false),
+            _ => None,
+        };
+        if output.verified_absent != Some(true) {
+            output.warnings.push(
+                "the delete request was accepted, but policy absence was not verified".to_owned(),
+            );
+        }
+        structured(output)
+    }
+
     async fn vouchers_search(
         &self,
         params: &CallToolRequestParams,
@@ -6291,6 +6418,97 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
     }
 }
 
+/// A deletion result must remain small even when the controller supplied
+/// unusually long policy labels or endpoint identifiers.
+fn bounded_policy_view(mut policy: PolicyView) -> PolicyView {
+    for field in [
+        &mut policy.name,
+        &mut policy.action,
+        &mut policy.ip_protocol_scope,
+        &mut policy.source_zone_id,
+        &mut policy.source_port,
+        &mut policy.destination_zone_id,
+        &mut policy.destination_port,
+    ] {
+        if let Some(value) = field.take() {
+            *field = Some(bounded_text(value));
+        }
+    }
+    policy
+}
+
+/// Include the official policy fields that affect matching or explain the
+/// deletion. Unknown controller fields remain named but are not echoed.
+fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage {
+    const DETAIL_FIELDS: &[&str] = &[
+        "source",
+        "destination",
+        "ipProtocolScope",
+        "connectionStateFilter",
+        "ipsecFilter",
+        "schedule",
+        "loggingEnabled",
+        "description",
+        "metadata",
+    ];
+    const SUMMARY_FIELDS: &[&str] = &["id", "name", "enabled", "action", "index"];
+    const FIELD_LIMIT: usize = 16;
+    const DETAIL_BUDGET: usize = 16 * 1024;
+    let mut details = Map::new();
+    let mut detail_bytes = 0;
+    let mut omitted_details = Vec::new();
+    for name in DETAIL_FIELDS {
+        if let Some(value) = record.get(*name) {
+            let bytes = name.len() + value.to_string().len();
+            if detail_bytes + bytes <= DETAIL_BUDGET {
+                detail_bytes += bytes;
+                details.insert((*name).to_owned(), value.clone());
+            } else {
+                omitted_details.push((*name).to_owned());
+            }
+        }
+    }
+    let mut omitted_fields = Vec::new();
+    let mut omitted_fields_truncated = false;
+    let mut add = |name: String| {
+        if omitted_fields.len() < FIELD_LIMIT {
+            omitted_fields.push(bounded_text(name));
+        } else {
+            omitted_fields_truncated = true;
+        }
+    };
+    for name in omitted_details {
+        add(name);
+    }
+    for (name, value) in record {
+        if DETAIL_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        if (matches!(name.as_str(), "name" | "action")
+            && value
+                .as_str()
+                .is_some_and(|text| text.chars().count() > EVENT_MESSAGE_CEILING))
+            || !SUMMARY_FIELDS.contains(&name.as_str())
+            || (!value.is_null()
+                && match name.as_str() {
+                    "enabled" => !value.is_boolean(),
+                    "index" => value
+                        .as_u64()
+                        .is_none_or(|index| u32::try_from(index).is_err()),
+                    _ => !value.is_string(),
+                })
+        {
+            add(name.clone());
+        }
+    }
+    PolicyPreviewCoverage {
+        details,
+        complete: omitted_fields.is_empty() && !omitted_fields_truncated,
+        omitted_fields,
+        omitted_fields_truncated,
+    }
+}
+
 /// What an operator should know before flipping a policy. A policy is one
 /// step in an ordered set, so this says what the policy itself stops or starts
 /// doing and names what settles the rest.
@@ -6355,6 +6573,9 @@ const GUEST_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Bound the optional camera read so an accepted patch remains reportable.
 const CAMERA_SETTINGS_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const CAMERA_SETTINGS_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+/// Leave time to return a successful firewall deletion after checking absence.
+const FIREWALL_DELETE_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const FIREWALL_DELETE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -7713,6 +7934,8 @@ mod tests {
         ("port_forwards.update", true, false, true),
         // Same, and the result names the zones and ports a policy governs.
         ("firewall.policies.update", true, false, true),
+        // Repeating deletion leaves the policy absent.
+        ("firewall.policies.delete", true, false, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.

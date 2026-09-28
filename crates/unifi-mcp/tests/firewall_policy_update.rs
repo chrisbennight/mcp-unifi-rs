@@ -69,6 +69,13 @@ fn update(arguments: &serde_json::Value) -> CallToolRequestParams {
     params
 }
 
+fn delete(arguments: &serde_json::Value) -> CallToolRequestParams {
+    let mut params = CallToolRequestParams::default();
+    params.name = "firewall.policies.delete".to_owned().into();
+    params.arguments = Some(arguments.as_object().expect("object").clone());
+    params
+}
+
 async fn mount_site(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
@@ -154,6 +161,29 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
          it no longer has: {}",
         error.message
     );
+    let delete_error = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect_err("classic firewall cannot delete a zone policy");
+    assert!(delete_error.message.contains("classic firewall"));
+}
+
+#[tokio::test]
+async fn policy_delete_rejects_an_empty_id_before_controller_io() {
+    let server = MockServer::start().await;
+    for id in [" ", ".", ".."] {
+        let error = handler_for(&server)
+            .call(
+                &delete(&serde_json::json!({"policy": id, "confirm": true})),
+                None,
+            )
+            .await
+            .expect_err("invalid id");
+        assert!(error.message.contains("non-dot id"), "{}", error.message);
+    }
 }
 
 /// The policy as it reads before the write, and again after.
@@ -214,6 +244,223 @@ async fn an_unconfirmed_change_describes_itself_and_writes_nothing() {
         output["changes"],
         serde_json::json!([{"field": "enabled", "from": true, "to": false}])
     );
+}
+
+#[tokio::test]
+async fn policy_delete_previews_scope_without_sending_delete() {
+    let server = MockServer::start().await;
+    let mut record = stored(true, "BLOCK");
+    record["ipProtocolScope"] = serde_json::json!({
+        "ipVersion": "IPV4", "protocolFilter": {"type": "PRESET", "name": "TCP_UDP"}
+    });
+    record["connectionStateFilter"] = serde_json::json!(["NEW", "RELATED"]);
+    record["source"]["networkFilter"] =
+        serde_json::json!({"type": "NETWORKS", "networkIds": ["network-1"]});
+    reads(&server, &record, &record).await;
+    let output = handler_for(&server)
+        .call(&delete(&serde_json::json!({"policy": POLICY})), None)
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], false);
+    assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
+    assert_eq!(output["preview"]["details"]["schedule"], record["schedule"]);
+    assert_eq!(
+        output["preview"]["details"]["ipsecFilter"],
+        record["ipsecFilter"]
+    );
+    assert_eq!(output["preview"]["details"]["source"], record["source"]);
+    assert_eq!(
+        output["preview"]["details"]["destination"],
+        record["destination"]
+    );
+    assert_eq!(
+        output["preview"]["details"]["ipProtocolScope"],
+        record["ipProtocolScope"]
+    );
+    assert_eq!(
+        output["preview"]["details"]["connectionStateFilter"],
+        record["connectionStateFilter"]
+    );
+    assert_eq!(output["preview"]["complete"], true);
+}
+
+#[tokio::test]
+async fn policy_delete_sends_once_and_verifies_absence() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stored(true, "BLOCK")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verifiedAbsent"], true);
+}
+
+#[tokio::test]
+async fn policy_delete_keeps_large_preview_and_confirmed_result_returnable() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut record = stored(true, "BLOCK");
+    record["name"] = serde_json::json!("n".repeat(60_000));
+    record["source"]["networkFilter"] = serde_json::json!({"networkIds": ["n".repeat(60_000)]});
+    record["description"] = serde_json::json!("d".repeat(60_000));
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    let preview = handler
+        .call(&delete(&serde_json::json!({"policy": POLICY})), None)
+        .await
+        .expect("bounded preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["preview"]["complete"], false);
+    assert!(
+        preview["preview"]["omittedFields"]
+            .to_string()
+            .contains("source")
+    );
+    assert!(
+        preview["preview"]["omittedFields"]
+            .to_string()
+            .contains("description")
+    );
+    assert!(
+        preview["policy"]["name"]
+            .as_str()
+            .expect("name")
+            .ends_with('…')
+    );
+
+    let result = handler
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("bounded confirmed result")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["verifiedAbsent"], true);
+}
+
+#[tokio::test]
+async fn policy_delete_preserves_controller_detail_keys_and_values() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let mut record = stored(true, "BLOCK");
+    record["source"]
+        .as_object_mut()
+        .expect("source object")
+        .insert(PASSWORD.to_owned(), serde_json::json!("controller-value"));
+    record["metadata"] = serde_json::json!({"nested": [{}]});
+    record["metadata"]["nested"][0]
+        .as_object_mut()
+        .expect("nested metadata object")
+        .insert(PASSWORD.to_owned(), serde_json::json!("controller-value"));
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.clone()))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    for confirm in [false, true] {
+        let output = handler
+            .call(
+                &delete(&serde_json::json!({"policy": POLICY, "confirm": confirm})),
+                None,
+            )
+            .await
+            .expect("controller detail preserved")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["preview"]["details"]["source"], record["source"]);
+        assert_eq!(output["preview"]["details"]["metadata"], record["metadata"]);
+        assert_eq!(output["preview"]["complete"], true);
+        assert_eq!(output["applied"], confirm);
+    }
+}
+
+#[tokio::test]
+async fn policy_delete_reports_an_acknowledged_but_retained_policy() {
+    let server = MockServer::start().await;
+    let record = stored(true, "BLOCK");
+    reads(&server, &record, &record).await;
+    Mock::given(method("DELETE"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}"
+        )))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
+            None,
+        )
+        .await
+        .expect("delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verifiedAbsent"], false);
 }
 
 /// A property whose value no JSON value model represents exactly.

@@ -53,7 +53,8 @@ changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
 `devices.control` (restart, locate, port cycle), `guests.authorize`,
 `port_forwards.update` (enable, disable, rename), `firewall.policies.update`
-(enable, disable; zone-based consoles), `vouchers.create` (mint hotspot
+(enable, disable; zone-based consoles), `firewall.policies.delete`,
+`vouchers.create` (mint hotspot
 vouchers).
 
 The device actions are one tool for the reason the client actions are: they

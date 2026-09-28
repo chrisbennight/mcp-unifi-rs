@@ -514,6 +514,27 @@ impl IntegrationClient {
         Ok(())
     }
 
+    /// Delete one zone-based firewall policy. Never retried after an
+    /// ambiguous transport result; callers confirm absence with a read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects the deletion.
+    pub async fn delete_firewall_policy(
+        &self,
+        site_id: &str,
+        policy_id: &str,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .send(self.request(
+                Method::DELETE,
+                &["sites", site_id, "firewall", "policies", policy_id],
+            )?)
+            .await?;
+        drop(response);
+        Ok(())
+    }
+
     fn request(&self, method: Method, segments: &[&str]) -> Result<RequestBuilder, ApiError> {
         self.request_with_query(method, segments, &[])
     }
