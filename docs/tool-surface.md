@@ -247,7 +247,13 @@ because the official integration API exposes only a live WebSocket. It needs a
 dedicated local-session username and password in addition to the integration
 key. Requests name the curated motion, ring, smart-detection, and smart-audio
 event families explicitly because Protect otherwise ignores time bounds on
-this route. The paged response carries compact event facts. Use
+this route. The paged response carries compact event facts by default.
+Set `includeDetails: true` to include each returned event's complete
+controller record, including detection metadata and thumbnail references. This
+choice also works with a continuation cursor; lower `limit` if the expanded
+page exceeds the response budget. Use
+`detailFields` to select named controller fields when only part of an event's
+detail is needed; it can be used without `includeDetails`. Use
 `protect.event.thumbnail` with an event id from the result to fetch its image
 as MCP image content. The thumbnail read uses the same local session, checks
 the JPEG format, and fails explicitly when the controller has no image for

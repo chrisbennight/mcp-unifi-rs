@@ -1178,6 +1178,12 @@ struct ProtectEventsInput {
     /// may contain fewer rows; continue until `nextCursor` is absent.
     #[serde(default = "default_search_limit")]
     limit: u16,
+    /// Include the controller's complete record for every returned event.
+    /// Omitted or false keeps search pages compact.
+    include_details: Option<bool>,
+    /// Select named controller fields instead of the full record.
+    /// This also enables details when `includeDetails` is omitted.
+    detail_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1197,6 +1203,9 @@ struct ProtectEventView {
     #[serde(skip_serializing_if = "Option::is_none")]
     camera_name: Option<String>,
     detection_types: Vec<String>,
+    /// Complete event fields exactly as the controller returned them, when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Map<String, Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -3519,6 +3528,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectEventsInput>(params)?;
+        let (include_details, detail_fields) = event_detail_selection(&input)?;
         let limit = input.limit;
         validate_page(0, limit)?;
 
@@ -3593,6 +3603,11 @@ impl UnifiMcp {
                         .into_iter()
                         .map(bounded_text)
                         .collect(),
+                    details: select_event_details(
+                        event.details,
+                        include_details,
+                        detail_fields.as_deref(),
+                    ),
                 }
             })
             .collect();
@@ -5376,6 +5391,41 @@ fn validate_page(offset: u16, limit: u16) -> Result<(), McpError> {
         ));
     }
     Ok(())
+}
+
+fn event_detail_selection(
+    input: &ProtectEventsInput,
+) -> Result<(bool, Option<Vec<String>>), McpError> {
+    let fields = input.detail_fields.clone();
+    if fields.as_ref().is_some_and(|fields| {
+        fields.len() > 64
+            || fields
+                .iter()
+                .any(|field| field.is_empty() || field.len() > 256)
+    }) {
+        return Err(McpError::invalid_params(
+            "detailFields accepts at most 64 nonempty field names of at most 256 bytes",
+            None,
+        ));
+    }
+    Ok((
+        input.include_details.unwrap_or(false) || fields.is_some(),
+        fields,
+    ))
+}
+
+fn select_event_details(
+    mut details: Map<String, Value>,
+    include_details: bool,
+    fields: Option<&[String]>,
+) -> Option<Map<String, Value>> {
+    if !include_details {
+        return None;
+    }
+    if let Some(fields) = fields {
+        details.retain(|name, _| fields.iter().any(|field| field == name));
+    }
+    Some(details)
 }
 
 fn resolve_protect_event_query(

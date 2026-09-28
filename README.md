@@ -28,7 +28,7 @@ changes preview before you confirm them.
   fetch a camera JPEG with `cameras.snapshot`, control PTZ presets and patrols,
   manage RTSPS stream handles, and start talkback sessions.
   An optional local account adds recording details, recorder health, and
-  historical detections. Event search returns compact metadata;
+  historical detections. Event search can include additional controller fields on request;
   `protect.event.thumbnail` returns a selected event's JPEG.
 - **Review a network change before applying it.** Preview a wireless-network
   update or a selected device action. The gateway decides who may invoke a
