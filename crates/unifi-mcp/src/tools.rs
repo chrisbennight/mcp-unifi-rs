@@ -2597,6 +2597,102 @@ enum NetworkPolicyWriteOperation {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum AclRuleAction {
+    Allow,
+    Block,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum AclRuleProtocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", deny_unknown_fields)]
+enum AclRuleDeviceFilter {
+    #[serde(rename = "DEVICES")]
+    Devices {
+        #[serde(rename = "deviceIds")]
+        device_ids: Vec<String>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", deny_unknown_fields)]
+enum IpAclRuleEndpoint {
+    #[serde(rename = "IP_ADDRESSES_OR_SUBNETS")]
+    IpAddressesOrSubnets {
+        #[serde(rename = "ipAddressesOrSubnets")]
+        ip_addresses_or_subnets: Vec<String>,
+        #[serde(rename = "portFilter", skip_serializing_if = "Option::is_none")]
+        port_filter: Option<Vec<u16>>,
+    },
+    #[serde(rename = "NETWORKS")]
+    Networks {
+        #[serde(rename = "networkIds")]
+        network_ids: Vec<String>,
+        #[serde(rename = "portFilter", skip_serializing_if = "Option::is_none")]
+        port_filter: Option<Vec<u16>>,
+    },
+    #[serde(rename = "PORTS")]
+    Ports {
+        #[serde(rename = "portFilter")]
+        port_filter: Vec<u16>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", deny_unknown_fields)]
+enum MacAclRuleEndpoint {
+    #[serde(rename = "MAC_ADDRESSES")]
+    MacAddresses {
+        #[serde(rename = "macAddresses")]
+        mac_addresses: Vec<String>,
+        #[serde(rename = "prefixLength", skip_serializing_if = "Option::is_none")]
+        prefix_length: Option<u8>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all_fields = "camelCase", deny_unknown_fields)]
+enum AclRuleRequest {
+    #[serde(rename = "IPV4")]
+    Ipv4 {
+        action: AclRuleAction,
+        enabled: bool,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_filter: Option<IpAclRuleEndpoint>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        destination_filter: Option<IpAclRuleEndpoint>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_filter: Option<Vec<AclRuleProtocol>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enforcing_device_filter: Option<AclRuleDeviceFilter>,
+    },
+    #[serde(rename = "MAC")]
+    Mac {
+        action: AclRuleAction,
+        enabled: bool,
+        name: String,
+        network_id_filter: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_filter: Option<MacAclRuleEndpoint>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        destination_filter: Option<MacAclRuleEndpoint>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enforcing_device_filter: Option<AclRuleDeviceFilter>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 enum DnsPolicyRequest {
     #[serde(rename = "A_RECORD")]
@@ -2721,6 +2817,16 @@ struct TrafficListsConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AclRulesConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    rule: Option<AclRuleRequest>,
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct NetworkPolicyWriteOutput {
@@ -2808,6 +2914,119 @@ fn policy_write_plan(
         requested,
         confirm,
     })
+}
+
+fn validate_acl_nonempty(values: &[String], field: &str) -> Result<(), McpError> {
+    if values.is_empty() || values.iter().any(String::is_empty) {
+        return Err(McpError::invalid_params(
+            format!("{field} requires at least one nonempty value"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_acl_ports(values: &[u16]) -> Result<(), McpError> {
+    if values.is_empty() || values.contains(&0) {
+        return Err(McpError::invalid_params(
+            "portFilter requires ports in 1-65535",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ip_acl_endpoint(endpoint: &IpAclRuleEndpoint) -> Result<(), McpError> {
+    match endpoint {
+        IpAclRuleEndpoint::IpAddressesOrSubnets {
+            ip_addresses_or_subnets,
+            port_filter,
+        } => {
+            validate_acl_nonempty(ip_addresses_or_subnets, "ipAddressesOrSubnets")?;
+            if let Some(values) = port_filter {
+                validate_acl_ports(values)?;
+            }
+        }
+        IpAclRuleEndpoint::Networks {
+            network_ids,
+            port_filter,
+        } => {
+            validate_acl_nonempty(network_ids, "networkIds")?;
+            if let Some(values) = port_filter {
+                validate_acl_ports(values)?;
+            }
+        }
+        IpAclRuleEndpoint::Ports { port_filter } => validate_acl_ports(port_filter)?,
+    }
+    Ok(())
+}
+
+fn validate_mac_acl_endpoint(endpoint: &MacAclRuleEndpoint) -> Result<(), McpError> {
+    let MacAclRuleEndpoint::MacAddresses {
+        mac_addresses,
+        prefix_length,
+    } = endpoint;
+    validate_acl_nonempty(mac_addresses, "macAddresses")?;
+    if prefix_length.is_some_and(|value| !(1..=48).contains(&value)) {
+        return Err(McpError::invalid_params("prefixLength must be 1-48", None));
+    }
+    Ok(())
+}
+
+fn validate_acl_rule_request(rule: &AclRuleRequest) -> Result<(), McpError> {
+    let (name, device_filter) = match rule {
+        AclRuleRequest::Ipv4 {
+            name,
+            source_filter,
+            destination_filter,
+            protocol_filter,
+            enforcing_device_filter,
+            ..
+        } => {
+            if let Some(filter) = source_filter {
+                validate_ip_acl_endpoint(filter)?;
+            }
+            if let Some(filter) = destination_filter {
+                validate_ip_acl_endpoint(filter)?;
+            }
+            if protocol_filter.as_ref().is_some_and(Vec::is_empty) {
+                return Err(McpError::invalid_params(
+                    "protocolFilter requires at least one protocol",
+                    None,
+                ));
+            }
+            (name, enforcing_device_filter)
+        }
+        AclRuleRequest::Mac {
+            name,
+            network_id_filter,
+            source_filter,
+            destination_filter,
+            enforcing_device_filter,
+            ..
+        } => {
+            if network_id_filter.is_empty() {
+                return Err(McpError::invalid_params(
+                    "networkIdFilter must be nonempty",
+                    None,
+                ));
+            }
+            if let Some(filter) = source_filter {
+                validate_mac_acl_endpoint(filter)?;
+            }
+            if let Some(filter) = destination_filter {
+                validate_mac_acl_endpoint(filter)?;
+            }
+            (name, enforcing_device_filter)
+        }
+    };
+    if name.is_empty() {
+        return Err(McpError::invalid_params("name must be nonempty", None));
+    }
+    if let Some(AclRuleDeviceFilter::Devices { device_ids }) = device_filter {
+        validate_acl_nonempty(device_ids, "deviceIds")?;
+    }
+    Ok(())
 }
 
 fn validate_dns_policy_request(policy: &DnsPolicyRequest) -> Result<(), McpError> {
@@ -4067,6 +4286,9 @@ impl ToolSpec {
             ToolKind::NetworkPolicyDetail => {
                 tool::<NetworkPolicyDetailInput, NetworkPolicyDetailOutput>(self)
             }
+            ToolKind::AclRulesConfigure => {
+                tool::<AclRulesConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
             ToolKind::DnsPoliciesConfigure => {
                 tool::<DnsPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
@@ -4405,6 +4627,7 @@ impl UnifiMcp {
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
+            ToolKind::AclRulesConfigure => self.acl_rules_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
             ToolKind::TrafficListsConfigure => self.traffic_lists_configure(params).await,
             ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
@@ -7409,6 +7632,29 @@ impl UnifiMcp {
             .transpose()?;
         let plan = policy_write_plan(
             NetworkPolicyKind::DnsPolicies,
+            input.operation,
+            input.id,
+            requested,
+            input.confirm,
+        )?;
+        self.network_policy_write(plan).await
+    }
+
+    async fn acl_rules_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<AclRulesConfigureInput>(params)?;
+        let requested = input
+            .rule
+            .map(|rule| {
+                validate_acl_rule_request(&rule)?;
+                serde_json::to_value(rule)
+                    .map_err(|error| McpError::invalid_params(error.to_string(), None))
+            })
+            .transpose()?;
+        let plan = policy_write_plan(
+            NetworkPolicyKind::AclRules,
             input.operation,
             input.id,
             requested,
@@ -11919,8 +12165,12 @@ fn parse<T: DeserializeOwned>(params: &CallToolRequestParams) -> Result<T, McpEr
         .arguments
         .clone()
         .map_or_else(|| Value::Object(Map::new()), Value::Object);
-    serde_json::from_value(value)
-        .map_err(|_| McpError::invalid_params("arguments do not match the advertised schema", None))
+    serde_json::from_value(value).map_err(|error| {
+        McpError::invalid_params(
+            format!("arguments do not match the advertised schema: {error}"),
+            None,
+        )
+    })
 }
 
 pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
@@ -13597,6 +13847,7 @@ mod tests {
         ("devices.control", false, false, true),
         ("devices.adopt", false, true, true),
         ("devices.remove", false, false, true),
+        ("acl.rules.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.

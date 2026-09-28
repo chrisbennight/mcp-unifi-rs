@@ -151,10 +151,13 @@ response with a separate diagnostic. The detail tool accepts `kind` and the
 official `id`, returning the complete record. A large record is carried in
 MCP content and marked by `recordInContent`.
 
-`dns.policies.configure` and `traffic.matching_lists.configure` accept
+`acl.rules.configure`, `dns.policies.configure`, and
+`traffic.matching_lists.configure` accept
 `operation` (`create`, `update`, or `delete`) and preview by default. Create
-requires `policy` or `list`; update also requires `id`; delete requires `id`
-without a request body. Set `confirm: true` to submit. DNS requests cover A,
+requires `rule`, `policy`, or `list` respectively; update also requires `id`;
+delete requires `id` without a request body. Set `confirm: true` to submit.
+ACL rules cover the documented IPv4 and MAC variants, with typed source,
+destination, protocol, network, and enforcing device filters. DNS requests cover A,
 AAAA, CNAME, forwarding, MX, SRV, and TXT policies. Traffic lists cover IPv4
 addresses, IPv6 addresses, and ports, including the documented item variants.
 The tool returns the complete accepted controller record and HTTP status for
@@ -603,6 +606,7 @@ it.
 | `devices.control` | no | no | yes |
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
+| `acl.rules.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |

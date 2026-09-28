@@ -373,7 +373,7 @@ impl IntegrationClient {
         self.get_json(&segments, &[]).await
     }
 
-    /// Create a DNS policy or traffic matching list. The complete accepted
+    /// Create an ACL rule, DNS policy, or traffic matching list. The complete accepted
     /// record and HTTP status are retained; an ambiguous transport result is
     /// never retried.
     ///
@@ -390,7 +390,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Replace one DNS policy or traffic matching list by id. The complete
+    /// Replace one ACL rule, DNS policy, or traffic matching list by id. The complete
     /// accepted record and HTTP status are retained; an ambiguous transport
     /// result is never retried.
     ///
@@ -408,7 +408,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Delete one DNS policy or traffic matching list by id. The accepted
+    /// Delete one ACL rule, DNS policy, or traffic matching list by id. The accepted
     /// status and body are retained even though the API documents no success
     /// body. An ambiguous transport result is never retried.
     ///
