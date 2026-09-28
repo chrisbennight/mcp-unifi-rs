@@ -596,16 +596,16 @@ async fn camera_settings_preview_does_not_patch() {
 }
 
 #[tokio::test]
-async fn camera_settings_detects_an_unrequested_change() {
+async fn camera_settings_detects_a_newly_reported_nested_field() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
     let before = serde_json::json!({
         "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
-        "videoMode": "default", "hdrType": "auto"
+        "videoMode": "default", "osdSettings": {"isNameEnabled": true}
     });
     let after = serde_json::json!({
         "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
-        "videoMode": "highFps", "hdrType": "off"
+        "videoMode": "default", "osdSettings": {"isNameEnabled": false, "isDateEnabled": false}
     });
     Mock::given(method("GET"))
         .and(path(format!("{PROTECT}/cameras/cam-front")))
@@ -620,7 +620,9 @@ async fn camera_settings_detects_an_unrequested_change() {
         .await;
     Mock::given(method("PATCH"))
         .and(path(format!("{PROTECT}/cameras/cam-front")))
-        .and(body_json(serde_json::json!({"videoMode": "highFps"})))
+        .and(body_json(
+            serde_json::json!({"osdSettings": {"isNameEnabled": false}}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(&after))
         .expect(1)
         .mount(&server)
@@ -630,7 +632,7 @@ async fn camera_settings_detects_an_unrequested_change() {
             &call(
                 "cameras.settings.update",
                 &serde_json::json!({
-                    "camera": "cam-front", "changes": {"videoMode": "highFps"}, "confirm": true
+                    "camera": "cam-front", "changes": {"osdSettings": {"isNameEnabled": false}}, "confirm": true
                 }),
             ),
             None,
@@ -641,8 +643,12 @@ async fn camera_settings_detects_an_unrequested_change() {
         .expect("structured");
     assert_eq!(output["applied"], true);
     assert_eq!(output["verified"], false);
-    assert_eq!(output["before"]["hdrType"], "auto");
-    assert_eq!(output["after"]["hdrType"], "off");
+    assert!(
+        output["before"]["osdSettings"]
+            .get("isDateEnabled")
+            .is_none()
+    );
+    assert_eq!(output["after"]["osdSettings"]["isDateEnabled"], false);
 }
 
 #[tokio::test]

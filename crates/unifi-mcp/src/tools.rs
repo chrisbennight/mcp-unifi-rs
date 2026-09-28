@@ -5662,21 +5662,25 @@ fn camera_settings_values_match(requested: Option<&Value>, before: &Value, after
         let Some(new) = after.as_object() else {
             return false;
         };
-        let old = before.as_object();
+        let Some(old) = before.as_object() else {
+            return false;
+        };
         return fields.iter().all(|(key, wanted)| {
             new.get(key).is_some_and(|observed| {
                 camera_settings_values_match(
                     Some(wanted),
-                    old.and_then(|fields| fields.get(key))
-                        .unwrap_or(&Value::Null),
+                    old.get(key).unwrap_or(&Value::Null),
                     observed,
                 )
             })
-        }) && old.is_none_or(|old| {
-            old.iter()
+        }) && old
+            .iter()
+            .filter(|(key, _)| !fields.contains_key(*key))
+            .all(|(key, old_value)| new.get(key) == Some(old_value))
+            && new
+                .iter()
                 .filter(|(key, _)| !fields.contains_key(*key))
-                .all(|(key, old_value)| new.get(key) == Some(old_value))
-        });
+                .all(|(key, new_value)| old.get(key) == Some(new_value));
     }
     match requested {
         Some(value) => after == value,
