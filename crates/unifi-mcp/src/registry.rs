@@ -45,6 +45,7 @@ pub enum ToolKind {
     ProtectDevicesStatus,
     ProtectUsersList,
     ProtectUsersStatus,
+    CamerasPosTransaction,
     CamerasSettingsRead,
     CamerasSettingsUpdate,
     CamerasSnapshot,
@@ -91,6 +92,7 @@ impl ToolKind {
             | Self::CamerasSettingsUpdate
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
+            | Self::CamerasPosTransaction
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -139,6 +141,7 @@ impl ToolKind {
             | Self::CamerasStreamsList
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
+            | Self::CamerasPosTransaction
             | Self::ProtectOverview
             | Self::ProtectEvents
             | Self::ProtectEventThumbnail => ToolSurface::Protect,
@@ -400,6 +403,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.users.status",
         "Read the complete Protect or UniFi Identity user record by documented family and exact id.",
     ),
+    write_spec(
+        ToolKind::CamerasPosTransaction,
+        "cameras.pos.transaction",
+        "Preview or submit one documented Protect point-of-sale transaction for a camera id. Returns the complete accepted event result, including created and eventId when reported.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
@@ -651,6 +662,7 @@ mod tests {
         ToolKind::ProtectDevicesStatus,
         ToolKind::ProtectUsersList,
         ToolKind::ProtectUsersStatus,
+        ToolKind::CamerasPosTransaction,
         ToolKind::CamerasSettingsRead,
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
@@ -680,6 +692,19 @@ mod tests {
     ];
 
     #[test]
+    fn pos_transaction_classifies_the_write_and_both_data_directions() {
+        let spec = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.kind == ToolKind::CamerasPosTransaction)
+            .expect("POS transaction tool");
+        assert_eq!(spec.risk, "high");
+        assert!(spec.behavior.destructive);
+        assert!(!spec.behavior.idempotent);
+        assert!(spec.behavior.input_sensitive);
+        assert!(spec.behavior.result_sensitive);
+    }
+
+    #[test]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
             // Exhaustiveness anchor: a new variant must be added here or the
@@ -701,6 +726,7 @@ mod tests {
                 | ToolKind::ProtectDevicesStatus
                 | ToolKind::ProtectUsersList
                 | ToolKind::ProtectUsersStatus
+                | ToolKind::CamerasPosTransaction
                 | ToolKind::CamerasSettingsRead
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
@@ -762,6 +788,7 @@ mod tests {
                 "protect.devices.status",
                 "protect.users.list",
                 "protect.users.status",
+                "cameras.pos.transaction",
                 "cameras.settings.read",
                 "cameras.settings.update",
                 "cameras.snapshot",

@@ -301,6 +301,31 @@ while an empty inventory has `totalCount: 0`. The upstream endpoints return
 complete arrays; this server pages the bounded response locally. If a page
 exceeds the MCP result budget, lower `limit`.
 
+### `cameras.pos.transaction`
+
+This tool previews and, when `confirm` is true, submits one point-of-sale
+transaction for an exact Protect camera id through the API documented in
+Protect 7.3.53. Consoles without this route return their upstream error. The
+`transaction` object accepts the documented `type` (`sale` or `refund`),
+`externalId`, and nonnegative `amount`, plus optional `currency`, `lineItems`,
+`location`, `paymentTypes`, and `timestamp`. Preview returns the complete
+request without posting it. If that request exceeds the structured-result
+budget, the complete transaction is returned in content with
+`transactionInContent: true`. A confirmed call returns the complete accepted
+controller result in `response`,
+including `created` and `eventId` when present. Large accepted results are
+returned in an additional content block with `responseInContent: true`. A
+200 response establishes a recorded event; it does not establish that video
+exists for the transaction window. The upstream API allows timestamps in the
+preceding 24 hours and up to five minutes ahead of its clock; it may clamp
+allowed future values to now.
+
+The upstream `externalId` behavior is best-effort idempotency for one camera
+within a short in-memory window. It can create a duplicate after a restart or
+after that window. The server never retries a POST after an ambiguous transport
+result. An upstream 409 in-progress conflict retains its status and complete
+body. Input and result sensitivity metadata tells the gateway what to govern.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It

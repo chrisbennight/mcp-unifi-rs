@@ -579,6 +579,72 @@ struct ProtectUsersStatusOutput {
     user: Value,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum PosTransactionType {
+    Sale,
+    Refund,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PosLineItem {
+    title: String,
+    quantity: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PosLocation {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PosTransaction {
+    #[serde(rename = "type")]
+    transaction_type: PosTransactionType,
+    external_id: String,
+    amount: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    currency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_items: Option<Vec<PosLineItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<PosLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraPosTransactionInput {
+    camera_id: String,
+    transaction: PosTransaction,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraPosTransactionOutput {
+    camera_id: String,
+    effect: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transaction: Option<PosTransaction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transaction_in_content: Option<bool>,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
@@ -2581,6 +2647,9 @@ impl ToolSpec {
             ToolKind::ProtectUsersStatus => {
                 tool::<ProtectUsersStatusInput, ProtectUsersStatusOutput>(self)
             }
+            ToolKind::CamerasPosTransaction => {
+                tool::<CameraPosTransactionInput, CameraPosTransactionOutput>(self)
+            }
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -2847,6 +2916,7 @@ impl UnifiMcp {
             ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
             ToolKind::ProtectUsersList => self.protect_users_list(params).await,
             ToolKind::ProtectUsersStatus => self.protect_users_status(params).await,
+            ToolKind::CamerasPosTransaction => self.cameras_pos_transaction(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
@@ -3550,6 +3620,74 @@ impl UnifiMcp {
             kind: input.kind,
             user,
         })
+    }
+
+    async fn cameras_pos_transaction(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraPosTransactionInput>(params)?;
+        if input.camera_id.is_empty()
+            || input.camera_id.len() > 256
+            || matches!(input.camera_id.as_str(), "." | "..")
+        {
+            return Err(McpError::invalid_params(
+                "cameraId must be a nonempty, non-dot id of at most 256 bytes",
+                None,
+            ));
+        }
+        validate_pos_transaction(&input.transaction)?;
+        let request = serde_json::to_value(&input.transaction)
+            .map_err(|_| McpError::internal_error("POS transaction could not be encoded", None))?;
+        let mut output = CameraPosTransactionOutput {
+            camera_id: input.camera_id.clone(),
+            effect: "Record a transaction as a camera event; video for its window is not confirmed",
+            transaction: Some(input.transaction),
+            transaction_in_content: None,
+            submitted: false,
+            response: None,
+            response_in_content: None,
+        };
+        if !input.confirm {
+            let preview = structured(&output)?;
+            if preview
+                .structured_content
+                .as_ref()
+                .is_none_or(|value| value.to_string().len() <= MAXIMUM_RESULT_BYTES)
+            {
+                return Ok(preview);
+            }
+            output.transaction = None;
+            output.transaction_in_content = Some(true);
+            let mut result = structured(output)?;
+            result
+                .content
+                .push(ContentBlock::text(format!("transaction: {request}")));
+            return Ok(result);
+        }
+        let response = self
+            .protect()
+            .camera_pos_transaction(&output.camera_id, &request)
+            .await
+            .map_err(api_error)?;
+        output.transaction = None;
+        output.submitted = true;
+        output.response = Some(response);
+        let full = structured(&output)?;
+        if full
+            .structured_content
+            .as_ref()
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        {
+            let response = output.response.take().expect("accepted response exists");
+            output.response_in_content = Some(true);
+            let mut result = structured(output)?;
+            result
+                .content
+                .push(ContentBlock::text(format!("response: {response}")));
+            return Ok(result);
+        }
+        structured(output)
     }
 
     /// One camera by id or exact name.
@@ -6816,6 +6954,75 @@ fn validate_stream_quality_selection(qualities: &[StreamQuality]) -> Result<(), 
     Ok(())
 }
 
+fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError> {
+    fn text_length(value: &str, name: &str) -> Result<(), McpError> {
+        if !(1..=255).contains(&value.chars().count()) {
+            return Err(McpError::invalid_params(
+                format!("{name} must contain 1-255 characters"),
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    text_length(&transaction.external_id, "externalId")?;
+    if !transaction.amount.is_finite() || transaction.amount < 0.0 {
+        return Err(McpError::invalid_params(
+            "amount must be a nonnegative finite number",
+            None,
+        ));
+    }
+    if let Some(currency) = &transaction.currency
+        && (currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()))
+    {
+        return Err(McpError::invalid_params(
+            "currency must be three uppercase letters",
+            None,
+        ));
+    }
+    if let Some(items) = &transaction.line_items {
+        if items.len() > 200 {
+            return Err(McpError::invalid_params(
+                "lineItems must contain at most 200 entries",
+                None,
+            ));
+        }
+        for item in items {
+            text_length(&item.title, "lineItems.title")?;
+            if item.quantity == 0 {
+                return Err(McpError::invalid_params(
+                    "lineItems.quantity must be at least 1",
+                    None,
+                ));
+            }
+        }
+    }
+    if let Some(location) = &transaction.location {
+        text_length(&location.id, "location.id")?;
+        if let Some(name) = &location.name {
+            text_length(name, "location.name")?;
+        }
+    }
+    if let Some(payment_types) = &transaction.payment_types {
+        if payment_types.len() > 20 {
+            return Err(McpError::invalid_params(
+                "paymentTypes must contain at most 20 entries",
+                None,
+            ));
+        }
+        for payment_type in payment_types {
+            text_length(payment_type, "paymentTypes entry")?;
+        }
+    }
+    if transaction.timestamp == Some(0) {
+        return Err(McpError::invalid_params(
+            "timestamp must be a positive epoch millisecond value",
+            None,
+        ));
+    }
+    Ok(())
+}
+
 fn stream_url_for(urls: &ProtectStreamUrls, quality: StreamQuality) -> Option<&str> {
     match quality {
         StreamQuality::High => urls.high.as_deref(),
@@ -9172,6 +9379,9 @@ mod tests {
         ("firewall.policies.update", true, false, true),
         // Repeating deletion leaves the policy absent.
         ("firewall.policies.delete", true, false, true),
+        // The upstream idempotency window is short and resets on restart;
+        // transaction details and event results can contain sensitive data.
+        ("cameras.pos.transaction", false, true, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.
