@@ -136,6 +136,28 @@ async fn failed_source_retains_the_controller_response_beside_successful_reports
 }
 
 #[tokio::test]
+async fn rate_limited_source_retains_the_controller_status_and_body() {
+    let (server, client) = setup().await;
+    let failure = format!("try later: {}rate-limit-tail", "x".repeat(700));
+    fixed_sources(
+        &server,
+        429,
+        failure.clone(),
+        r#"{"meta":{"rc":"ok"},"data":[]}"#.to_owned(),
+    )
+    .await;
+    let snapshot = client
+        .collect_traffic("default", ActivityWindow::new(START, END).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.graph.status, SourceStatus::Failed);
+    assert_eq!(
+        snapshot.graph.error,
+        Some(format!("controller returned HTTP 429: {failure}"))
+    );
+}
+
+#[tokio::test]
 async fn malformed_wan_response_retains_the_controller_body() {
     let (server, client) = setup().await;
     let malformed = format!("not JSON {}wan-error-tail", "x".repeat(700));
