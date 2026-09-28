@@ -151,6 +151,34 @@ impl IntegrationClient {
             .await
     }
 
+    /// Page through Wi-Fi broadcasts as the official Network API reports them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn wifi_broadcasts(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<Map<String, Value>>, ApiError> {
+        self.get_json(&["sites", site_id, "wifi", "broadcasts"], &page_query(page))
+            .await
+    }
+
+    /// Complete fields for one Wi-Fi broadcast from the official Network API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn wifi_broadcast(
+        &self,
+        site_id: &str,
+        broadcast_id: &str,
+    ) -> Result<Map<String, Value>, ApiError> {
+        self.get_json(&["sites", site_id, "wifi", "broadcasts", broadcast_id], &[])
+            .await
+    }
+
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the request or decoding fails.

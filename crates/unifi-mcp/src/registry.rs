@@ -37,6 +37,8 @@ pub enum ToolKind {
     FirewallRead,
     NetworksRead,
     RadiusProfilesList,
+    WifiBroadcastsList,
+    WifiBroadcastsStatus,
     CamerasSearch,
     CamerasStatus,
     CamerasSettingsRead,
@@ -95,6 +97,8 @@ impl ToolKind {
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::RadiusProfilesList
+            | Self::WifiBroadcastsList
+            | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
             | Self::CamerasStatus
             | Self::CamerasSettingsRead
@@ -134,6 +138,8 @@ impl ToolKind {
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::RadiusProfilesList
+            | Self::WifiBroadcastsList
+            | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
@@ -459,6 +465,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "radius_profiles.list",
         "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
     ),
+    sensitive_read_spec(
+        ToolKind::WifiBroadcastsList,
+        "wifi.broadcasts.list",
+        "Page through Wi-Fi broadcasts from the official Network API. Returns every controller field in each selected row with page metadata and a continuation offset.",
+    ),
+    sensitive_read_spec(
+        ToolKind::WifiBroadcastsStatus,
+        "wifi.broadcasts.status",
+        "Read one Wi-Fi broadcast by its official id, returning the complete controller record including security and network configuration fields.",
+    ),
     write_spec(
         ToolKind::WlansUpdate,
         "wlans.update",
@@ -595,6 +611,8 @@ mod tests {
         ToolKind::FirewallRead,
         ToolKind::NetworksRead,
         ToolKind::RadiusProfilesList,
+        ToolKind::WifiBroadcastsList,
+        ToolKind::WifiBroadcastsStatus,
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
         ToolKind::CamerasSettingsRead,
@@ -639,6 +657,8 @@ mod tests {
                 | ToolKind::FirewallRead
                 | ToolKind::NetworksRead
                 | ToolKind::RadiusProfilesList
+                | ToolKind::WifiBroadcastsList
+                | ToolKind::WifiBroadcastsStatus
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
                 | ToolKind::CamerasSettingsRead

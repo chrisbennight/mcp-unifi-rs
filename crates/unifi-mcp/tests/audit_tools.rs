@@ -159,6 +159,80 @@ async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
     );
 }
 
+#[tokio::test]
+async fn wifi_broadcasts_list_and_status_return_complete_controller_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
+        })))
+        .mount(&server)
+        .await;
+    let detail = serde_json::json!({
+        "id": "wifi-1", "type": "STANDARD", "name": "Studio",
+        "securityConfiguration": {"type": "WPA2_ENTERPRISE", "radiusConfiguration": {"profileId": "radius-1"}},
+        "controllerExtension": {"value": "from-controller"}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/wifi/broadcasts"
+        )))
+        .and(query_param("offset", "0"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 1, "count": 1, "totalCount": 2,
+            "data": [detail.clone()]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/wifi/broadcasts/wifi-1"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(detail))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server);
+    let page = handler
+        .call(
+            &call("wifi.broadcasts.list", &serde_json::json!({"limit": 1})),
+            None,
+        )
+        .await
+        .expect("broadcast page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(page["broadcasts"][0]["id"], "wifi-1");
+    assert_eq!(page["nextOffset"], 1);
+    assert_eq!(
+        page["broadcasts"][0]["controllerExtension"]["value"],
+        "from-controller"
+    );
+
+    let record = handler
+        .call(
+            &call(
+                "wifi.broadcasts.status",
+                &serde_json::json!({"broadcastId": "wifi-1"}),
+            ),
+            None,
+        )
+        .await
+        .expect("broadcast detail")
+        .structured_content
+        .expect("structured");
+    assert_eq!(
+        record["securityConfiguration"]["radiusConfiguration"]["profileId"],
+        "radius-1"
+    );
+    assert_eq!(record["controllerExtension"]["value"], "from-controller");
+}
+
 async fn common_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
