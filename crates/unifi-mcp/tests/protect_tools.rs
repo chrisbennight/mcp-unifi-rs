@@ -968,6 +968,90 @@ async fn camera_lcd_message_keeps_null_timeout_and_complete_controller_records()
 }
 
 #[tokio::test]
+async fn camera_lcd_verifies_when_previous_message_is_absent_and_default_expiry_is_added() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED"
+    });
+    let after = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED",
+        "lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .and(body_json(
+            serde_json::json!({"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome"}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(&call("cameras.settings.update", &serde_json::json!({
+            "camera":"cam-front", "changes":{"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome"}}, "confirm":true
+        })), None)
+        .await
+        .expect("LCD message updated")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn camera_lcd_verifies_equivalent_integer_and_decimal_reset_times() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED"
+    });
+    let after = serde_json::json!({
+        "id":"cam-front", "modelKey":"camera", "name":"Front Door", "state":"CONNECTED",
+        "lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .and(body_json(serde_json::json!({"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456.0}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(&call("cameras.settings.update", &serde_json::json!({
+            "camera":"cam-front", "changes":{"lcdMessage":{"type":"CUSTOM_MESSAGE","text":"Welcome","resetAt":123_456.0}}, "confirm":true
+        })), None)
+        .await
+        .expect("LCD message updated")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true);
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn camera_settings_read_moves_large_complete_record_to_content() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;

@@ -44,6 +44,7 @@ fn call(arguments: Value) -> CallToolRequestParams {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn documented_device_settings_use_fixed_routes_typed_bodies_and_readback() {
     let cases = [
         (
@@ -51,6 +52,18 @@ async fn documented_device_settings_use_fixed_routes_typed_bodies_and_readback()
             "lights",
             json!({"kind":"light","name":"Front","isLightForceEnabled":true,"lightModeSettings":{"mode":"motion","enableAt":"dark"},"lightDeviceSettings":{"isIndicatorEnabled":false,"pirDuration":30000,"pirSensitivity":50,"ledLevel":4}}),
             json!({"name":"Front","isLightForceEnabled":true,"lightModeSettings":{"mode":"motion","enableAt":"dark"},"lightDeviceSettings":{"isIndicatorEnabled":false,"pirDuration":30000.0,"pirSensitivity":50.0,"ledLevel":4.0}}),
+        ),
+        (
+            "sensor",
+            "sensors",
+            json!({"kind":"sensor","name":"Window","lightSettings":{"isEnabled":true,"lowThreshold":null,"highThreshold":100},"humiditySettings":{"lowThreshold":30},"temperatureSettings":{"lowThreshold":-10},"motionSettings":{"sensitivity":50},"glassBreakSettings":{"sensitivityWhenArmed":80},"scheduleMode":"when_armed","armProfileIds":null,"hasCustomSensitivityWhenArmed":true,"alarmSettings":{"isEnabled":true}}),
+            json!({"name":"Window","lightSettings":{"isEnabled":true,"lowThreshold":null,"highThreshold":100.0},"humiditySettings":{"lowThreshold":30.0},"temperatureSettings":{"lowThreshold":-10.0},"motionSettings":{"sensitivity":50.0},"glassBreakSettings":{"sensitivityWhenArmed":80.0},"scheduleMode":"when_armed","armProfileIds":null,"hasCustomSensitivityWhenArmed":true,"alarmSettings":{"isEnabled":true}}),
+        ),
+        (
+            "chime",
+            "chimes",
+            json!({"kind":"chime","name":"Hall Chime","cameraIds":["camera-1"],"ringSettings":[{"cameraId":"camera-1","repeatTimes":3,"ringtoneId":"tone-1","volume":80}]}),
+            json!({"name":"Hall Chime","cameraIds":["camera-1"],"ringSettings":[{"cameraId":"camera-1","repeatTimes":3.0,"ringtoneId":"tone-1","volume":80.0}]}),
         ),
         (
             "siren",
@@ -291,4 +304,66 @@ async fn accepted_patch_keeps_large_body_and_complete_readback_error() {
         ContentBlock::Text(text) if text.text.contains(&accepted)
     )));
     server.verify().await;
+}
+
+#[tokio::test]
+async fn sensor_nullable_fields_distinguish_clear_from_omission() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sensors/device-1")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"id":"device-1","name":"Old"})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    let omitted = handler
+        .call(
+            &call(json!({"deviceId":"device-1","changes":{"kind":"sensor","name":"New"}})),
+            None,
+        )
+        .await
+        .expect("omitted fields preview")
+        .structured_content
+        .expect("structured result");
+    assert_eq!(omitted["requested"], json!({"name":"New"}));
+    let cleared = handler
+        .call(&call(json!({"deviceId":"device-1","changes":{"kind":"sensor","armProfileIds":null,"lightSettings":{"lowThreshold":null}}})), None)
+        .await
+        .expect("explicit clear preview")
+        .structured_content
+        .expect("structured result");
+    assert_eq!(
+        cleared["requested"],
+        json!({"armProfileIds":null,"lightSettings":{"lowThreshold":null}})
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn invalid_sensor_and_chime_ranges_send_no_request() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for changes in [
+        json!({"kind":"sensor","humiditySettings":{"lowThreshold":100}}),
+        json!({"kind":"sensor","motionSettings":{"sensitivityWhenArmed":101}}),
+        json!({"kind":"sensor","armProfileIds":vec!["x"; 33]}),
+        json!({"kind":"chime","ringSettings":[{"cameraId":"camera-1","repeatTimes":0,"ringtoneId":"tone-1","volume":50}]}),
+    ] {
+        handler
+            .call(
+                &call(json!({"deviceId":"device-1","changes":changes,"confirm":true})),
+                None,
+            )
+            .await
+            .expect_err("documented range");
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }

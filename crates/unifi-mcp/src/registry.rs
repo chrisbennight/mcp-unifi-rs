@@ -446,7 +446,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::ProtectDevicesSettingsUpdate,
         "protect.devices.settings.update",
-        "Preview or patch documented settings for one Protect light, siren, relay, speaker, fob, bridge, link station, or alarm hub by exact id. Returns the accepted controller body and complete readback.",
+        "Preview or patch documented settings for one non-camera Protect device by exact family and id, including sensors and chimes. Returns the accepted controller body and complete readback.",
         ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
