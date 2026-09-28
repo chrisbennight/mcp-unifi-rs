@@ -18,6 +18,24 @@ impl LegacyClient {
         site: &str,
         window: ActivityWindow,
     ) -> Result<ActivityRead<ActivityReport>, ApiError> {
+        self.activity_with_response(site, window)
+            .await
+            .map(|read| match read {
+                ActivityRead::Reported((report, _)) => ActivityRead::Reported(report),
+                ActivityRead::Unsupported { response } => ActivityRead::Unsupported { response },
+                ActivityRead::Unrecognized => ActivityRead::Unrecognized,
+            })
+    }
+
+    /// Read Activity totals with the complete accepted response for callers
+    /// that perform further validation of controller-reported counters.
+    /// # Errors
+    /// Session, transport, permission, and response-size failures remain errors.
+    pub async fn activity_with_response(
+        &self,
+        site: &str,
+        window: ActivityWindow,
+    ) -> Result<ActivityRead<(ActivityReport, Vec<u8>)>, ApiError> {
         let (result, bytes) = self.activity_read_with_bytes(site, window, false).await?;
         match result {
             ActivityRead::Reported(report) if !ActivityReport::validate(&report) => {
@@ -26,7 +44,9 @@ impl LegacyClient {
                 )
                 .with_controller_response(&bytes))
             }
-            other => Ok(other),
+            ActivityRead::Reported(report) => Ok(ActivityRead::Reported((report, bytes))),
+            ActivityRead::Unsupported { response } => Ok(ActivityRead::Unsupported { response }),
+            ActivityRead::Unrecognized => Ok(ActivityRead::Unrecognized),
         }
     }
 

@@ -304,20 +304,30 @@ async fn bounds_duplicates_and_overflow_fail_loudly() {
         .push(first);
     let mut overflow = fixture();
     overflow["client_usage_by_app"][0]["usage_by_app"][0]["bytes_received"] = json!(u64::MAX);
+    for mut data in [duplicate_client, duplicate_app, overflow] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        data["z_controller_field"] = json!(format!("{}original-tail", "x".repeat(700)));
+        let original_body = data.to_string();
+        activity_mock(&server, data).await;
+        let error = handler_for(&server)
+            .call(&call("stats.query", &args("clientWanHistory")), None)
+            .await
+            .expect_err("invalid counters");
+        assert!(error.message.contains(&original_body), "{}", error.message);
+    }
+    let server = MockServer::start().await;
+    login_mock(&server).await;
     let mut oversized = fixture();
     oversized["client_usage_by_app"] =
         json!(vec![fixture()["client_usage_by_app"][0].clone(); 1001]);
-    for data in [duplicate_client, duplicate_app, overflow, oversized] {
-        let server = MockServer::start().await;
-        login_mock(&server).await;
-        activity_mock(&server, data).await;
-        assert!(
-            handler_for(&server)
-                .call(&call("stats.query", &args("clientWanHistory")), None)
-                .await
-                .is_err()
-        );
-    }
+    activity_mock(&server, oversized).await;
+    assert!(
+        handler_for(&server)
+            .call(&call("stats.query", &args("clientWanHistory")), None)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
