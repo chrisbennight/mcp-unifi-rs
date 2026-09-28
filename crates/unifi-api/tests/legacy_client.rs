@@ -61,6 +61,30 @@ fn jpeg_fixture() -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn a_legacy_decode_failure_keeps_the_controller_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/api/s/default/rest/wlanconf"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"meta":{"rc":"ok"},"data":"changed payload"}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server)
+        .wlans("default")
+        .await
+        .expect_err("incompatible response");
+    assert!(error.to_string().contains("changed payload"), "{error}");
+}
+
+#[tokio::test]
 async fn protect_event_thumbnail_returns_the_authenticated_jpeg() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

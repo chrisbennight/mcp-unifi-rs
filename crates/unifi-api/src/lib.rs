@@ -10,9 +10,9 @@
 //!   legacy controller API, used only for capabilities the official API
 //!   lacks.
 //!
-//! Responses decode into allowlisted typed models that tolerate unknown
-//! upstream fields, and upstream error bodies never cross this crate's
-//! boundary beyond a bounded message.
+//! Responses decode into typed models that tolerate unknown upstream fields.
+//! Controller error bodies and failed decode bodies remain available as
+//! bounded text.
 //!
 //! The [`collection`] interface also preserves complete fixed traffic reports
 //! for direct export to operator-owned storage. These records are not MCP
