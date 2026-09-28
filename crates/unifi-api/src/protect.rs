@@ -16,7 +16,7 @@ use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::error::Category;
+use serde_json::{Value, error::Category};
 use tracing::{debug, warn};
 use url::Url;
 use zeroize::Zeroizing;
@@ -26,6 +26,38 @@ use crate::{ApiError, BoundedMessage, ControllerConfig, TlsMode, http};
 /// Path prefix every request lives under on the console origin.
 const PREFIX: [&str; 4] = ["proxy", "protect", "integration", "v1"];
 const MAXIMUM_DEVICE_IDENTIFIER_BYTES: usize = 256;
+
+/// Documented non-camera device families in the Protect integration API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectDeviceFamily {
+    Light,
+    Sensor,
+    Chime,
+    Siren,
+    Fob,
+    Relay,
+    Speaker,
+    Bridge,
+    LinkStation,
+    AlarmHub,
+}
+
+impl ProtectDeviceFamily {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Light => "lights",
+            Self::Sensor => "sensors",
+            Self::Chime => "chimes",
+            Self::Siren => "sirens",
+            Self::Fob => "fobs",
+            Self::Relay => "relays",
+            Self::Speaker => "speakers",
+            Self::Bridge => "bridges",
+            Self::LinkStation => "link-stations",
+            Self::AlarmHub => "alarm-hubs",
+        }
+    }
+}
 
 /// What the console reported about its Protect application.
 #[derive(Debug, Clone, Deserialize)]
@@ -604,6 +636,39 @@ impl ProtectClient {
         .await
     }
 
+    /// Read one documented non-camera device family without discarding fields
+    /// that differ across Protect models or application releases.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn devices(&self, family: ProtectDeviceFamily) -> Result<Vec<Value>, ApiError> {
+        self.get_json_validated(&[family.path()], |devices: &Vec<Value>| {
+            for device in devices {
+                validate_device_record("protect.devices", device, None)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Read a specific non-camera device and retain all controller fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn device(
+        &self,
+        family: ProtectDeviceFamily,
+        device_id: &str,
+    ) -> Result<Value, ApiError> {
+        validate_identifier("protect.devices.by_id", device_id)?;
+        self.get_json_validated(&[family.path(), device_id], |device: &Value| {
+            validate_device_record("protect.devices.by_id", device, Some(device_id))
+        })
+        .await
+    }
+
     /// Patch one camera's documented settings once. The caller reads back
     /// the camera to check which fields the console persisted.
     ///
@@ -1013,8 +1078,26 @@ fn endpoint_name(segments: &[&str]) -> &'static str {
         ["cameras"] => "cameras",
         ["cameras", _] => "cameras.by_id",
         ["nvrs"] => "nvrs",
+        [path] if is_device_path(path) => "protect.devices",
+        [path, _] if is_device_path(path) => "protect.devices.by_id",
         _ => "protect.integration",
     }
+}
+
+fn is_device_path(path: &str) -> bool {
+    matches!(
+        path,
+        "lights"
+            | "sensors"
+            | "chimes"
+            | "sirens"
+            | "fobs"
+            | "relays"
+            | "speakers"
+            | "bridges"
+            | "link-stations"
+            | "alarm-hubs"
+    )
 }
 
 fn parse_application_version(raw: &str) -> Option<(u16, u16, u16)> {
@@ -1082,6 +1165,30 @@ fn validate_identifier(endpoint: &'static str, id: &str) -> Result<(), ApiError>
             response: None,
         })
     }
+}
+
+fn validate_device_record(
+    endpoint: &'static str,
+    record: &Value,
+    requested_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::SchemaMismatch {
+            endpoint,
+            path: BoundedMessage::new("id"),
+            response: None,
+        })?;
+    validate_identifier(endpoint, id)?;
+    if requested_id.is_some_and(|requested| id != requested) {
+        return Err(ApiError::SchemaMismatch {
+            endpoint,
+            path: BoundedMessage::new("id"),
+            response: None,
+        });
+    }
+    Ok(())
 }
 
 fn validate_stream_qualities(qualities: &[ProtectStreamQuality]) -> Result<(), ApiError> {

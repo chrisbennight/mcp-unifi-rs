@@ -259,6 +259,21 @@ A nonempty invalid JPEG returns the accepted controller response with the
 decoder diagnostic. Non-UTF-8 bytes use base64; valid UTF-8 stays as text.
 The same behavior applies to event thumbnails.
 
+### `protect.devices.list` and `protect.devices.status`
+
+These tools read the official Protect inventory and detail endpoints for lights,
+sensors, chimes, sirens, fobs, relays, speakers, bridges, link stations, and
+alarm hubs. `kind` selects one documented family. The list accepts `offset` and
+`limit` (1-200, default 50), returns complete records for that page, and gives
+`totalCount` and `nextOffset` until the inventory is complete. The detail tool
+accepts the exact `deviceId` and returns its complete controller record.
+Controller-specific fields remain present, including fields unknown to this
+server. A wrong-id detail or malformed inventory returns the accepted response
+with a validation diagnostic. An absent API route remains an error, while an
+empty inventory has `totalCount: 0`. The upstream endpoints return complete
+arrays; this server pages the bounded response locally. If a page exceeds the
+MCP result budget, lower `limit`.
+
 `cameras.settings.read` returns the official camera name, on-screen overlay,
 LEDs, microphone volume, video mode, HDR mode, and smart detection settings.
 `cameras.settings.update` patches only the named fields from that set. It

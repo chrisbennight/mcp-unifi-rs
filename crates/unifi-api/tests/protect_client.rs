@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-use unifi_api::protect::ProtectStreamQuality;
+use unifi_api::protect::{ProtectDeviceFamily, ProtectStreamQuality};
 use unifi_api::protect::{ProtectPatrolState, ProtectPtzCommand};
 use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, TlsMode};
 use url::Url;
@@ -56,6 +56,70 @@ async fn every_request_authenticates_with_the_api_key_header() {
 
     let info = client_for(&server).info().await.expect("info");
     assert_eq!(info.application_version, "7.1.87");
+}
+
+#[tokio::test]
+async fn documented_non_camera_families_keep_full_records_on_fixed_routes() {
+    for (family, path_name) in [
+        (ProtectDeviceFamily::Light, "lights"),
+        (ProtectDeviceFamily::Sensor, "sensors"),
+        (ProtectDeviceFamily::Chime, "chimes"),
+        (ProtectDeviceFamily::Siren, "sirens"),
+        (ProtectDeviceFamily::Fob, "fobs"),
+        (ProtectDeviceFamily::Relay, "relays"),
+        (ProtectDeviceFamily::Speaker, "speakers"),
+        (ProtectDeviceFamily::Bridge, "bridges"),
+        (ProtectDeviceFamily::LinkStation, "link-stations"),
+        (ProtectDeviceFamily::AlarmHub, "alarm-hubs"),
+    ] {
+        let server = MockServer::start().await;
+        let record = serde_json::json!({
+            "id": "device-1", "modelKey": "controller-model",
+            "state": "CONNECTED", "name": "Entry",
+            "controllerSpecific": {"nested": ["value", 42]},
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{path_name}")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([record.clone()])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{path_name}/device-1")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let inventory = client.devices(family).await.expect(path_name);
+        assert_eq!(inventory, vec![record.clone()]);
+        let detail = client.device(family, "device-1").await.expect(path_name);
+        assert_eq!(detail, record);
+    }
+}
+
+#[tokio::test]
+async fn non_camera_detail_identity_failure_keeps_the_accepted_body() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!({
+        "id": "another-device", "modelKey": "sensor",
+        "controllerSpecific": "identity-tail".repeat(100),
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sensors/device-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .device(ProtectDeviceFamily::Sensor, "device-1")
+        .await
+        .expect_err("wrong device identity");
+    assert!(error.to_string().contains(&response.to_string()));
 }
 
 #[tokio::test]
