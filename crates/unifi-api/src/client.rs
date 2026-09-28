@@ -666,5 +666,5 @@ pub(crate) async fn bounded_error_message(response: Response) -> Result<BoundedM
 }
 
 pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8]) -> BoundedMessage {
-    BoundedMessage::new(&String::from_utf8_lossy(bytes))
+    BoundedMessage::from_controller_bytes(bytes)
 }

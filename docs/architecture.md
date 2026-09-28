@@ -133,7 +133,8 @@ accepted write proves nothing. Every write tool shares one path:
   be the same false confidence the classification exists to prevent.
 - **Response fidelity.** Selected controller values and complete accepted
   controller error bodies reach the caller without credential substitution. The
-  gateway controls caller access.
+  gateway controls caller access. A non-UTF-8 error body is labeled and encoded
+  as base64 so its original bytes can be recovered.
 - **Stable selection.** A write addresses a resource by its controller id or
   hardware address, never by a renameable attribute. A client is addressed by
   MAC because a blocked one is absent from the connected list, so no name

@@ -933,7 +933,7 @@ impl ProtectClient {
         );
         Err(ApiError::Status {
             status: status_code,
-            message: BoundedMessage::new(&String::from_utf8_lossy(&bytes)),
+            message: BoundedMessage::from_controller_bytes(&bytes),
         })
     }
 }
@@ -953,14 +953,16 @@ pub(crate) async fn read_jpeg(response: Response) -> Result<Vec<u8>, ApiError> {
         });
     let bytes = http::read_bounded_body(response).await?;
     if !jpeg {
-        let message = String::from_utf8_lossy(&bytes);
-        return Err(ApiError::Decode(BoundedMessage::new(
-            if message.is_empty() {
-                "image response was not a JPEG"
-            } else {
-                &message
-            },
-        )));
+        return if bytes.is_empty() {
+            Err(ApiError::Decode(BoundedMessage::new(
+                "image response was not a JPEG",
+            )))
+        } else {
+            Err(ApiError::DecodeResponse {
+                response: BoundedMessage::from_controller_bytes(&bytes),
+                diagnostic: BoundedMessage::new("image response was not a JPEG"),
+            })
+        };
     }
     tokio::task::spawn_blocking(move || {
         let mut reader = ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
@@ -1011,12 +1013,12 @@ pub(crate) fn decode_json<T: DeserializeOwned>(
                 endpoint,
                 line: inner.line(),
                 column: inner.column(),
-                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
+                response: Some(BoundedMessage::from_controller_bytes(bytes)),
             },
             Category::Data | Category::Io => ApiError::SchemaMismatch {
                 endpoint,
                 path: BoundedMessage::new(&path),
-                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
+                response: Some(BoundedMessage::from_controller_bytes(bytes)),
             },
         }
     })?;
@@ -1024,7 +1026,7 @@ pub(crate) fn decode_json<T: DeserializeOwned>(
         endpoint,
         line: error.line(),
         column: error.column(),
-        response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
+        response: Some(BoundedMessage::from_controller_bytes(bytes)),
     })?;
     Ok(decoded)
 }

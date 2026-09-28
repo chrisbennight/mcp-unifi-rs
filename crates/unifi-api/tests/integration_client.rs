@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use unifi_api::{
     ApiError, ControllerConfig, IntegrationClient, TlsMode,
     capability::{self, FirewallGeneration},
@@ -605,6 +606,32 @@ async fn a_multibyte_error_message_is_returned_completely() {
         message.as_str(),
         serde_json::json!({"statusCode": 500, "message": "é".repeat(600)}).to_string()
     );
+}
+
+#[tokio::test]
+async fn a_non_utf8_controller_error_preserves_every_original_byte() {
+    let server = MockServer::start().await;
+    let mut body = vec![0xff; 1_500_000];
+    body.extend_from_slice(b"controller-error-tail");
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/info")))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_raw(body.clone(), "application/octet-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server).info().await.expect_err("server error");
+    let ApiError::Status { status, message } = error else {
+        panic!("expected Status");
+    };
+    assert_eq!(status, 500);
+    let encoded = message
+        .as_str()
+        .strip_prefix("non-UTF-8 controller response (base64): ")
+        .expect("lossless encoding marker");
+    assert_eq!(STANDARD.decode(encoded).expect("base64 response"), body);
 }
 
 #[tokio::test]

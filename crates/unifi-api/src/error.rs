@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use thiserror::Error;
 
 /// The transport rejects bodies above this limit before they reach an error.
@@ -15,6 +16,19 @@ impl BoundedMessage {
     #[must_use]
     pub fn new(raw: &str) -> Self {
         Self::with_limit(raw, MAXIMUM_MESSAGE_BYTES)
+    }
+
+    /// Preserve an accepted controller body. Non-UTF-8 bodies are encoded so
+    /// their original bytes remain available to the caller.
+    pub(crate) fn from_controller_bytes(bytes: &[u8]) -> Self {
+        debug_assert!(bytes.len() <= crate::http::MAXIMUM_RESPONSE_BYTES);
+        match std::str::from_utf8(bytes) {
+            Ok(text) => Self(text.to_owned()),
+            Err(_) => Self(format!(
+                "non-UTF-8 controller response (base64): {}",
+                STANDARD.encode(bytes)
+            )),
+        }
     }
 
     fn with_limit(raw: &str, limit: usize) -> Self {
@@ -63,7 +77,7 @@ impl From<String> for BoundedMessage {
 /// Pair a decoder failure with the controller's bounded response body.
 pub(crate) fn decode_failure(error: &impl std::fmt::Display, bytes: &[u8]) -> ApiError {
     ApiError::DecodeResponse {
-        response: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+        response: BoundedMessage::from_controller_bytes(bytes),
         diagnostic: BoundedMessage::new(&error.to_string()),
     }
 }
@@ -141,7 +155,7 @@ impl ApiError {
             Self::SchemaMismatch { endpoint, path, .. } => Self::SchemaMismatch {
                 endpoint,
                 path,
-                response: Some(BoundedMessage::new(&String::from_utf8_lossy(bytes))),
+                response: Some(BoundedMessage::from_controller_bytes(bytes)),
             },
             other => other,
         }

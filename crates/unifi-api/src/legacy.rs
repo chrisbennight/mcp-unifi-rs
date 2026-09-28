@@ -1426,14 +1426,14 @@ fn translate_failure(status: u16, bytes: &[u8], _class: RequestClass) -> ApiErro
     if status == 401 {
         return ApiError::Status {
             status,
-            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+            message: BoundedMessage::from_controller_bytes(bytes),
         };
     }
     match envelope_rejection(bytes) {
         Some(rejected) => rejection(Some(status), rejected.code.as_deref(), bytes),
         None => ApiError::Status {
             status,
-            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+            message: BoundedMessage::from_controller_bytes(bytes),
         },
     }
 }
@@ -1469,7 +1469,7 @@ fn rejection(status: Option<u16>, code: Option<&str>, bytes: &[u8]) -> ApiError 
     ApiError::Rejected {
         status,
         code: BoundedMessage::new(code.unwrap_or_default()),
-        message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+        message: BoundedMessage::from_controller_bytes(bytes),
     }
 }
 

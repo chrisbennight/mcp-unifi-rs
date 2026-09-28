@@ -338,12 +338,14 @@ async fn snapshot_refuses_non_jpeg_and_oversized_bodies() {
         .respond_with(ResponseTemplate::new(200).set_body_raw("secret text", "text/plain"))
         .mount(&wrong_type)
         .await;
-    assert!(matches!(
-        client_for(&wrong_type)
-            .camera_snapshot("cam-1", "main", false)
-            .await,
-        Err(ApiError::Decode(_))
-    ));
+    let error = client_for(&wrong_type)
+        .camera_snapshot("cam-1", "main", false)
+        .await
+        .expect_err("non-JPEG response");
+    let ApiError::DecodeResponse { response, .. } = error else {
+        panic!("expected DecodeResponse");
+    };
+    assert_eq!(response.as_str(), "secret text");
 
     let oversized = MockServer::start().await;
     Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))

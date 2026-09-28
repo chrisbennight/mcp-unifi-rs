@@ -35,7 +35,7 @@ pub(crate) async fn rate_limited(response: Response) -> Result<ApiError, ApiErro
     let bytes = read_bounded_body(response).await?;
     Ok(ApiError::RateLimited {
         retry_after,
-        message: BoundedMessage::new(&String::from_utf8_lossy(&bytes)),
+        message: BoundedMessage::from_controller_bytes(&bytes),
     })
 }
 
