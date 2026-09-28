@@ -125,6 +125,12 @@ async fn radius_profiles_list_pages_without_dropping_controller_fields() {
 #[tokio::test]
 async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
     let server = MockServer::start().await;
+    let body = serde_json::json!({
+        "offset": 0, "limit": 0, "count": 2, "totalCount": 2,
+        "data": [{"id": "radius-1", "name": "Office"}],
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-radius-tail"
+    });
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -137,10 +143,7 @@ async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/radius/profiles"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "offset": 0, "limit": 0, "count": 2, "totalCount": 2,
-            "data": [{"id": "radius-1", "name": "Office"}]
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
         .expect(1)
         .mount(&server)
         .await;
@@ -157,6 +160,7 @@ async fn radius_profiles_list_rejects_inconsistent_page_metadata() {
             .message
             .contains("reported offset 0, limit 0, count 2, and 1 rows")
     );
+    assert!(error.message.contains(&body.to_string()));
 }
 
 #[tokio::test]
@@ -236,6 +240,12 @@ async fn wifi_broadcasts_list_and_status_return_complete_controller_fields() {
 #[tokio::test]
 async fn wifi_broadcasts_list_rejects_rows_beyond_reported_total() {
     let server = MockServer::start().await;
+    let body = serde_json::json!({
+        "offset": 0, "limit": 1, "count": 1, "totalCount": 0,
+        "data": [{"id": "wifi-1", "name": "Studio"}],
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-wifi-tail"
+    });
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -248,10 +258,7 @@ async fn wifi_broadcasts_list_rejects_rows_beyond_reported_total() {
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/wifi/broadcasts"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "offset": 0, "limit": 1, "count": 1, "totalCount": 0,
-            "data": [{"id": "wifi-1", "name": "Studio"}]
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
         .expect(1)
         .mount(&server)
         .await;
@@ -264,6 +271,7 @@ async fn wifi_broadcasts_list_rejects_rows_beyond_reported_total() {
         .await
         .expect_err("contradictory total count");
     assert!(error.message.contains("offset 1 exceeds reported total 0"));
+    assert!(error.message.contains(&body.to_string()));
 }
 
 async fn common_mocks(server: &MockServer) {
