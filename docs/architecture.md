@@ -62,6 +62,7 @@ changes fields, by observation where it does not — see Write safety).
 `cameras.pos.transaction` (camera event ingestion),
 `protect.viewers.settings.update` (viewer name and live-view assignment),
 `protect.liveviews.configure` (create or update a live-view layout),
+`protect.devices.action` (documented siren, relay, speaker, and alarm-hub actions),
 `vouchers.create` (mint hotspot
 vouchers).
 

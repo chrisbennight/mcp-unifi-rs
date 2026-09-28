@@ -283,6 +283,21 @@ empty inventory has `totalCount: 0`. The upstream endpoints return complete
 arrays; this server pages the bounded response locally. If a page exceeds the
 MCP result budget, lower `limit`.
 
+### `protect.devices.action`
+
+This tool groups the documented 7.3.53 POST actions for sirens (`sirenPlay`,
+`sirenStop`, `sirenTestSound`), relay outputs (`relayActivate`), speaker sound
+tests (`speakerTestSound`), and alarm-hub outputs (`alarmHubTrigger`). The
+`action.kind` selects a typed request; `deviceId` and, where needed,
+`outputId` select exact devices and outputs. Optional fields retain the
+controller's documented defaults. Siren play accepts 5, 10, 20, or 30 seconds;
+test volumes use their documented ranges. The default preview sends no POST.
+With `confirm: true`, the tool sends one POST and reports the accepted HTTP
+status and any response body. The documented success status is 204, which
+confirms that the controller accepted the action; it does not prove a physical
+effect. Errors retain the controller's complete bounded body. Large accepted
+bodies move to labeled content. The gateway decides access to these actions.
+
 ### `protect.users.list` and `protect.users.status`
 
 These tools read the Protect `users` and UniFi Identity `ulp-users` resources

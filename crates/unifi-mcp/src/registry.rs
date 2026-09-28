@@ -43,6 +43,7 @@ pub enum ToolKind {
     CamerasStatus,
     ProtectDevicesList,
     ProtectDevicesStatus,
+    ProtectDevicesAction,
     ProtectUsersList,
     ProtectUsersStatus,
     CamerasPosTransaction,
@@ -99,6 +100,7 @@ impl ToolKind {
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
             | Self::CamerasPosTransaction
+            | Self::ProtectDevicesAction
             | Self::ProtectViewersSettingsUpdate
             | Self::ProtectLiveviewsConfigure
             | Self::VouchersCreate => true,
@@ -144,6 +146,7 @@ impl ToolKind {
             | Self::CamerasStatus
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
+            | Self::ProtectDevicesAction
             | Self::ProtectUsersList
             | Self::ProtectUsersStatus
             | Self::ProtectViewersList
@@ -410,6 +413,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::ProtectDevicesStatus,
         "protect.devices.status",
         "Read the complete controller record for one non-camera Protect device by documented family and exact id.",
+    ),
+    write_spec(
+        ToolKind::ProtectDevicesAction,
+        "protect.devices.action",
+        "Preview or invoke a documented siren, relay, speaker, or alarm-hub action by exact device id; return the accepted status and any controller body.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
     ),
     sensitive_read_spec(
         ToolKind::ProtectUsersList,
@@ -714,6 +725,7 @@ mod tests {
         ToolKind::CamerasStatus,
         ToolKind::ProtectDevicesList,
         ToolKind::ProtectDevicesStatus,
+        ToolKind::ProtectDevicesAction,
         ToolKind::ProtectUsersList,
         ToolKind::ProtectUsersStatus,
         ToolKind::CamerasPosTransaction,
@@ -790,6 +802,19 @@ mod tests {
     }
 
     #[test]
+    fn protect_device_action_classifies_side_effects_and_sensitive_data() {
+        let spec = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.kind == ToolKind::ProtectDevicesAction)
+            .expect("Protect device action tool");
+        assert_eq!(spec.risk, "high");
+        assert!(spec.kind.requires_write_access());
+        assert!(!spec.behavior.idempotent);
+        assert!(spec.behavior.input_sensitive);
+        assert!(spec.behavior.result_sensitive);
+    }
+
+    #[test]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
             // Exhaustiveness anchor: a new variant must be added here or the
@@ -809,6 +834,7 @@ mod tests {
                 | ToolKind::CamerasStatus
                 | ToolKind::ProtectDevicesList
                 | ToolKind::ProtectDevicesStatus
+                | ToolKind::ProtectDevicesAction
                 | ToolKind::ProtectUsersList
                 | ToolKind::ProtectUsersStatus
                 | ToolKind::CamerasPosTransaction
@@ -877,6 +903,7 @@ mod tests {
                 "cameras.status",
                 "protect.devices.list",
                 "protect.devices.status",
+                "protect.devices.action",
                 "protect.users.list",
                 "protect.users.status",
                 "cameras.pos.transaction",
