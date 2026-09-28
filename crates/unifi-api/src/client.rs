@@ -99,8 +99,8 @@ impl IntegrationClient {
             "id.in({})",
             ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
         );
-        let page: Page<crate::traffic::DpiName> = self
-            .get_json(
+        let (page, bytes): (Page<crate::traffic::DpiName>, Vec<u8>) = self
+            .get_json_with_response(
                 &[
                     "dpi",
                     if categories {
@@ -124,7 +124,10 @@ impl IntegrationClient {
                 .iter()
                 .any(|row| !ids.contains(&row.id) || row.name.len() > 4096)
         {
-            return Err(ApiError::Decode("unexpected DPI name selection".into()));
+            return Err(ApiError::DecodeResponse {
+                response: BoundedMessage::from_controller_bytes(&bytes),
+                diagnostic: BoundedMessage::new("unexpected DPI name selection"),
+            });
         }
         Ok(page.data)
     }
@@ -452,6 +455,16 @@ impl IntegrationClient {
         segments: &[&str],
         query: &[(&str, String)],
     ) -> Result<T, ApiError> {
+        self.get_json_with_response(segments, query)
+            .await
+            .map(|(value, _)| value)
+    }
+
+    async fn get_json_with_response<T: DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+    ) -> Result<(T, Vec<u8>), ApiError> {
         let first = self
             .send(self.request_with_query(Method::GET, segments, query)?)
             .await;
@@ -467,7 +480,10 @@ impl IntegrationClient {
             }
             Err(error) => return Err(error),
         };
-        decode(response).await
+        let bytes = http::read_bounded_body(response).await?;
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((value, bytes))
     }
 
     async fn post_action<A: Serialize>(

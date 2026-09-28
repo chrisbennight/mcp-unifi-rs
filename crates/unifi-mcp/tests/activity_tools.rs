@@ -183,6 +183,48 @@ async fn application_ranking_uses_verified_category_and_application_name_mapping
 }
 
 #[tokio::test]
+async fn invalid_dpi_lookup_returns_its_controller_response_with_activity() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    activity_mock(&server, fixture()).await;
+    evidence_mock(&server, wan()).await;
+    let body = json!({
+        "offset": 0, "limit": 50, "count": 1, "totalCount": 2112,
+        "data": [{"id": 7, "name": "Unexpected"}],
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-dpi-tail"
+    });
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/integration/v1/dpi/applications"))
+        .and(query_param("filter", "id.in(196649)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/integration/v1/dpi/categories"))
+        .and(query_param("filter", "id.in(3)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offset": 0, "limit": 50, "count": 1, "totalCount": 2112,
+            "data": [{"id": 3, "name": "File sharing"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let mut input = args("dpiApplications");
+    input["top"] = json!(1);
+    let output = query(&server, input).await;
+    assert_eq!(output["topApplications"][0]["rxBytes"], 400);
+    assert_eq!(output["activity"]["namesStatus"], "unavailable");
+    assert_eq!(output["sourceErrors"][0]["source"], "dpiApplications");
+    assert!(
+        output["sourceErrors"][0]["error"]
+            .as_str()
+            .expect("error")
+            .contains(&body.to_string())
+    );
+}
+
+#[tokio::test]
 async fn missing_names_and_wan_hours_preserve_measured_activity_without_fake_reconciliation() {
     let server = MockServer::start().await;
     login_mock(&server).await;

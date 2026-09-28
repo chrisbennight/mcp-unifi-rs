@@ -156,7 +156,9 @@ limited to 256 characters with a visible ellipsis when shortened.
 - `dpiApplications` ranks the same interval's application counters. `top`
   (1-50, default 10) bounds the ranking; `totalApplications` reports the number
   before selection. Numeric category/application IDs remain available when
-  official catalog names are missing. `namesStatus` identifies lookup failures.
+  official catalog names are missing. `namesStatus` identifies lookup failures,
+  and `sourceErrors` carries each failed application or category lookup's
+  controller response.
 - `wanHourly` returns site WAN counters without client attribution. Missing
   counters remain unknown. Returned timestamps are restricted to the requested
   window; the bucket at `endMs` is excluded.
@@ -187,8 +189,9 @@ there is no silent scan truncation. Activity record, string, graph, identity,
 counter, and arithmetic validation errors return the complete accepted
 controller body with the local diagnostic.
 Display text uses visible truncation markers.
-`sourceErrors` retains the controller's status and response for Activity,
-graph, and legacy DPI requests that returned 404 or 405. A console-family
+`sourceErrors` retains the controller's response and local diagnostic for
+Activity, graph, legacy DPI, and catalog lookup failures. HTTP failures also
+include the controller's status. A console-family
 decision with no request has no controller response. If the error text exceeds
 the structured result budget, `sourceErrorsInContent` points to the complete
 errors in an additional content block while the available report remains in
