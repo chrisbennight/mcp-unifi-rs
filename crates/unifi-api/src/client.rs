@@ -428,6 +428,41 @@ impl IntegrationClient {
         Ok((status, body))
     }
 
+    /// Read the complete ACL rule priority ordering for one site.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or response fails.
+    pub async fn acl_rule_ordering(&self, site_id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "acl-rules", "ordering"], &[])
+            .await
+    }
+
+    /// Replace the site's ACL rule priority ordering. The complete accepted
+    /// record and HTTP status are retained; an ambiguous transport result is
+    /// never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or response fails.
+    pub async fn replace_acl_rule_ordering(
+        &self,
+        site_id: &str,
+        ordered_acl_rule_ids: &[String],
+    ) -> Result<(u16, Value), ApiError> {
+        let response = self
+            .send(
+                self.request(Method::PUT, &["sites", site_id, "acl-rules", "ordering"])?
+                    .json(&serde_json::json!({"orderedAclRuleIds": ordered_acl_rule_ids})),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let record = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((status, record))
+    }
+
     async fn network_policy_record_write(
         &self,
         method: Method,

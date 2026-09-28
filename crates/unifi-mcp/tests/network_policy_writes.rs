@@ -451,3 +451,145 @@ async fn invalid_acl_filter_fails_before_contacting_the_controller() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn acl_ordering_read_returns_the_complete_controller_record() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let ordering =
+        json!({"orderedAclRuleIds":[POLICY_ID],"controllerExtension":{"priority":"reported"}});
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/acl-rules/ordering")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ordering.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(&call("acl.rules.ordering.read", json!({})), None)
+        .await
+        .expect("ordering read")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["record"], ordering);
+}
+
+#[tokio::test]
+async fn acl_ordering_previews_and_preserves_accepted_update() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let ids = json!([POLICY_ID]);
+    let preview = handler
+        .call(
+            &call(
+                "acl.rules.ordering.configure",
+                json!({"orderedAclRuleIds":ids}),
+            ),
+            None,
+        )
+        .await
+        .expect("ordering preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["submitted"], false);
+    assert_eq!(preview["requested"], json!({"orderedAclRuleIds":ids}));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/acl-rules/ordering");
+    let accepted = json!({"orderedAclRuleIds":ids,"controllerExtension":"accepted"});
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .and(body_json(json!({"orderedAclRuleIds":ids})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler
+        .call(
+            &call(
+                "acl.rules.ordering.configure",
+                json!({"orderedAclRuleIds":ids,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("ordering update")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["submitted"], true);
+    assert_eq!(result["responseStatus"], 200);
+    assert_eq!(result["accepted"], accepted);
+    assert_eq!(result["after"], accepted);
+    assert_eq!(result["verified"], true);
+}
+
+#[tokio::test]
+async fn acl_ordering_rejection_returns_the_upstream_explanation() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/acl-rules/ordering")))
+        .respond_with(ResponseTemplate::new(422).set_body_string("specific ACL order conflict"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "acl.rules.ordering.configure",
+                json!({"orderedAclRuleIds":[POLICY_ID],"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("controller rejection");
+    assert!(error.message.contains("specific ACL order conflict"));
+}
+
+#[tokio::test]
+async fn acl_ordering_does_not_verify_when_acceptance_disagrees_with_request() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/acl-rules/ordering");
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"orderedAclRuleIds":[]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"orderedAclRuleIds":[POLICY_ID]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "acl.rules.ordering.configure",
+                json!({"orderedAclRuleIds":[POLICY_ID],"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted ordering")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["accepted"]["orderedAclRuleIds"], json!([]));
+    assert_eq!(output["after"]["orderedAclRuleIds"], json!([POLICY_ID]));
+    assert_eq!(output["verified"], false);
+}

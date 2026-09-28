@@ -2839,6 +2839,18 @@ struct AclRulesConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AclRulesOrderingReadInput {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AclRulesOrderingConfigureInput {
+    ordered_acl_rule_ids: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct NetworkPolicyWriteOutput {
@@ -4301,6 +4313,12 @@ impl ToolSpec {
             ToolKind::AclRulesConfigure => {
                 tool::<AclRulesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::AclRulesOrderingRead => {
+                tool::<AclRulesOrderingReadInput, NetworkPolicyDetailOutput>(self)
+            }
+            ToolKind::AclRulesOrderingConfigure => {
+                tool::<AclRulesOrderingConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
             ToolKind::DnsPoliciesConfigure => {
                 tool::<DnsPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
@@ -4640,6 +4658,8 @@ impl UnifiMcp {
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
             ToolKind::AclRulesConfigure => self.acl_rules_configure(params).await,
+            ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
+            ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
             ToolKind::TrafficListsConfigure => self.traffic_lists_configure(params).await,
             ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
@@ -7699,6 +7719,103 @@ impl UnifiMcp {
             input.confirm,
         )?;
         self.network_policy_write(plan).await
+    }
+
+    async fn acl_rules_ordering_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let _: AclRulesOrderingReadInput = parse(params)?;
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .acl_rule_ordering(&site_id)
+            .await
+            .map_err(api_error)?;
+        network_policy_detail_result(NetworkPolicyDetailOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn acl_rules_ordering_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<AclRulesOrderingConfigureInput>(params)?;
+        let requested = serde_json::json!({"orderedAclRuleIds": input.ordered_acl_rule_ids});
+        if requested.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES {
+            return Err(McpError::invalid_params(
+                "ACL ordering request exceeds the 1 MiB request bound",
+                None,
+            ));
+        }
+        let mut output = NetworkPolicyWriteOutput {
+            kind: NetworkPolicyKind::AclRules,
+            operation: NetworkPolicyWriteOperation::Update,
+            consequence: "replace the priority order of the site's ACL rules",
+            id: None,
+            requested: Some(requested),
+            requested_in_content: None,
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return network_policy_write_result(output);
+        }
+        let site_id = self.site_id().await?;
+        let (status, accepted) = self
+            .integration()
+            .replace_acl_rule_ordering(&site_id, &input.ordered_acl_rule_ids)
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.response_status = Some(status);
+        output.accepted = Some(accepted);
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+            .min(NETWORK_POLICY_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("ACL ordering readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.integration().acl_rule_ordering(&site_id)).await
+            {
+                Ok(Ok(after)) => {
+                    let requested_ids = output
+                        .requested
+                        .as_ref()
+                        .and_then(|body| body.get("orderedAclRuleIds"));
+                    output.verified = Some(
+                        after.get("orderedAclRuleIds") == requested_ids
+                            && output
+                                .accepted
+                                .as_ref()
+                                .and_then(|body| body.get("orderedAclRuleIds"))
+                                == requested_ids,
+                    );
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error = Some("ACL ordering readback timed out".to_owned());
+                }
+            }
+        }
+        network_policy_write_result(output)
     }
 
     async fn traffic_lists_configure(
@@ -13911,6 +14028,7 @@ mod tests {
         ("devices.adopt", false, true, true),
         ("devices.remove", false, false, true),
         ("acl.rules.configure", false, true, true),
+        ("acl.rules.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.
