@@ -56,10 +56,73 @@ pub struct ProtectCamera {
     pub mac: Option<String>,
     pub is_mic_enabled: Option<bool>,
     pub mic_volume: Option<u8>,
+    pub osd_settings: Option<ProtectOsdSettings>,
+    pub led_settings: Option<ProtectLedSettings>,
+    pub video_mode: Option<String>,
+    pub hdr_type: Option<String>,
+    pub smart_detect_settings: Option<ProtectSmartDetectSettings>,
     /// Distinguishes an idle patrol from a console that did not report the
     /// field, so readback never claims a stopped patrol without evidence.
     #[serde(default, deserialize_with = "patrol_state")]
     pub active_patrol_slot: ProtectPatrolState,
+}
+
+/// Camera overlay settings from the official Protect API.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectOsdSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_name_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_date_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_logo_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_debug_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay_location: Option<String>,
+}
+
+/// Camera LED settings from the official Protect API.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectLedSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub welcome_led: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flood_led: Option<bool>,
+}
+
+/// Smart detection categories the camera is configured to report.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectSmartDetectSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_types: Option<Vec<String>>,
+}
+
+/// Bounded, typed subset of the official camera settings PATCH body.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectCameraSettingsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub osd_settings: Option<ProtectOsdSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub led_settings: Option<ProtectLedSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_volume: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hdr_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smart_detect_settings: Option<ProtectSmartDetectSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -499,6 +562,35 @@ impl ProtectClient {
             validate_identifier("cameras.by_id", &camera.id)
         })
         .await
+    }
+
+    /// Patch one camera's documented settings once. The caller reads back
+    /// the camera to check which fields the console persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects or cannot decode
+    /// the action response.
+    pub async fn camera_settings_patch(
+        &self,
+        camera_id: &str,
+        patch: &ProtectCameraSettingsPatch,
+    ) -> Result<ProtectCamera, ApiError> {
+        validate_identifier("cameras.settings.update", camera_id)?;
+        let request = self
+            .request(Method::PATCH, &["cameras", camera_id])?
+            .json(patch);
+        let camera: ProtectCamera = self
+            .send_json_once(request, "cameras.settings.update")
+            .await?;
+        validate_model_key("cameras.settings.update", &camera.model_key, "camera")?;
+        if camera.id != camera_id {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "cameras.settings.update",
+                path: BoundedMessage::new("id"),
+            });
+        }
+        Ok(camera)
     }
 
     /// Execute one PTZ action. POST is never retried after an ambiguous result.

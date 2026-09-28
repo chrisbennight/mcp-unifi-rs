@@ -490,6 +490,168 @@ async fn camera_status_reports_a_public_active_patrol_slot() {
 }
 
 #[tokio::test]
+async fn camera_settings_update_sends_named_fields_and_verifies_readback() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
+        "videoMode": "default", "hdrType": "auto", "micVolume": 40,
+        "osdSettings": {"isNameEnabled": true, "isDateEnabled": true}
+    });
+    let after = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
+        "videoMode": "highFps", "hdrType": "auto", "micVolume": 40,
+        "osdSettings": {"isNameEnabled": true, "isDateEnabled": false}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .and(body_json(serde_json::json!({
+            "videoMode": "highFps", "osdSettings": {"isDateEnabled": false}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let request = call(
+        "cameras.settings.update",
+        &serde_json::json!({
+            "camera": "cam-front",
+            "changes": {"videoMode": "highFps", "osdSettings": {"isDateEnabled": false}},
+            "confirm": true
+        }),
+    );
+    let output = handler_for(&server)
+        .call(&request, None)
+        .await
+        .expect("settings update")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verified"], true);
+    assert_eq!(output["after"]["osdSettings"]["isDateEnabled"], false);
+    let status = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.read",
+                &serde_json::json!({"camera": "cam-front"}),
+            ),
+            None,
+        )
+        .await
+        .expect("settings read")
+        .structured_content
+        .expect("structured");
+    assert_eq!(status["videoMode"], "highFps");
+}
+
+#[tokio::test]
+async fn camera_settings_invalid_value_is_rejected_before_controller_io() {
+    let server = MockServer::start().await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "changes": {"videoMode": "turbo"}, "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect_err("invalid mode");
+    assert!(error.message.contains("videoMode"), "{}", error.message);
+}
+
+#[tokio::test]
+async fn camera_settings_preview_does_not_patch() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "changes": {"micVolume": 70}
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], false);
+    assert_eq!(output["requested"]["micVolume"], 70);
+}
+
+#[tokio::test]
+async fn camera_settings_detects_a_newly_reported_nested_field() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let before = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
+        "videoMode": "default", "osdSettings": {"isNameEnabled": true}
+    });
+    let after = serde_json::json!({
+        "id": "cam-front", "modelKey": "camera", "name": "Front Door", "state": "CONNECTED",
+        "videoMode": "default", "osdSettings": {"isNameEnabled": false, "isDateEnabled": false}
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PROTECT}/cameras/cam-front")))
+        .and(body_json(
+            serde_json::json!({"osdSettings": {"isNameEnabled": false}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "cameras.settings.update",
+                &serde_json::json!({
+                    "camera": "cam-front", "changes": {"osdSettings": {"isNameEnabled": false}}, "confirm": true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("settings update")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verified"], false);
+    assert!(
+        output["before"]["osdSettings"]
+            .get("isDateEnabled")
+            .is_none()
+    );
+    assert_eq!(output["after"]["osdSettings"]["isDateEnabled"], false);
+}
+
+#[tokio::test]
 async fn ptz_preset_reports_acceptance_without_claiming_position_verification() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;

@@ -38,6 +38,8 @@ pub enum ToolKind {
     NetworksRead,
     CamerasSearch,
     CamerasStatus,
+    CamerasSettingsRead,
+    CamerasSettingsUpdate,
     CamerasSnapshot,
     CamerasPtzControl,
     CamerasStreamsList,
@@ -86,6 +88,7 @@ impl ToolKind {
             | Self::FirewallPoliciesUpdate
             | Self::VouchersRevoke
             | Self::CamerasPtzControl
+            | Self::CamerasSettingsUpdate
             | Self::CamerasStreamsUpdate
             | Self::CamerasTalkbackStart
             | Self::VouchersCreate => true,
@@ -99,6 +102,7 @@ impl ToolKind {
             | Self::NetworksRead
             | Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::CamerasSettingsRead
             | Self::CamerasSnapshot
             | Self::CamerasStreamsList
             | Self::ProtectOverview
@@ -116,6 +120,8 @@ impl ToolKind {
         match self {
             Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::CamerasSettingsRead
+            | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
             | Self::CamerasPtzControl
             | Self::CamerasStreamsList
@@ -356,6 +362,17 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          audio, and feature facts. Use cameras.snapshot to fetch an image.",
     ),
     sensitive_read_spec(
+        ToolKind::CamerasSettingsRead,
+        "cameras.settings.read",
+        "Read one Protect camera's documented name, overlay, LED, microphone volume, video mode, HDR, and smart detection settings by id or exact name.",
+    ),
+    write_spec(
+        ToolKind::CamerasSettingsUpdate,
+        "cameras.settings.update",
+        "Preview or patch one Protect camera's documented settings by id or exact name. Sends only named settings and reads the camera back to report the observed state.",
+        ToolBehavior::write(true).result_sensitive(),
+    ),
+    sensitive_read_spec(
         ToolKind::CamerasSnapshot,
         "cameras.snapshot",
         "Fetch one bounded JPEG snapshot from a Protect camera, selected by id or exact reported name. Choose the main or package camera channel and optional high quality. Returns the image as MCP image content with concise metadata.",
@@ -564,6 +581,8 @@ mod tests {
         ToolKind::NetworksRead,
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
+        ToolKind::CamerasSettingsRead,
+        ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
         ToolKind::CamerasPtzControl,
         ToolKind::CamerasStreamsList,
@@ -603,6 +622,8 @@ mod tests {
                 | ToolKind::NetworksRead
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
+                | ToolKind::CamerasSettingsRead
+                | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
                 | ToolKind::CamerasPtzControl
                 | ToolKind::CamerasStreamsList
@@ -656,6 +677,8 @@ mod tests {
             [
                 "cameras.search",
                 "cameras.status",
+                "cameras.settings.read",
+                "cameras.settings.update",
                 "cameras.snapshot",
                 "cameras.ptz.control",
                 "cameras.streams.list",
