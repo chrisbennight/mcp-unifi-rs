@@ -566,16 +566,8 @@ async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
 }
 
 #[tokio::test]
-async fn dpi_missing_endpoint_and_bad_envelope_have_explicit_coverage() {
-    for (response, expected) in [
-        (ResponseTemplate::new(404), "unsupported"),
-        (ResponseTemplate::new(405), "unsupported"),
-        (
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"meta":{"rc":"ok"},"data":{"unexpected":true}})),
-            "unrecognized",
-        ),
-    ] {
+async fn dpi_missing_endpoint_has_explicit_coverage() {
+    for response in [ResponseTemplate::new(404), ResponseTemplate::new(405)] {
         let server = MockServer::start().await;
         login_mock(&server).await;
         Mock::given(method("POST"))
@@ -596,10 +588,40 @@ async fn dpi_missing_endpoint_and_bad_envelope_have_explicit_coverage() {
             .expect("coverage")
             .structured_content
             .expect("structured");
-        assert_eq!(output["coverage"]["status"], expected);
+        assert_eq!(output["coverage"]["status"], "unsupported");
         assert_eq!(output["topApplications"], serde_json::json!([]));
         assert!(output.get("totalApplications").is_none());
     }
+}
+
+#[tokio::test]
+async fn dpi_bad_envelope_preserves_the_controller_response() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{LEGACY}/stat/sitedpi")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "meta": {"rc": "ok"},
+            "data": {"unexpected": true},
+            "controllerTail": format!("{}dpi-error-tail", "x".repeat(700))
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "stats.query",
+                &serde_json::json!({"report": "dpiApplications"}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("malformed DPI response");
+    assert!(error.message.contains("dpi-error-tail"));
+    assert!(error.message.contains("controllerTail"));
+    assert!(error.message.contains("decode error:"));
 }
 
 #[tokio::test]
