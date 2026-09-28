@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-use unifi_api::protect::{ProtectDeviceFamily, ProtectStreamQuality};
+use unifi_api::protect::{ProtectDeviceFamily, ProtectStreamQuality, ProtectUserFamily};
 use unifi_api::protect::{ProtectPatrolState, ProtectPtzCommand};
 use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, TlsMode};
 use url::Url;
@@ -119,6 +119,64 @@ async fn non_camera_detail_identity_failure_keeps_the_accepted_body() {
         .device(ProtectDeviceFamily::Sensor, "device-1")
         .await
         .expect_err("wrong device identity");
+    assert!(error.to_string().contains(&response.to_string()));
+}
+
+#[tokio::test]
+async fn documented_user_families_keep_full_records_on_fixed_routes() {
+    for (family, path_name) in [
+        (ProtectUserFamily::User, "users"),
+        (ProtectUserFamily::IdentityUser, "ulp-users"),
+    ] {
+        let server = MockServer::start().await;
+        let record = serde_json::json!({
+            "id": "user-1", "name": "Test User", "email": "user@example.invalid",
+            "controllerSpecific": {"nested": ["value", 42]},
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{path_name}")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([record.clone()])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{path_name}/user-1")))
+            .and(header("X-API-Key", API_KEY))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        assert_eq!(
+            client.users(family).await.expect(path_name),
+            vec![record.clone()]
+        );
+        assert_eq!(
+            client.user(family, "user-1").await.expect(path_name),
+            record
+        );
+    }
+}
+
+#[tokio::test]
+async fn user_identity_failure_keeps_the_accepted_body() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!({
+        "id": "another-user", "controllerSpecific": "identity-tail".repeat(100),
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/users/user-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = client_for(&server)
+        .user(ProtectUserFamily::User, "user-1")
+        .await
+        .expect_err("wrong user identity");
     assert!(error.to_string().contains(&response.to_string()));
 }
 

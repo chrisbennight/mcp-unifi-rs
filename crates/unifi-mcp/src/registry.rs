@@ -43,6 +43,8 @@ pub enum ToolKind {
     CamerasStatus,
     ProtectDevicesList,
     ProtectDevicesStatus,
+    ProtectUsersList,
+    ProtectUsersStatus,
     CamerasSettingsRead,
     CamerasSettingsUpdate,
     CamerasSnapshot,
@@ -105,6 +107,8 @@ impl ToolKind {
             | Self::CamerasStatus
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
+            | Self::ProtectUsersList
+            | Self::ProtectUsersStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSnapshot
             | Self::CamerasStreamsList
@@ -126,6 +130,8 @@ impl ToolKind {
             | Self::CamerasStatus
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
+            | Self::ProtectUsersList
+            | Self::ProtectUsersStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
@@ -385,6 +391,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Read the complete controller record for one non-camera Protect device by documented family and exact id.",
     ),
     sensitive_read_spec(
+        ToolKind::ProtectUsersList,
+        "protect.users.list",
+        "Page through complete Protect or UniFi Identity user records from the documented user family. Choose kind, offset, and limit.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectUsersStatus,
+        "protect.users.status",
+        "Read the complete Protect or UniFi Identity user record by documented family and exact id.",
+    ),
+    sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
         "Read one Protect camera's documented name, overlay, LED, microphone volume, video mode, HDR, and smart detection settings by id or exact name.",
@@ -633,6 +649,8 @@ mod tests {
         ToolKind::CamerasStatus,
         ToolKind::ProtectDevicesList,
         ToolKind::ProtectDevicesStatus,
+        ToolKind::ProtectUsersList,
+        ToolKind::ProtectUsersStatus,
         ToolKind::CamerasSettingsRead,
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
@@ -681,6 +699,8 @@ mod tests {
                 | ToolKind::CamerasStatus
                 | ToolKind::ProtectDevicesList
                 | ToolKind::ProtectDevicesStatus
+                | ToolKind::ProtectUsersList
+                | ToolKind::ProtectUsersStatus
                 | ToolKind::CamerasSettingsRead
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
@@ -740,6 +760,8 @@ mod tests {
                 "cameras.status",
                 "protect.devices.list",
                 "protect.devices.status",
+                "protect.users.list",
+                "protect.users.status",
                 "cameras.settings.read",
                 "cameras.settings.update",
                 "cameras.snapshot",

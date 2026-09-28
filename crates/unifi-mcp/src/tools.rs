@@ -34,7 +34,7 @@ use unifi_api::{
         ProtectDeviceFamily, ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera,
         ProtectLocalNvr, ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
         ProtectSmartDetectSettings, ProtectStreamQuality, ProtectStreamUrls,
-        ProtectTalkbackSession,
+        ProtectTalkbackSession, ProtectUserFamily,
     },
 };
 use zeroize::Zeroizing;
@@ -526,6 +526,57 @@ struct ProtectDevicesStatusInput {
 struct ProtectDevicesStatusOutput {
     kind: ProtectDeviceKind,
     device: Value,
+}
+
+/// Protect users and `UniFi` Identity users are separate documented resources.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectUserKind {
+    User,
+    IdentityUser,
+}
+
+impl From<ProtectUserKind> for ProtectUserFamily {
+    fn from(kind: ProtectUserKind) -> Self {
+        match kind {
+            ProtectUserKind::User => Self::User,
+            ProtectUserKind::IdentityUser => Self::IdentityUser,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectUsersListInput {
+    kind: ProtectUserKind,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectUsersListOutput {
+    kind: ProtectUserKind,
+    users: Vec<Value>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectUsersStatusInput {
+    kind: ProtectUserKind,
+    user_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectUsersStatusOutput {
+    kind: ProtectUserKind,
+    user: Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2524,6 +2575,12 @@ impl ToolSpec {
             ToolKind::ProtectDevicesStatus => {
                 tool::<ProtectDevicesStatusInput, ProtectDevicesStatusOutput>(self)
             }
+            ToolKind::ProtectUsersList => {
+                tool::<ProtectUsersListInput, ProtectUsersListOutput>(self)
+            }
+            ToolKind::ProtectUsersStatus => {
+                tool::<ProtectUsersStatusInput, ProtectUsersStatusOutput>(self)
+            }
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -2788,6 +2845,8 @@ impl UnifiMcp {
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::ProtectDevicesList => self.protect_devices_list(params).await,
             ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
+            ToolKind::ProtectUsersList => self.protect_users_list(params).await,
+            ToolKind::ProtectUsersStatus => self.protect_users_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
@@ -3443,6 +3502,53 @@ impl UnifiMcp {
         structured(ProtectDevicesStatusOutput {
             kind: input.kind,
             device,
+        })
+    }
+
+    async fn protect_users_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectUsersListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let users = self
+            .protect()
+            .users(input.kind.into())
+            .await
+            .map_err(api_error)?;
+        let total_count = users.len();
+        let page: Vec<Value> = users
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect();
+        let next = input.offset.saturating_add(page.len());
+        structured(ProtectUsersListOutput {
+            kind: input.kind,
+            users: page,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    async fn protect_users_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectUsersStatusInput>(params)?;
+        if input.user_id.is_empty() || input.user_id.len() > 256 {
+            return Err(McpError::invalid_params("userId must be 1-256 bytes", None));
+        }
+        let user = self
+            .protect()
+            .user(input.kind.into(), &input.user_id)
+            .await
+            .map_err(api_error)?;
+        structured(ProtectUsersStatusOutput {
+            kind: input.kind,
+            user,
         })
     }
 

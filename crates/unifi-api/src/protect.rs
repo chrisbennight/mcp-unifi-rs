@@ -59,6 +59,22 @@ impl ProtectDeviceFamily {
     }
 }
 
+/// Documented Protect and `UniFi` Identity user resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectUserFamily {
+    User,
+    IdentityUser,
+}
+
+impl ProtectUserFamily {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::User => "users",
+            Self::IdentityUser => "ulp-users",
+        }
+    }
+}
+
 /// What the console reported about its Protect application.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -664,7 +680,7 @@ impl ProtectClient {
     pub async fn devices(&self, family: ProtectDeviceFamily) -> Result<Vec<Value>, ApiError> {
         self.get_json_validated(&[family.path()], |devices: &Vec<Value>| {
             for device in devices {
-                validate_device_record("protect.devices", device, None)?;
+                validate_resource_record("protect.devices", device, None)?;
             }
             Ok(())
         })
@@ -683,7 +699,35 @@ impl ProtectClient {
     ) -> Result<Value, ApiError> {
         validate_identifier("protect.devices.by_id", device_id)?;
         self.get_json_validated(&[family.path(), device_id], |device: &Value| {
-            validate_device_record("protect.devices.by_id", device, Some(device_id))
+            validate_resource_record("protect.devices.by_id", device, Some(device_id))
+        })
+        .await
+    }
+
+    /// Read complete records from one documented Protect user family.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn users(&self, family: ProtectUserFamily) -> Result<Vec<Value>, ApiError> {
+        self.get_json_validated(&[family.path()], |users: &Vec<Value>| {
+            for user in users {
+                validate_resource_record("protect.users", user, None)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Read one Protect user record without discarding controller fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn user(&self, family: ProtectUserFamily, user_id: &str) -> Result<Value, ApiError> {
+        validate_identifier("protect.users.by_id", user_id)?;
+        self.get_json_validated(&[family.path(), user_id], |user: &Value| {
+            validate_resource_record("protect.users.by_id", user, Some(user_id))
         })
         .await
     }
@@ -1123,6 +1167,8 @@ fn endpoint_name(segments: &[&str]) -> &'static str {
         ["nvrs"] => "nvrs",
         [path] if is_device_path(path) => "protect.devices",
         [path, _] if is_device_path(path) => "protect.devices.by_id",
+        ["users" | "ulp-users"] => "protect.users",
+        ["users" | "ulp-users", _] => "protect.users.by_id",
         _ => "protect.integration",
     }
 }
@@ -1210,7 +1256,7 @@ fn validate_identifier(endpoint: &'static str, id: &str) -> Result<(), ApiError>
     }
 }
 
-fn validate_device_record(
+fn validate_resource_record(
     endpoint: &'static str,
     record: &Value,
     requested_id: Option<&str>,
