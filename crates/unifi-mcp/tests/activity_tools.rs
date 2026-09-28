@@ -144,6 +144,27 @@ async fn client_totals_are_useful_paginated_and_reconciled_over_identical_window
 }
 
 #[tokio::test]
+async fn duplicate_wan_comparison_buckets_keep_the_complete_controller_response() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    activity_mock(&server, fixture()).await;
+    let wan = json!([
+        {"time": START, "wan-rx_bytes": 500.5, "wan-tx_bytes": 20.0},
+        {"time": START, "wan-rx_bytes": 400.5, "wan-tx_bytes": 30.0,
+         "controllerDetail": "duplicate-wan-tail".repeat(100)}
+    ]);
+    evidence_mock(&server, wan.clone()).await;
+    let accepted = json!({"meta": {"rc": "ok"}, "data": wan});
+
+    let error = handler_for(&server)
+        .call(&call("stats.query", &args("clientWanHistory")), None)
+        .await
+        .expect_err("duplicate WAN hour");
+    assert!(error.message.contains("invalid or duplicate buckets"));
+    assert!(error.message.contains(&accepted.to_string()));
+}
+
+#[tokio::test]
 async fn application_ranking_uses_verified_category_and_application_name_mapping() {
     let server = MockServer::start().await;
     login_mock(&server).await;
