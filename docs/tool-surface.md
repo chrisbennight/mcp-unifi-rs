@@ -191,6 +191,8 @@ Activity response is reported as such. Record/string/body bounds fail loudly;
 there is no silent scan truncation. Activity record, string, graph, identity,
 counter, and arithmetic validation errors return the complete accepted
 controller body with the local diagnostic.
+A malformed or duplicate WAN comparison hour returns the complete accepted
+hourly site response with the validation reason.
 Display text uses visible truncation markers.
 `sourceErrors` retains the controller's response and local diagnostic for
 Activity, graph, legacy DPI, and catalog lookup failures. HTTP failures also

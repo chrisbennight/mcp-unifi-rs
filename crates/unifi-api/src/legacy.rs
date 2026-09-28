@@ -816,6 +816,22 @@ impl LegacyClient {
         start_ms: u64,
         end_ms: u64,
     ) -> Result<Vec<SiteWanSample>, ApiError> {
+        self.hourly_wan_report_with_response(site, start_ms, end_ms)
+            .await
+            .map(|(rows, _)| rows)
+    }
+
+    /// Read WAN samples with the accepted response for caller-side validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid windows or controller failures.
+    pub async fn hourly_wan_report_with_response(
+        &self,
+        site: &str,
+        start_ms: u64,
+        end_ms: u64,
+    ) -> Result<(Vec<SiteWanSample>, Vec<u8>), ApiError> {
         if end_ms <= start_ms {
             return Err(ApiError::Config(
                 "report window end must be after its start".to_owned(),
@@ -831,7 +847,7 @@ impl LegacyClient {
             "start": start_ms,
             "end": end_ms,
         });
-        self.request_with_reauth(
+        self.request_with_reauth_with_bytes(
             RequestClass::IdempotentRead,
             Method::POST,
             site,

@@ -8,10 +8,10 @@ use super::{
     structured_stats,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use unifi_api::ApiError;
 use unifi_api::traffic::{
     ActivityBucket, ActivityRead, ActivityReport, ActivityWindow, ApplicationActivity,
 };
+use unifi_api::{ApiError, BoundedMessage};
 
 const HOUR_MS: u64 = 3_600_000;
 
@@ -317,9 +317,9 @@ impl UnifiMcp {
         window: ActivityWindow,
         clients: &Bytes,
     ) -> Result<Reconciliation, McpError> {
-        let rows = self
+        let (rows, response) = self
             .legacy()
-            .hourly_wan_report(self.legacy_site(), window.start, window.end)
+            .hourly_wan_report_with_response(self.legacy_site(), window.start, window.end)
             .await
             .map_err(api_error)?;
         let mut hours = BTreeSet::new();
@@ -345,10 +345,12 @@ impl UnifiMcp {
                     || transmitted < 0.0
                     || !hours.insert(time)
                 {
-                    return Err(McpError::internal_error(
-                        "WAN comparison contains invalid or duplicate buckets",
-                        None,
-                    ));
+                    return Err(api_error(ApiError::DecodeResponse {
+                        response: BoundedMessage::from_controller_bytes(&response),
+                        diagnostic: BoundedMessage::new(
+                            "WAN comparison contains invalid or duplicate buckets",
+                        ),
+                    }));
                 }
                 rx += received;
                 tx += transmitted;
