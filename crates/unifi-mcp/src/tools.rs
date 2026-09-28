@@ -647,6 +647,57 @@ struct CameraPosTransactionOutput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectViewsListInput {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectViewersListOutput {
+    viewers: Vec<Value>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectViewerStatusInput {
+    viewer_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectViewerStatusOutput {
+    viewer: Value,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectLiveviewsListOutput {
+    liveviews: Vec<Value>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectLiveviewStatusInput {
+    liveview_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectLiveviewStatusOutput {
+    liveview: Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
     /// Top-level fields from the local bootstrap response to include.
     /// Large fields may exceed the response budget; request one field at a time.
@@ -2650,6 +2701,18 @@ impl ToolSpec {
             ToolKind::CamerasPosTransaction => {
                 tool::<CameraPosTransactionInput, CameraPosTransactionOutput>(self)
             }
+            ToolKind::ProtectViewersList => {
+                tool::<ProtectViewsListInput, ProtectViewersListOutput>(self)
+            }
+            ToolKind::ProtectViewersStatus => {
+                tool::<ProtectViewerStatusInput, ProtectViewerStatusOutput>(self)
+            }
+            ToolKind::ProtectLiveviewsList => {
+                tool::<ProtectViewsListInput, ProtectLiveviewsListOutput>(self)
+            }
+            ToolKind::ProtectLiveviewsStatus => {
+                tool::<ProtectLiveviewStatusInput, ProtectLiveviewStatusOutput>(self)
+            }
             ToolKind::CamerasSettingsRead => tool::<CameraSelectorInput, CameraSettingsState>(self),
             ToolKind::CamerasSettingsUpdate => {
                 tool::<CameraSettingsUpdateInput, CameraSettingsOutput>(self)
@@ -2917,6 +2980,10 @@ impl UnifiMcp {
             ToolKind::ProtectUsersList => self.protect_users_list(params).await,
             ToolKind::ProtectUsersStatus => self.protect_users_status(params).await,
             ToolKind::CamerasPosTransaction => self.cameras_pos_transaction(params).await,
+            ToolKind::ProtectViewersList => self.protect_viewers_list(params).await,
+            ToolKind::ProtectViewersStatus => self.protect_viewers_status(params).await,
+            ToolKind::ProtectLiveviewsList => self.protect_liveviews_list(params).await,
+            ToolKind::ProtectLiveviewsStatus => self.protect_liveviews_status(params).await,
             ToolKind::CamerasSettingsRead => self.cameras_settings_read(params).await,
             ToolKind::CamerasSettingsUpdate => self.cameras_settings_update(params).await,
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
@@ -3688,6 +3755,90 @@ impl UnifiMcp {
             return Ok(result);
         }
         structured(output)
+    }
+
+    async fn protect_viewers_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectViewsListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let viewers = self.protect().viewers().await.map_err(api_error)?;
+        let total_count = viewers.len();
+        let page: Vec<Value> = viewers
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect();
+        let next = input.offset.saturating_add(page.len());
+        structured(ProtectViewersListOutput {
+            viewers: page,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    async fn protect_viewers_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectViewerStatusInput>(params)?;
+        if input.viewer_id.is_empty() || input.viewer_id.len() > 256 {
+            return Err(McpError::invalid_params(
+                "viewerId must be 1-256 bytes",
+                None,
+            ));
+        }
+        let viewer = self
+            .protect()
+            .viewer(&input.viewer_id)
+            .await
+            .map_err(api_error)?;
+        structured(ProtectViewerStatusOutput { viewer })
+    }
+
+    async fn protect_liveviews_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectViewsListInput>(params)?;
+        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let liveviews = self.protect().liveviews().await.map_err(api_error)?;
+        let total_count = liveviews.len();
+        let page: Vec<Value> = liveviews
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect();
+        let next = input.offset.saturating_add(page.len());
+        structured(ProtectLiveviewsListOutput {
+            liveviews: page,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    async fn protect_liveviews_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectLiveviewStatusInput>(params)?;
+        if input.liveview_id.is_empty() || input.liveview_id.len() > 256 {
+            return Err(McpError::invalid_params(
+                "liveviewId must be 1-256 bytes",
+                None,
+            ));
+        }
+        let liveview = self
+            .protect()
+            .liveview(&input.liveview_id)
+            .await
+            .map_err(api_error)?;
+        structured(ProtectLiveviewStatusOutput { liveview })
     }
 
     /// One camera by id or exact name.

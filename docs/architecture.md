@@ -50,7 +50,8 @@ Reads: `network.overview`, `clients.search`, `clients.context`,
 `cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
 `protect.overview`, `protect.events`, `protect.event.thumbnail`,
 `protect.devices.list`, `protect.devices.status`, `protect.users.list`,
-`protect.users.status`.
+`protect.users.status`, `protect.viewers.list`, `protect.viewers.status`,
+`protect.liveviews.list`, `protect.liveviews.status`.
 
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).

@@ -46,6 +46,10 @@ pub enum ToolKind {
     ProtectUsersList,
     ProtectUsersStatus,
     CamerasPosTransaction,
+    ProtectViewersList,
+    ProtectViewersStatus,
+    ProtectLiveviewsList,
+    ProtectLiveviewsStatus,
     CamerasSettingsRead,
     CamerasSettingsUpdate,
     CamerasSnapshot,
@@ -111,6 +115,10 @@ impl ToolKind {
             | Self::ProtectDevicesStatus
             | Self::ProtectUsersList
             | Self::ProtectUsersStatus
+            | Self::ProtectViewersList
+            | Self::ProtectViewersStatus
+            | Self::ProtectLiveviewsList
+            | Self::ProtectLiveviewsStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSnapshot
             | Self::CamerasStreamsList
@@ -134,6 +142,10 @@ impl ToolKind {
             | Self::ProtectDevicesStatus
             | Self::ProtectUsersList
             | Self::ProtectUsersStatus
+            | Self::ProtectViewersList
+            | Self::ProtectViewersStatus
+            | Self::ProtectLiveviewsList
+            | Self::ProtectLiveviewsStatus
             | Self::CamerasSettingsRead
             | Self::CamerasSettingsUpdate
             | Self::CamerasSnapshot
@@ -412,6 +424,26 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .result_sensitive(),
     ),
     sensitive_read_spec(
+        ToolKind::ProtectViewersList,
+        "protect.viewers.list",
+        "Page through complete Protect viewer device records, including assigned live view and stream limit.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectViewersStatus,
+        "protect.viewers.status",
+        "Read the complete Protect viewer device record by exact id.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectLiveviewsList,
+        "protect.liveviews.list",
+        "Page through complete Protect live-view layouts and camera assignments.",
+    ),
+    sensitive_read_spec(
+        ToolKind::ProtectLiveviewsStatus,
+        "protect.liveviews.status",
+        "Read one complete Protect live-view layout and camera assignment by exact id.",
+    ),
+    sensitive_read_spec(
         ToolKind::CamerasSettingsRead,
         "cameras.settings.read",
         "Read one Protect camera's documented name, overlay, LED, microphone volume, video mode, HDR, and smart detection settings by id or exact name.",
@@ -663,6 +695,10 @@ mod tests {
         ToolKind::ProtectUsersList,
         ToolKind::ProtectUsersStatus,
         ToolKind::CamerasPosTransaction,
+        ToolKind::ProtectViewersList,
+        ToolKind::ProtectViewersStatus,
+        ToolKind::ProtectLiveviewsList,
+        ToolKind::ProtectLiveviewsStatus,
         ToolKind::CamerasSettingsRead,
         ToolKind::CamerasSettingsUpdate,
         ToolKind::CamerasSnapshot,
@@ -727,6 +763,10 @@ mod tests {
                 | ToolKind::ProtectUsersList
                 | ToolKind::ProtectUsersStatus
                 | ToolKind::CamerasPosTransaction
+                | ToolKind::ProtectViewersList
+                | ToolKind::ProtectViewersStatus
+                | ToolKind::ProtectLiveviewsList
+                | ToolKind::ProtectLiveviewsStatus
                 | ToolKind::CamerasSettingsRead
                 | ToolKind::CamerasSettingsUpdate
                 | ToolKind::CamerasSnapshot
@@ -789,6 +829,10 @@ mod tests {
                 "protect.users.list",
                 "protect.users.status",
                 "cameras.pos.transaction",
+                "protect.viewers.list",
+                "protect.viewers.status",
+                "protect.liveviews.list",
+                "protect.liveviews.status",
                 "cameras.settings.read",
                 "cameras.settings.update",
                 "cameras.snapshot",
