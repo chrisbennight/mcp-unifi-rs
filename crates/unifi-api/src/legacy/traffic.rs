@@ -128,9 +128,8 @@ impl LegacyClient {
                 RequestClass::IdempotentRead,
             ));
         }
-        Ok(match serde_json::from_slice(&bytes) {
-            Ok(data) => ActivityRead::Reported(data),
-            Err(_) => ActivityRead::Unrecognized,
-        })
+        serde_json::from_slice(&bytes)
+            .map(ActivityRead::Reported)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))
     }
 }

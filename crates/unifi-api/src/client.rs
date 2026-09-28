@@ -659,12 +659,12 @@ async fn decode<T: DeserializeOwned>(response: Response) -> Result<T, ApiError> 
     serde_json::from_slice(&bytes).map_err(|error| crate::error::decode_failure(&error, &bytes))
 }
 
-/// Keep the controller's full error body within the error message budget.
+/// Keep the controller's full error body within the transport body budget.
 pub(crate) async fn bounded_error_message(response: Response) -> Result<BoundedMessage, ApiError> {
     let bytes = http::read_bounded_body(response).await?;
     Ok(bounded_error_message_from_bytes(&bytes))
 }
 
 pub(crate) fn bounded_error_message_from_bytes(bytes: &[u8]) -> BoundedMessage {
-    BoundedMessage::new(&String::from_utf8_lossy(bytes))
+    BoundedMessage::from_controller_bytes(bytes)
 }

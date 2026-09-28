@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Bounded HTTP clients and allowlisted response models for UniFi controllers"
 
 [dependencies]
+base64.workspace = true
 image.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

@@ -2948,6 +2948,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 name = "unifi-api"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "image",
  "rcgen",
  "reqwest",

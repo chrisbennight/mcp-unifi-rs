@@ -508,9 +508,15 @@ async fn a_2xx_login_rejection_without_a_code_is_still_not_a_session() {
         .site_health("default")
         .await
         .expect_err("rejected login");
-    let ApiError::Rejected { code, message } = error else {
+    let ApiError::Rejected {
+        status,
+        code,
+        message,
+    } = error
+    else {
         panic!("expected Rejected, got {error:?}");
     };
+    assert_eq!(status, Some(200));
     assert_eq!(code.as_str(), "");
     assert_eq!(message.as_str(), upstream.to_string());
 }
@@ -593,12 +599,20 @@ async fn mfa_rejections_preserve_the_controller_response() {
         .site_health("default")
         .await
         .expect_err("mfa rejected");
-    let ApiError::Rejected { code, message } = error else {
+    let rendered = error.to_string();
+    let ApiError::Rejected {
+        status,
+        code,
+        message,
+    } = error
+    else {
         panic!("expected Rejected, got {error:?}");
     };
+    assert_eq!(status, Some(400));
     assert_eq!(code.as_str(), "api.err.Ubic2faTokenRequired");
     assert!(message.as_str().contains("api.err.Ubic2faTokenRequired"));
     assert!(message.as_str().contains("\"rc\":\"error\""));
+    assert!(rendered.starts_with("controller rejected HTTP 400: "));
 }
 
 #[tokio::test]
@@ -626,9 +640,15 @@ async fn envelope_rejections_preserve_the_documented_codes() {
         .site_health("default")
         .await
         .expect_err("permission rejected");
-    let ApiError::Rejected { code, message } = error else {
+    let ApiError::Rejected {
+        status,
+        code,
+        message,
+    } = error
+    else {
         panic!("expected Rejected, got {error:?}");
     };
+    assert_eq!(status, Some(200));
     assert_eq!(code.as_str(), "api.err.NoPermission");
     assert!(message.as_str().contains("api.err.NoPermission"));
     assert!(message.as_str().contains("\"rc\":\"error\""));
@@ -1100,12 +1120,13 @@ async fn non_success_wireless_rejection_retains_controller_message() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";
     let secret = "another-wifi-secret";
+    let end_marker = "legacy-error-tail";
     // The same reflection can arrive on the error-status path, which builds
     // its rejection through a different branch.
     Mock::given(method("PUT"))
         .and(path(format!("{prefix}/rest/wlanconf/wlan-1")))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "meta": {"rc": "error", "msg": format!("api.err.Invalid {secret}")},
+            "meta": {"rc": "error", "msg": format!("api.err.Invalid {secret} {}{end_marker}", "x".repeat(700))},
             "data": [],
         })))
         .mount(&server)
@@ -1121,6 +1142,7 @@ async fn non_success_wireless_rejection_retains_controller_message() {
         .expect_err("rejection");
     let rendered = format!("{error:?} {error}");
     assert!(rendered.contains(secret), "{rendered}");
+    assert!(rendered.contains(end_marker), "{rendered}");
 }
 
 #[tokio::test]

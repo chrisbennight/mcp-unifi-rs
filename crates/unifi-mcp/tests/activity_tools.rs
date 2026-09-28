@@ -199,9 +199,8 @@ async fn missing_names_and_wan_hours_preserve_measured_activity_without_fake_rec
 }
 
 #[tokio::test]
-async fn empty_missing_malformed_and_real_zero_are_distinct() {
+async fn empty_and_real_zero_activity_are_distinct() {
     for (data, status) in [
-        (json!({}), "unrecognized"),
         (
             json!({"client_usage_by_app":[],"total_usage_by_app":[]}),
             "empty",
@@ -209,10 +208,6 @@ async fn empty_missing_malformed_and_real_zero_are_distinct() {
         (
             json!({"client_usage_by_app":[],"total_usage_by_app":[{"application":1,"category":2,"bytes_received":0,"bytes_transmitted":0}]}),
             "partial",
-        ),
-        (
-            json!({"client_usage_by_app":[],"total_usage_by_app":[{"application":1,"category":2,"bytes_received":-1,"bytes_transmitted":0}]}),
-            "unrecognized",
         ),
     ] {
         let server = MockServer::start().await;
@@ -224,6 +219,24 @@ async fn empty_missing_malformed_and_real_zero_are_distinct() {
         if status == "partial" {
             assert_eq!(output["topApplications"][0]["rxBytes"], 0);
         }
+    }
+}
+
+#[tokio::test]
+async fn malformed_activity_preserves_the_controller_response() {
+    for data in [
+        json!({}),
+        json!({"client_usage_by_app":[],"total_usage_by_app":[{"application":1,"category":2,"bytes_received":-1,"bytes_transmitted":0}]}),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        activity_mock(&server, data.clone()).await;
+        let error = handler_for(&server)
+            .call(&call("stats.query", &args("dpiApplications")), None)
+            .await
+            .expect_err("malformed activity response");
+        assert!(error.message.contains(&data.to_string()));
+        assert!(error.message.contains("decode error:"));
     }
 }
 

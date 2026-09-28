@@ -341,6 +341,7 @@ impl LegacyClient {
         // a caller-visible outcome, not a transport fault, so it travels as a
         // rejection rather than a decode failure.
         rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
+            status: None,
             code: BoundedMessage::new("api.err.NotFound"),
             message: BoundedMessage::new("no wireless network has that id"),
         })
@@ -373,6 +374,7 @@ impl LegacyClient {
             )
             .await?;
         let row = rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
+            status: None,
             code: BoundedMessage::new("api.err.NotFound"),
             message: BoundedMessage::new("no wireless network has that id"),
         })?;
@@ -442,6 +444,7 @@ impl LegacyClient {
             )
             .await?;
         let row = rows.into_iter().next().ok_or_else(|| ApiError::Rejected {
+            status: None,
             code: BoundedMessage::new("api.err.NotFound"),
             message: BoundedMessage::new("no port forward has that id"),
         })?;
@@ -740,7 +743,6 @@ impl LegacyClient {
             Err(ApiError::Status {
                 status: 404 | 405, ..
             }) => DpiAvailability::Unsupported,
-            Err(ApiError::Decode(_)) => DpiAvailability::Unrecognized,
             Err(error) => return Err(error),
         };
         Ok(DpiReport {
@@ -1093,7 +1095,7 @@ impl LegacyClient {
         tail: &[&str],
         body: Option<&serde_json::Value>,
     ) -> Result<Vec<T>, ApiError> {
-        let bytes = self.execute_bytes(class, method, site, tail, body).await?;
+        let (status, bytes) = self.execute_bytes(class, method, site, tail, body).await?;
         let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         if envelope.meta.rc == "ok" {
@@ -1101,7 +1103,7 @@ impl LegacyClient {
         } else {
             let raw = envelope.meta.msg.as_deref();
             // A mutation is never resent based on an error in its response body.
-            Err(rejection(raw, &bytes))
+            Err(rejection(Some(status), raw, &bytes))
         }
     }
 
@@ -1112,7 +1114,7 @@ impl LegacyClient {
         site: &str,
         tail: &[&str],
         body: Option<&serde_json::Value>,
-    ) -> Result<Vec<u8>, ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let (kind, csrf) = {
             let session = self.session.lock().await;
             let kind = session.kind.ok_or_else(|| {
@@ -1152,7 +1154,7 @@ impl LegacyClient {
         if !status.is_success() {
             return Err(translate_failure(status.as_u16(), &bytes, class));
         }
-        Ok(bytes)
+        Ok((status.as_u16(), bytes))
     }
 
     /// Ensure an authenticated session exists and return its generation. A
@@ -1269,7 +1271,11 @@ impl LegacyClient {
         // session is authenticated only when no such rejection is present,
         // whether or not the rejection names a code.
         if let Some(rejected) = envelope_rejection(&bytes) {
-            return Err(rejection(rejected.code.as_deref(), &bytes));
+            return Err(rejection(
+                Some(status.as_u16()),
+                rejected.code.as_deref(),
+                &bytes,
+            ));
         }
         session.authenticated = true;
         session.generation += 1;
@@ -1417,14 +1423,14 @@ fn translate_failure(status: u16, bytes: &[u8], _class: RequestClass) -> ApiErro
     if status == 401 {
         return ApiError::Status {
             status,
-            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+            message: BoundedMessage::from_controller_bytes(bytes),
         };
     }
     match envelope_rejection(bytes) {
-        Some(rejected) => rejection(rejected.code.as_deref(), bytes),
+        Some(rejected) => rejection(Some(status), rejected.code.as_deref(), bytes),
         None => ApiError::Status {
             status,
-            message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+            message: BoundedMessage::from_controller_bytes(bytes),
         },
     }
 }
@@ -1456,10 +1462,11 @@ fn envelope_rejection(bytes: &[u8]) -> Option<EnvelopeRejection> {
 }
 
 /// Keep the controller's rejection body while retaining its code for session handling.
-fn rejection(code: Option<&str>, bytes: &[u8]) -> ApiError {
+fn rejection(status: Option<u16>, code: Option<&str>, bytes: &[u8]) -> ApiError {
     ApiError::Rejected {
+        status,
         code: BoundedMessage::new(code.unwrap_or_default()),
-        message: BoundedMessage::new(&String::from_utf8_lossy(bytes)),
+        message: BoundedMessage::from_controller_bytes(bytes),
     }
 }
 
