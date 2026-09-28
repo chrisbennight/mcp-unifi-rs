@@ -135,6 +135,68 @@ pub struct ClientSummary {
     pub uplink_device_id: Option<String>,
 }
 
+/// Connected client detail from the official Integration API.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDetail {
+    pub id: String,
+    pub mac_address: Option<String>,
+    pub access: Option<ClientAccess>,
+}
+
+/// Guest access is reported by the official API on a connected client.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientAccess {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub authorized: Option<bool>,
+    pub authorization: Option<GuestAuthorization>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestAuthorization {
+    pub authorization_method: String,
+    pub authorized_at: String,
+    pub expires_at: String,
+    pub data_usage_limit_m_bytes: Option<u64>,
+    pub rx_rate_limit_kbps: Option<u64>,
+    pub tx_rate_limit_kbps: Option<u64>,
+    pub usage: Option<GuestAuthorizationUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestAuthorizationUsage {
+    pub bytes: u64,
+    pub duration_sec: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+/// Optional limits the official guest authorization action accepts.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestAuthorizationLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_limit_minutes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_usage_limit_m_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_rate_limit_kbps: Option<u64>,
+}
+
+/// Action responses identify both the granted and revoked authorization.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestActionResponse {
+    pub action: String,
+    pub granted_authorization: Option<GuestAuthorization>,
+    pub revoked_authorization: Option<GuestAuthorization>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Voucher {
@@ -244,16 +306,24 @@ pub enum PortAction {
 }
 
 /// Actions the Integration API accepts on a client.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "action")]
 pub enum ClientAction {
     #[serde(rename = "AUTHORIZE_GUEST_ACCESS")]
-    AuthorizeGuestAccess,
+    AuthorizeGuestAccess {
+        #[serde(flatten)]
+        limits: GuestAuthorizationLimits,
+    },
+    #[serde(rename = "UNAUTHORIZE_GUEST_ACCESS")]
+    UnauthorizeGuestAccess,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientAction, DeviceAction, DeviceSummary, Page, PortAction, VoucherCreate};
+    use super::{
+        ClientAction, DeviceAction, DeviceSummary, GuestAuthorizationLimits, Page, PortAction,
+        VoucherCreate,
+    };
 
     #[test]
     fn response_projections_tolerate_unknown_upstream_fields() {
@@ -291,8 +361,15 @@ mod tests {
             serde_json::json!({"action": "POWER_CYCLE"})
         );
         assert_eq!(
-            serde_json::to_value(ClientAction::AuthorizeGuestAccess).expect("serialize"),
+            serde_json::to_value(ClientAction::AuthorizeGuestAccess {
+                limits: GuestAuthorizationLimits::default(),
+            })
+            .expect("serialize"),
             serde_json::json!({"action": "AUTHORIZE_GUEST_ACCESS"})
+        );
+        assert_eq!(
+            serde_json::to_value(ClientAction::UnauthorizeGuestAccess).expect("serialize"),
+            serde_json::json!({"action": "UNAUTHORIZE_GUEST_ACCESS"})
         );
     }
 

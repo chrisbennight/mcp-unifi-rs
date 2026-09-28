@@ -26,8 +26,9 @@ use unifi_api::{
     ApiError, ProtectAvailability, RecordFingerprint,
     capability::{self, FirewallGeneration},
     models::{
-        ActiveClient, DeviceStatistics, DeviceSummary, DpiAvailability, PageRequest, PortForward,
-        PortForwardPatch, Voucher, VoucherCreate, VoucherDetails, WlanConf, WlanPatch,
+        ActiveClient, ClientDetail, DeviceStatistics, DeviceSummary, DpiAvailability,
+        GuestAuthorization, GuestAuthorizationLimits, PageRequest, PortForward, PortForwardPatch,
+        Voucher, VoucherCreate, VoucherDetails, WlanConf, WlanPatch,
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
@@ -1387,25 +1388,115 @@ struct GuestsAuthorizeInput {
     /// surface reports one: the client reads come from the legacy API, which
     /// addresses clients by hardware address.
     client: String,
+    time_limit_minutes: Option<u64>,
+    data_usage_limit_m_bytes: Option<u64>,
+    rx_rate_limit_kbps: Option<u64>,
+    tx_rate_limit_kbps: Option<u64>,
     /// Authorize the client. Absent or false describes the action without
     /// performing it.
     confirm: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct GuestClientInput {
+    client: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct GuestsUnauthorizeInput {
+    client: String,
+    confirm: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GuestLimitsView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_limit_minutes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_usage_limit_m_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_rate_limit_kbps: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GuestAuthorizationView {
+    authorization_method: String,
+    authorized_at: String,
+    expires_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_usage_limit_m_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<GuestUsageView>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GuestUsageView {
+    bytes: u64,
+    duration_sec: u64,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+impl From<GuestAuthorization> for GuestAuthorizationView {
+    fn from(value: GuestAuthorization) -> Self {
+        Self {
+            authorization_method: value.authorization_method,
+            authorized_at: value.authorized_at,
+            expires_at: value.expires_at,
+            data_usage_limit_m_bytes: value.data_usage_limit_m_bytes,
+            rx_rate_limit_kbps: value.rx_rate_limit_kbps,
+            tx_rate_limit_kbps: value.tx_rate_limit_kbps,
+            usage: value.usage.map(|usage| GuestUsageView {
+                bytes: usage.bytes,
+                duration_sec: usage.duration_sec,
+                rx_bytes: usage.rx_bytes,
+                tx_bytes: usage.tx_bytes,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct GuestsAuthorizeOutput {
     /// The address the action addressed, normalized.
     client: String,
-    /// Whether the controller was asked to authorize. False for a preview.
+    action: &'static str,
     applied: bool,
-    /// The controller exposes no authorization field on a client, so the
-    /// effect cannot be read back. Stated in the result rather than left to
-    /// be assumed: the request was accepted, which is not the same as the
-    /// guest being authorized.
-    verifiable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_limits: Option<GuestLimitsView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorized_before: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorized_after: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    granted_authorization: Option<GuestAuthorizationView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revoked_authorization: Option<GuestAuthorizationView>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GuestStatusOutput {
+    client: String,
+    authorized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization: Option<GuestAuthorizationView>,
 }
 
 /// What `firewall.policies.update` can change on one zone-based policy.
@@ -2020,7 +2111,11 @@ impl ToolSpec {
             ToolKind::WlansUpdate => tool::<WlansUpdateInput, WlansUpdateOutput>(self),
             ToolKind::ClientsControl => tool::<ClientsControlInput, ClientsControlOutput>(self),
             ToolKind::DevicesControl => tool::<DevicesControlInput, DevicesControlOutput>(self),
+            ToolKind::GuestsStatus => tool::<GuestClientInput, GuestStatusOutput>(self),
             ToolKind::GuestsAuthorize => tool::<GuestsAuthorizeInput, GuestsAuthorizeOutput>(self),
+            ToolKind::GuestsUnauthorize => {
+                tool::<GuestsUnauthorizeInput, GuestsAuthorizeOutput>(self)
+            }
             ToolKind::PortForwardsUpdate => {
                 tool::<PortForwardsUpdateInput, PortForwardsUpdateOutput>(self)
             }
@@ -2280,7 +2375,9 @@ impl UnifiMcp {
             ToolKind::WlansUpdate => self.wlans_update(params).await,
             ToolKind::ClientsControl => self.clients_control(params).await,
             ToolKind::DevicesControl => self.devices_control(params).await,
+            ToolKind::GuestsStatus => self.guests_status(params).await,
             ToolKind::GuestsAuthorize => self.guests_authorize(params).await,
+            ToolKind::GuestsUnauthorize => self.guests_unauthorize(params).await,
             ToolKind::PortForwardsUpdate => self.port_forwards_update(params).await,
             ToolKind::FirewallPoliciesUpdate => self.firewall_policies_update(params).await,
             ToolKind::VouchersSearch => self.vouchers_search(params).await,
@@ -3606,45 +3703,199 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<GuestsAuthorizeInput>(params)?;
-        let client = normalize_mac(&input.client);
-        if !is_client_address(&client) {
-            return Err(McpError::invalid_params(
-                "client must be the unicast MAC address of one client, such \
-                 as aa:bb:cc:dd:ee:ff, as clients.search reports it",
+        let client = guest_client_address(&input.client)?;
+        let limits = guest_limits(&input)?;
+        let warnings = vec![
+            "authorization replaces any active guest grant and resets guest traffic counters"
+                .to_owned(),
+        ];
+        let mut output = GuestsAuthorizeOutput {
+            client: client.clone(),
+            action: "authorize",
+            applied: false,
+            requested_limits: Some(GuestLimitsView {
+                time_limit_minutes: input.time_limit_minutes,
+                data_usage_limit_m_bytes: input.data_usage_limit_m_bytes,
+                rx_rate_limit_kbps: input.rx_rate_limit_kbps,
+                tx_rate_limit_kbps: input.tx_rate_limit_kbps,
+            }),
+            authorized_before: None,
+            authorized_after: None,
+            verified: None,
+            granted_authorization: None,
+            revoked_authorization: None,
+            warnings,
+        };
+        if !input.confirm.unwrap_or(false) {
+            return structured(output);
+        }
+        let site_id = self.site_id().await?;
+        let client_id = self.integration_client_id(&site_id, &client).await?;
+        let before = self.guest_detail(&site_id, &client_id, &client).await?;
+        output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
+        let response = self
+            .integration()
+            .authorize_guest(&site_id, &client_id, limits)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        let grant = response
+            .granted_authorization
+            .expect("validated action response");
+        output.granted_authorization = Some(grant.clone().into());
+        output.revoked_authorization = response.revoked_authorization.map(Into::into);
+        self.guest_readback(
+            &site_id,
+            &client_id,
+            &client,
+            started,
+            &mut output,
+            Some(&grant),
+        )
+        .await;
+        structured(output)
+    }
+
+    async fn guests_unauthorize(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<GuestsUnauthorizeInput>(params)?;
+        let client = guest_client_address(&input.client)?;
+        let mut output = GuestsAuthorizeOutput {
+            client: client.clone(),
+            action: "unauthorize",
+            applied: false,
+            requested_limits: None,
+            authorized_before: None,
+            authorized_after: None,
+            verified: None,
+            granted_authorization: None,
+            revoked_authorization: None,
+            warnings: vec!["unauthorizing a guest also disconnects the client".to_owned()],
+        };
+        if !input.confirm.unwrap_or(false) {
+            return structured(output);
+        }
+        let site_id = self.site_id().await?;
+        let client_id = self.integration_client_id(&site_id, &client).await?;
+        let before = self.guest_detail(&site_id, &client_id, &client).await?;
+        output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
+        let response = self
+            .integration()
+            .unauthorize_guest(&site_id, &client_id)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        output.revoked_authorization = response.revoked_authorization.map(Into::into);
+        self.guest_readback(&site_id, &client_id, &client, started, &mut output, None)
+            .await;
+        structured(output)
+    }
+
+    async fn guests_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<GuestClientInput>(params)?;
+        let client = guest_client_address(&input.client)?;
+        let site_id = self.site_id().await?;
+        let client_id = self.integration_client_id(&site_id, &client).await?;
+        let detail = self.guest_detail(&site_id, &client_id, &client).await?;
+        let access = detail.access.expect("validated guest detail");
+        structured(GuestStatusOutput {
+            client,
+            authorized: access
+                .authorized
+                .expect("validated guest authorization state"),
+            authorization: access.authorization.map(Into::into),
+        })
+    }
+
+    async fn guest_detail(
+        &self,
+        site_id: &str,
+        client_id: &str,
+        mac: &str,
+    ) -> Result<ClientDetail, McpError> {
+        let detail = self
+            .integration()
+            .client_detail(site_id, client_id)
+            .await
+            .map_err(api_error)?;
+        if detail.id != client_id
+            || detail.mac_address.as_deref().map(normalize_mac).as_deref() != Some(mac)
+        {
+            return Err(McpError::internal_error(
+                "controller returned a different connected client",
                 None,
             ));
         }
-        let warnings = vec![
-            "the client gains access to the guest network until its \
-             authorization expires or is revoked on the controller"
-                .to_owned(),
-        ];
-
-        if !input.confirm.unwrap_or(false) {
-            return structured(GuestsAuthorizeOutput {
-                client,
-                applied: false,
-                verifiable: false,
-                warnings,
-            });
+        match detail.access.as_ref() {
+            Some(access) if access.kind == "GUEST" && access.authorized.is_some() => Ok(detail),
+            Some(access) if access.kind != "GUEST" => Err(McpError::invalid_params(
+                "the selected client is not on guest access",
+                None,
+            )),
+            _ => Err(McpError::internal_error(
+                "controller did not report guest authorization state",
+                None,
+            )),
         }
+    }
 
-        let site_id = self.site_id().await?;
-        // The authorization endpoint addresses a client by the controller's
-        // own id, which nothing on this surface reports, so the address the
-        // caller can obtain is resolved to one here.
-        let client_id = self.integration_client_id(&site_id, &client).await?;
-        self.integration()
-            .authorize_guest(&site_id, &client_id)
-            .await
-            .map_err(api_error)?;
-        structured(GuestsAuthorizeOutput {
-            client,
-            applied: true,
-            verifiable: false,
-            warnings,
-        })
+    async fn guest_readback(
+        &self,
+        site_id: &str,
+        client_id: &str,
+        mac: &str,
+        started: tokio::time::Instant,
+        output: &mut GuestsAuthorizeOutput,
+        grant: Option<&GuestAuthorization>,
+    ) {
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(GUEST_RESPONSE_RESERVE)
+            .min(GUEST_READBACK_BUDGET);
+        let readback = if budget.is_zero() {
+            None
+        } else {
+            tokio::time::timeout(budget, self.integration().client_detail(site_id, client_id))
+                .await
+                .ok()
+        };
+        match readback {
+            Some(Ok(detail))
+                if detail.id == client_id
+                    && detail.mac_address.as_deref().map(normalize_mac).as_deref() == Some(mac) =>
+            {
+                if let Some(access) = detail.access.filter(|access| access.kind == "GUEST") {
+                    output.authorized_after = access.authorized;
+                    output.verified = access.authorized.map(|authorized| {
+                        if let Some(grant) = grant {
+                            authorized
+                                && access.authorization.as_ref().is_some_and(|observed| {
+                                    observed.authorized_at == grant.authorized_at
+                                        && observed.expires_at == grant.expires_at
+                                })
+                        } else {
+                            !authorized
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+        if output.verified != Some(true) {
+            output.warnings.push(
+                "the action response was returned, but the current guest state was not verified"
+                    .to_owned(),
+            );
+        }
     }
 
     /// The controller's id for the client at one hardware address.
@@ -5587,6 +5838,45 @@ fn is_client_address(value: &str) -> bool {
     first_byte.is_some_and(|byte| byte & 1 == 0) && !all_zero
 }
 
+fn guest_client_address(raw: &str) -> Result<String, McpError> {
+    let client = normalize_mac(raw);
+    if !is_client_address(&client) {
+        return Err(McpError::invalid_params(
+            "client must be the unicast MAC address of one client, such as aa:bb:cc:dd:ee:ff, as clients.search reports it",
+            None,
+        ));
+    }
+    Ok(client)
+}
+
+fn guest_limits(input: &GuestsAuthorizeInput) -> Result<GuestAuthorizationLimits, McpError> {
+    let limits = GuestAuthorizationLimits {
+        time_limit_minutes: input.time_limit_minutes,
+        data_usage_limit_m_bytes: input.data_usage_limit_m_bytes,
+        rx_rate_limit_kbps: input.rx_rate_limit_kbps,
+        tx_rate_limit_kbps: input.tx_rate_limit_kbps,
+    };
+    if limits
+        .time_limit_minutes
+        .is_some_and(|value| !(1..=1_000_000).contains(&value))
+        || limits
+            .data_usage_limit_m_bytes
+            .is_some_and(|value| !(1..=1_048_576).contains(&value))
+        || limits
+            .rx_rate_limit_kbps
+            .is_some_and(|value| !(2..=100_000).contains(&value))
+        || limits
+            .tx_rate_limit_kbps
+            .is_some_and(|value| !(2..=100_000).contains(&value))
+    {
+        return Err(McpError::invalid_params(
+            "timeLimitMinutes must be 1-1000000, dataUsageLimitMBytes 1-1048576, and rate limits 2-100000 Kbps",
+            None,
+        ));
+    }
+    Ok(limits)
+}
+
 /// Consequences an operator should see before confirming a client action.
 ///
 /// Each states what the action does, not what the client's state will become.
@@ -5765,6 +6055,9 @@ const VOUCHER_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const STREAM_READBACK_BUDGET: Duration = Duration::from_secs(5);
 /// Leave time to serialize stream handles after the optional readback.
 const STREAM_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+/// A guest action response must remain returnable after a slow detail read.
+const GUEST_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const GUEST_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
@@ -7358,8 +7651,10 @@ mod tests {
         ("clients.control", false, false, false),
         // Each restart restarts; no secret is involved.
         ("devices.control", false, false, false),
-        // Authorizing twice leaves the same access; no secret is involved.
-        ("guests.authorize", true, false, false),
+        // Reauthorization replaces the grant and resets traffic counters.
+        ("guests.authorize", false, false, true),
+        // Revocation disconnects the client and returns the revoked grant.
+        ("guests.unauthorize", false, false, true),
         // Setting the same rule state twice leaves the same state; no secret
         // is involved, and the result names the host a rule exposes.
         ("port_forwards.update", true, false, true),
