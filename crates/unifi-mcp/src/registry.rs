@@ -44,6 +44,7 @@ pub enum ToolKind {
     ProtectDevicesList,
     ProtectDevicesStatus,
     ProtectDevicesAction,
+    ProtectDevicesSettingsUpdate,
     ProtectArmProfilesList,
     ProtectArmProfilesConfigure,
     ProtectAlarmsAction,
@@ -104,6 +105,7 @@ impl ToolKind {
             | Self::CamerasTalkbackStart
             | Self::CamerasPosTransaction
             | Self::ProtectDevicesAction
+            | Self::ProtectDevicesSettingsUpdate
             | Self::ProtectArmProfilesConfigure
             | Self::ProtectAlarmsAction
             | Self::ProtectViewersSettingsUpdate
@@ -153,6 +155,7 @@ impl ToolKind {
             | Self::ProtectDevicesList
             | Self::ProtectDevicesStatus
             | Self::ProtectDevicesAction
+            | Self::ProtectDevicesSettingsUpdate
             | Self::ProtectArmProfilesList
             | Self::ProtectArmProfilesConfigure
             | Self::ProtectAlarmsAction
@@ -428,6 +431,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "protect.devices.action",
         "Preview or invoke a documented siren, relay, speaker, or alarm-hub action by exact device id; return the accepted status and any controller body.",
         ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::ProtectDevicesSettingsUpdate,
+        "protect.devices.settings.update",
+        "Preview or patch documented settings for one Protect light, siren, relay, speaker, fob, bridge, link station, or alarm hub by exact id. Returns the accepted controller body and complete readback.",
+        ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
     ),
@@ -756,6 +767,7 @@ mod tests {
         ToolKind::ProtectDevicesList,
         ToolKind::ProtectDevicesStatus,
         ToolKind::ProtectDevicesAction,
+        ToolKind::ProtectDevicesSettingsUpdate,
         ToolKind::ProtectArmProfilesList,
         ToolKind::ProtectArmProfilesConfigure,
         ToolKind::ProtectAlarmsAction,
@@ -868,6 +880,7 @@ mod tests {
                 | ToolKind::ProtectDevicesList
                 | ToolKind::ProtectDevicesStatus
                 | ToolKind::ProtectDevicesAction
+                | ToolKind::ProtectDevicesSettingsUpdate
                 | ToolKind::ProtectArmProfilesList
                 | ToolKind::ProtectArmProfilesConfigure
                 | ToolKind::ProtectAlarmsAction
@@ -940,6 +953,7 @@ mod tests {
                 "protect.devices.list",
                 "protect.devices.status",
                 "protect.devices.action",
+                "protect.devices.settings.update",
                 "protect.arm_profiles.list",
                 "protect.arm_profiles.configure",
                 "protect.alarms.action",

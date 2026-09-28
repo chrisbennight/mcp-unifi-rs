@@ -598,6 +598,138 @@ struct ProtectDevicesActionOutput {
     response_body_in_content: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectLightModeSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<ProtectLightMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable_at: Option<ProtectLightEnableAt>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ProtectLightMode {
+    Always,
+    Motion,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ProtectLightEnableAt {
+    Fulltime,
+    Dark,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectLightDeviceSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_indicator_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pir_duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pir_sensitivity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    led_level: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectSirenLedSettings {
+    is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectRelayLedSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ProtectDeviceSettingsChanges {
+    Light {
+        name: Option<String>,
+        is_light_force_enabled: Option<bool>,
+        light_mode_settings: Option<ProtectLightModeSettings>,
+        light_device_settings: Option<ProtectLightDeviceSettings>,
+    },
+    Siren {
+        name: Option<String>,
+        volume: Option<u8>,
+        led_settings: Option<ProtectSirenLedSettings>,
+    },
+    Relay {
+        name: Option<String>,
+        led_settings: Option<ProtectRelayLedSettings>,
+    },
+    Speaker {
+        name: Option<String>,
+        volume: Option<u8>,
+        mic_volume: Option<u8>,
+        is_mic_enabled: Option<bool>,
+    },
+    Fob {
+        name: Option<String>,
+    },
+    Bridge {
+        name: Option<String>,
+    },
+    LinkStation {
+        name: Option<String>,
+    },
+    AlarmHub {
+        name: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectDevicesSettingsUpdateInput {
+    device_id: String,
+    changes: ProtectDeviceSettingsChanges,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectDevicesSettingsUpdateOutput {
+    kind: ProtectDeviceKind,
+    device_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_in_content: Option<bool>,
+    before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_in_content: Option<bool>,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectArmProfilesListInput {
@@ -3029,6 +3161,9 @@ impl ToolSpec {
             ToolKind::ProtectDevicesAction => {
                 tool::<ProtectDevicesActionInput, ProtectDevicesActionOutput>(self)
             }
+            ToolKind::ProtectDevicesSettingsUpdate => {
+                tool::<ProtectDevicesSettingsUpdateInput, ProtectDevicesSettingsUpdateOutput>(self)
+            }
             ToolKind::ProtectArmProfilesList => {
                 tool::<ProtectArmProfilesListInput, ProtectArmProfilesListOutput>(self)
             }
@@ -3330,6 +3465,9 @@ impl UnifiMcp {
             ToolKind::ProtectDevicesList => self.protect_devices_list(params).await,
             ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
             ToolKind::ProtectDevicesAction => self.protect_devices_action(params).await,
+            ToolKind::ProtectDevicesSettingsUpdate => {
+                self.protect_devices_settings_update(params).await
+            }
             ToolKind::ProtectArmProfilesList => self.protect_arm_profiles_list(params).await,
             ToolKind::ProtectArmProfilesConfigure => {
                 self.protect_arm_profiles_configure(params).await
@@ -4034,6 +4172,81 @@ impl UnifiMcp {
                 Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
         }
         protect_action_result(output)
+    }
+
+    async fn protect_devices_settings_update(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<ProtectDevicesSettingsUpdateInput>(params)?;
+        validate_protect_action_id("deviceId", &input.device_id)?;
+        let (kind, requested) = device_settings_request(&input.changes)?;
+        let family = ProtectDeviceFamily::from(kind);
+        let before = self
+            .protect()
+            .device(family, &input.device_id)
+            .await
+            .map_err(api_error)?;
+        let mut output = ProtectDevicesSettingsUpdateOutput {
+            kind,
+            device_id: input.device_id,
+            requested: Some(requested),
+            requested_in_content: None,
+            before: Some(before),
+            before_in_content: None,
+            submitted: false,
+            accepted_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return device_settings_update_result(output);
+        }
+        let response = self
+            .protect()
+            .device_settings_patch(
+                family,
+                &output.device_id,
+                output.requested.as_ref().expect("validated changes exist"),
+            )
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.accepted_status = Some(response.status);
+        if !response.body.is_empty() {
+            output.response_body =
+                Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
+        }
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+            .min(CAMERA_SETTINGS_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("device readback skipped because the request deadline was near".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.protect().device(family, &output.device_id))
+                .await
+            {
+                Ok(Ok(after)) => {
+                    output.verified = Some(requested_json_matches(
+                        output.requested.as_ref().expect("validated changes exist"),
+                        &after,
+                    ));
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("device readback timed out".to_owned()),
+            }
+        }
+        device_settings_update_result(output)
     }
 
     async fn protect_arm_profiles_list(
@@ -10050,6 +10263,121 @@ fn protect_action_request(
     Ok(result)
 }
 
+fn device_settings_request(
+    changes: &ProtectDeviceSettingsChanges,
+) -> Result<(ProtectDeviceKind, Value), McpError> {
+    let kind = match changes {
+        ProtectDeviceSettingsChanges::Light {
+            light_device_settings,
+            ..
+        } => {
+            if light_device_settings.as_ref().is_some_and(|settings| {
+                settings.pir_duration.is_some_and(|value| value < 0.0)
+                    || settings
+                        .pir_sensitivity
+                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                    || settings
+                        .led_level
+                        .is_some_and(|value| !(1.0..=6.0).contains(&value))
+            }) {
+                return Err(McpError::invalid_params(
+                    "light pirDuration must be nonnegative, pirSensitivity 0-100, and ledLevel 1-6",
+                    None,
+                ));
+            }
+            ProtectDeviceKind::Light
+        }
+        ProtectDeviceSettingsChanges::Siren { volume, .. } => {
+            if volume.is_some_and(|value| !(1..=100).contains(&value)) {
+                return Err(McpError::invalid_params("siren volume must be 1-100", None));
+            }
+            ProtectDeviceKind::Siren
+        }
+        ProtectDeviceSettingsChanges::Relay { .. } => ProtectDeviceKind::Relay,
+        ProtectDeviceSettingsChanges::Speaker {
+            volume, mic_volume, ..
+        } => {
+            if volume.is_some_and(|value| value > 100)
+                || mic_volume.is_some_and(|value| value > 100)
+            {
+                return Err(McpError::invalid_params(
+                    "speaker volume and micVolume must be 0-100",
+                    None,
+                ));
+            }
+            ProtectDeviceKind::Speaker
+        }
+        ProtectDeviceSettingsChanges::Fob { .. } => ProtectDeviceKind::Fob,
+        ProtectDeviceSettingsChanges::Bridge { .. } => ProtectDeviceKind::Bridge,
+        ProtectDeviceSettingsChanges::LinkStation { .. } => ProtectDeviceKind::LinkStation,
+        ProtectDeviceSettingsChanges::AlarmHub { .. } => ProtectDeviceKind::AlarmHub,
+    };
+    let mut request = serde_json::to_value(changes)
+        .map_err(|_| McpError::internal_error("device settings could not be encoded", None))?;
+    let object = request
+        .as_object_mut()
+        .expect("tagged changes serialize to an object");
+    object.remove("kind");
+    object.retain(|_, value| !value.is_null());
+    if object.is_empty() {
+        return Err(McpError::invalid_params(
+            "changes names no field to change",
+            None,
+        ));
+    }
+    if request.to_string().len() > 1024 * 1024 {
+        return Err(McpError::invalid_params(
+            "device settings request exceeds 1 MiB",
+            None,
+        ));
+    }
+    Ok((kind, request))
+}
+
+fn device_settings_update_result(
+    mut output: ProtectDevicesSettingsUpdateOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &ProtectDevicesSettingsUpdateOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(requested) = output.requested.take()
+    {
+        output.requested_in_content = Some(true);
+        content.push(ContentBlock::text(format!("requested: {requested}")));
+    }
+    if exceeds(&output)?
+        && let Some(before) = output.before.take()
+    {
+        output.before_in_content = Some(true);
+        content.push(ContentBlock::text(format!("before: {before}")));
+    }
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn protect_action_result(
     mut output: ProtectDevicesActionOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -10796,6 +11124,9 @@ mod tests {
         // Siren, relay, speaker, and alarm-hub actions can have another effect
         // when repeated; device identities and responses can be sensitive.
         ("protect.devices.action", false, true, true),
+        // Applying the same device settings twice leaves the same state;
+        // names, audio settings, and returned device records may be sensitive.
+        ("protect.devices.settings.update", true, true, true),
         // Profile creation and deletion can have another effect on repetition;
         // configuration and returned records may be sensitive.
         ("protect.arm_profiles.configure", false, true, true),
