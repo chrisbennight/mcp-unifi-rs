@@ -221,6 +221,87 @@ async fn a_confirmed_rename_verifies_instead_of_reporting_itself_as_collateral()
 }
 
 #[tokio::test]
+async fn a_confirmed_rule_change_sends_and_verifies_the_match_and_target() {
+    let server = MockServer::start().await;
+    let before = stored(true, "Home Assistant");
+    let mut after = before.clone();
+    after["src"] = serde_json::json!("203.0.113.0/24");
+    after["fwd"] = serde_json::json!("10.0.0.8");
+    after["fwd_port"] = serde_json::json!("8443");
+    after["dst_port"] = serde_json::json!("443");
+    after["proto"] = serde_json::json!("tcp_udp");
+    reads(&server, &before, &after).await;
+    accepts_the_write(
+        &server,
+        &serde_json::json!({
+            "src": "203.0.113.0/24", "fwd": "10.0.0.8", "fwd_port": "8443",
+            "dst_port": "443", "proto": "tcp_udp"
+        }),
+    )
+    .await;
+
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "portForward": FORWARD,
+                "changes": {
+                    "source": "203.0.113.0/24", "forwardTo": "10.0.0.8",
+                    "forwardPort": "8443", "destinationPort": "443", "protocol": "tcp_udp"
+                },
+                "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("rule change")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true);
+    assert_eq!(output["unexpectedChanges"], serde_json::json!([]));
+    assert_eq!(output["forward"]["forwardTo"], "10.0.0.8");
+    assert_eq!(output["forward"]["destinationPort"], "443");
+    assert_eq!(
+        output["fields"].as_array().expect("field outcomes").len(),
+        5
+    );
+    for field in output["fields"].as_array().expect("field outcomes") {
+        assert_eq!(field["status"], "persisted");
+    }
+}
+
+#[tokio::test]
+async fn a_rule_target_preview_names_the_previous_and_requested_values() {
+    let server = MockServer::start().await;
+    let record = stored(true, "Home Assistant");
+    reads(&server, &record, &record).await;
+
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "portForward": FORWARD,
+                "changes": {"forwardTo": "10.0.0.8"}
+            })),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], false);
+    assert_eq!(
+        output["changes"],
+        serde_json::json!([{
+            "field": "forwardTo", "from": "10.0.0.5", "to": "10.0.0.8"
+        }])
+    );
+    assert!(
+        output["warnings"]
+            .to_string()
+            .contains("changes which traffic is forwarded")
+    );
+}
+
+#[tokio::test]
 async fn a_field_the_controller_discarded_is_reported_as_dropped() {
     let server = MockServer::start().await;
     // The controller acknowledges the write and keeps the old value, which is
@@ -322,7 +403,7 @@ async fn a_request_that_changes_nothing_is_refused_before_any_controller_call() 
         .call(
             &update(&serde_json::json!({
                 "portForward": FORWARD,
-                "changes": {"destinationPort": "443"},
+                "changes": {"destinatonPort": "443"},
             })),
             None,
         )
@@ -331,7 +412,7 @@ async fn a_request_that_changes_nothing_is_refused_before_any_controller_call() 
     // A misspelling is the likeliest way a caller loses a change, so the
     // rejection names what would have been accepted.
     assert!(
-        unknown.message.contains("destinationPort") && unknown.message.contains("name, enabled"),
+        unknown.message.contains("destinatonPort") && unknown.message.contains("destinationPort"),
         "{}",
         unknown.message
     );

@@ -1510,10 +1510,7 @@ struct WlansUpdateOutput {
     warnings: Vec<String>,
 }
 
-/// What `port_forwards.update` can change on one port forward. The match
-/// itself — source, destination port, and internal host — is not settable
-/// here: rewriting where a forward points is a different rule, and an
-/// operator changing one states it in the controller.
+/// Fields that `port_forwards.update` can change on one port forward.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PortForwardChanges {
@@ -1521,6 +1518,16 @@ struct PortForwardChanges {
     name: Option<String>,
     /// Whether the rule forwards traffic.
     enabled: Option<bool>,
+    /// Source selector as the controller stores it.
+    source: Option<String>,
+    /// Internal host that receives matching traffic.
+    forward_to: Option<String>,
+    /// Internal port or port range as the controller stores it.
+    forward_port: Option<String>,
+    /// External port or port range as the controller stores it.
+    destination_port: Option<String>,
+    /// Protocol as the controller stores it.
+    protocol: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -4490,6 +4497,11 @@ impl UnifiMcp {
         let patch = PortForwardPatch {
             name: input.changes.name.clone(),
             enabled: input.changes.enabled,
+            src: input.changes.source.clone(),
+            fwd: input.changes.forward_to.clone(),
+            fwd_port: input.changes.forward_port.clone(),
+            dst_port: input.changes.destination_port.clone(),
+            proto: input.changes.protocol.clone(),
         };
 
         let (current, before_digest) = self.port_forward_snapshot(&input.port_forward).await?;
@@ -7472,15 +7484,26 @@ fn reject_conflicting_recorder_identity(
 }
 
 /// Every field `port_forwards.update` accepts.
-const PORT_FORWARD_CHANGE_FIELDS: &[&str] = &["name", "enabled"];
+const PORT_FORWARD_CHANGE_FIELDS: &[&str] = &[
+    "name",
+    "enabled",
+    "source",
+    "forwardTo",
+    "forwardPort",
+    "destinationPort",
+    "protocol",
+];
 
-/// The port forward as the write surface names it. Only the settable fields
-/// appear: the match itself is reported through the rule view, and a change
-/// to it shows up as a collateral change.
+/// The port forward as the write surface names it.
 fn port_forward_projection(forward: &PortForward) -> Value {
     serde_json::json!({
         "name": forward.name,
         "enabled": forward.enabled,
+        "source": forward.src,
+        "forwardTo": forward.fwd,
+        "forwardPort": forward.fwd_port,
+        "destinationPort": forward.dst_port,
+        "protocol": forward.proto,
     })
 }
 
@@ -7493,6 +7516,17 @@ fn requested_port_forward_fields(changes: &PortForwardChanges) -> Map<String, Va
     if let Some(enabled) = changes.enabled {
         requested.insert("enabled".to_owned(), Value::Bool(enabled));
     }
+    for (name, value) in [
+        ("source", &changes.source),
+        ("forwardTo", &changes.forward_to),
+        ("forwardPort", &changes.forward_port),
+        ("destinationPort", &changes.destination_port),
+        ("protocol", &changes.protocol),
+    ] {
+        if let Some(value) = value {
+            requested.insert(name.to_owned(), Value::String(value.clone()));
+        }
+    }
     requested
 }
 
@@ -7500,6 +7534,23 @@ fn requested_port_forward_fields(changes: &PortForwardChanges) -> Map<String, Va
 /// matter: one stops reaching a service, the other opens a path to it.
 fn port_forward_warnings(requested: &Map<String, Value>, current: &Value) -> Vec<String> {
     let mut warnings = Vec::new();
+    if [
+        "source",
+        "forwardTo",
+        "forwardPort",
+        "destinationPort",
+        "protocol",
+    ]
+    .iter()
+    .any(|field| {
+        requested
+            .get(*field)
+            .is_some_and(|wanted| current.get(*field) != Some(wanted))
+    }) {
+        warnings.push(
+            "changing the rule match or target changes which traffic is forwarded".to_owned(),
+        );
+    }
     let wanted = requested.get("enabled");
     if wanted.is_none() || current.get("enabled") == wanted {
         return warnings;
@@ -7657,9 +7708,16 @@ const WLAN_WIRE_NAMES: &[(&str, &str)] = &[
     ("radiusProfileId", "radius_profile_id"),
 ];
 
-/// A port forward stores both settable fields under the names the read
-/// surface uses.
-const PORT_FORWARD_WIRE_NAMES: &[(&str, &str)] = &[("name", "name"), ("enabled", "enabled")];
+/// Names exposed by the tool and stored by the controller.
+const PORT_FORWARD_WIRE_NAMES: &[(&str, &str)] = &[
+    ("name", "name"),
+    ("enabled", "enabled"),
+    ("source", "src"),
+    ("forwardTo", "fwd"),
+    ("forwardPort", "fwd_port"),
+    ("destinationPort", "dst_port"),
+    ("protocol", "proto"),
+];
 
 fn wire_name<'a>(wire_names: &[(&str, &'a str)], field: &str) -> Option<&'a str> {
     wire_names

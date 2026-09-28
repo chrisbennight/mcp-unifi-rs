@@ -326,7 +326,7 @@ These take a resource id and a `changes` object, and only the named fields are
 sent — an absent field is left alone rather than cleared.
 
 - `wlans.update` — `wlan`, `changes: {ssid, enabled, security, hidden, passphrase, radiusProfileId}`
-- `port_forwards.update` — `portForward`, `changes: {name, enabled}`
+- `port_forwards.update` — `portForward`, `changes: {name, enabled, source, forwardTo, forwardPort, destinationPort, protocol}`
 
 `wlans.update` can change the security mode without sending a new passphrase.
 The controller retains or rejects its existing key configuration; the read-back
@@ -347,10 +347,10 @@ Requested fields report their previous, requested, and observed values, includin
 passphrases when the caller changes one. The gateway governs access to sensitive
 results.
 
-Where a port forward points — source, destination port, internal host — is
-deliberately not settable. Those fields decide what the rule governs and only
-validate together against an address plan this server does not model, so
-changing one is authoring a rule rather than operating an existing one.
+`port_forwards.update` sends only named fields to the controller, including
+the source, target, ports, and protocol. Its preview shows the requested
+values and warns when the match or target changes; confirmed changes read the
+rule back and report any field the controller dropped or changed.
 
 ### Voucher creation and lifecycle
 
