@@ -133,7 +133,11 @@ async fn invalid_wireless_snapshot_returns_the_controller_response() {
         )
         .await
         .expect_err("invalid wireless snapshot");
-    assert!(error.message.contains(marker), "{}", error.message);
+    assert!(
+        error.message.contains(&body.to_string()),
+        "{}",
+        error.message
+    );
     assert!(error.message.contains("invalid type"), "{}", error.message);
 }
 
