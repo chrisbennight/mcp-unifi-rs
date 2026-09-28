@@ -8,9 +8,10 @@ use zeroize::Zeroizing;
 use crate::{
     ApiError, BoundedMessage, ControllerConfig, RecordFingerprint, TlsMode, http,
     models::{
-        ApplicationInfo, ClientAction, ClientSummary, DeviceAction, DeviceDetail, DeviceStatistics,
-        DeviceSummary, FirewallPolicy, FirewallZone, Page, PageRequest, PortAction, SiteSummary,
-        VoucherCreate, VoucherCreateResponse, VoucherDetails,
+        ApplicationInfo, ClientAction, ClientDetail, ClientSummary, DeviceAction, DeviceDetail,
+        DeviceStatistics, DeviceSummary, FirewallPolicy, FirewallZone, GuestActionResponse,
+        GuestAuthorizationLimits, Page, PageRequest, PortAction, SiteSummary, VoucherCreate,
+        VoucherCreateResponse, VoucherDetails,
     },
 };
 
@@ -245,17 +246,70 @@ impl IntegrationClient {
             .await
     }
 
-    /// Authorize one client for guest access. Never retried.
+    /// Read one connected client's official access state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn client_detail(
+        &self,
+        site_id: &str,
+        client_id: &str,
+    ) -> Result<ClientDetail, ApiError> {
+        self.get_json(&["sites", site_id, "clients", client_id], &[])
+            .await
+    }
+
+    /// Authorize one guest with optional access limits. Never retried.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the controller rejects the action.
-    pub async fn authorize_guest(&self, site_id: &str, client_id: &str) -> Result<(), ApiError> {
-        self.post_action(
-            &["sites", site_id, "clients", client_id, "actions"],
-            &ClientAction::AuthorizeGuestAccess,
-        )
-        .await
+    pub async fn authorize_guest(
+        &self,
+        site_id: &str,
+        client_id: &str,
+        limits: GuestAuthorizationLimits,
+    ) -> Result<GuestActionResponse, ApiError> {
+        validate_guest_limits(&limits)?;
+        let result: GuestActionResponse = self
+            .post_action_result(
+                &["sites", site_id, "clients", client_id, "actions"],
+                &ClientAction::AuthorizeGuestAccess { limits },
+            )
+            .await?;
+        if result.action != "AUTHORIZE_GUEST_ACCESS" || result.granted_authorization.is_none() {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "guests.authorize",
+                path: BoundedMessage::new("action/grantedAuthorization"),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Unauthorize and disconnect one guest. Never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the controller rejects the action.
+    pub async fn unauthorize_guest(
+        &self,
+        site_id: &str,
+        client_id: &str,
+    ) -> Result<GuestActionResponse, ApiError> {
+        let result: GuestActionResponse = self
+            .post_action_result(
+                &["sites", site_id, "clients", client_id, "actions"],
+                &ClientAction::UnauthorizeGuestAccess,
+            )
+            .await?;
+        if result.action != "UNAUTHORIZE_GUEST_ACCESS" || result.revoked_authorization.is_none() {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "guests.unauthorize",
+                path: BoundedMessage::new("action/revokedAuthorization"),
+            });
+        }
+        Ok(result)
     }
 
     /// # Errors
@@ -388,6 +442,17 @@ impl IntegrationClient {
         Ok(())
     }
 
+    async fn post_action_result<A: Serialize, T: DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        action: &A,
+    ) -> Result<T, ApiError> {
+        let response = self
+            .send(self.request(Method::POST, segments)?.json(action))
+            .await?;
+        decode(response).await
+    }
+
     /// One zone-based policy exactly as the controller stores it, plus a
     /// fingerprint of every property, from a single read.
     ///
@@ -509,6 +574,27 @@ fn page_query(page: PageRequest) -> [(&'static str, String); 2] {
         ("offset", page.offset.to_string()),
         ("limit", page.limit.to_string()),
     ]
+}
+
+fn validate_guest_limits(limits: &GuestAuthorizationLimits) -> Result<(), ApiError> {
+    if limits
+        .time_limit_minutes
+        .is_some_and(|value| !(1..=1_000_000).contains(&value))
+        || limits
+            .data_usage_limit_m_bytes
+            .is_some_and(|value| !(1..=1_048_576).contains(&value))
+        || limits
+            .rx_rate_limit_kbps
+            .is_some_and(|value| !(2..=100_000).contains(&value))
+        || limits
+            .tx_rate_limit_kbps
+            .is_some_and(|value| !(2..=100_000).contains(&value))
+    {
+        return Err(ApiError::Config(
+            "guest authorization limits are outside the Integration API ranges".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn decode<T: DeserializeOwned>(response: Response) -> Result<T, ApiError> {

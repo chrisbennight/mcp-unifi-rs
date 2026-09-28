@@ -270,7 +270,8 @@ it.
 | `wlans.update` | yes | yes | yes |
 | `clients.control` | no | no | no |
 | `devices.control` | no | no | no |
-| `guests.authorize` | yes | no | no |
+| `guests.authorize` | **no** | no | yes |
+| `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |
 | `firewall.policies.update` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
@@ -418,19 +419,20 @@ What a policy matches is not settable. Its source, destination, protocol scope
 and schedule are a nested structure whose parts validate together, and changing
 one is authoring a policy rather than operating one.
 
-### Actions: `clients.control`, `devices.control`, `guests.authorize`
-
-These change nothing this server models, so there is nothing to classify and no
-`verified` flag to earn.
+### Actions: `clients.control`, `devices.control`, `guests.authorize`, `guests.unauthorize`
 
 `clients.control` and `devices.control` read the controller afterwards and
 report what it showed, along with what that observation is worth.
-`guests.authorize` does not read anything afterwards, because there is nothing
-to read: see below.
+Guest actions read the Integration API client detail afterwards and report
+whether the observed access matches the action response.
 
 - `clients.control` — `client` (MAC), `action: block | unblock | reconnect`
 - `devices.control` — `device`, `action: restart | locate | endLocate | portCycle`, `port`
-- `guests.authorize` — `client` (MAC)
+- `guests.authorize` — `client` (MAC), optional time, data, and rate limits
+- `guests.unauthorize` — `client` (MAC)
+
+`guests.status` reads the current guest authorization, expiration, limits, and
+traffic usage for a connected client.
 
 `clients.control` takes a MAC rather than a name because a blocked client is
 absent from the connected list, so only the address identifies it in every state
@@ -444,10 +446,14 @@ restart takes longer than the read, so the state afterwards usually still shows
 the prior value — it records what the controller showed, not that the action
 finished.
 
-`guests.authorize` reports `verifiable: false` on both paths. The controller
-exposes no authorization field on a client, so there is nothing to read back,
-and saying so is better than presenting an accepted request as a verified
-outcome.
+`guests.authorize` returns the granted record and any grant it replaced.
+Repeating authorization replaces the active grant and resets traffic counters,
+so it is not idempotent. `guests.unauthorize` returns the revoked grant and
+disconnects the client. Both actions mark `verified` true only when a bounded
+read of the connected client reports the expected state and grant metadata.
+The observed grant is returned separately when it can be read. If a disconnected
+client is no longer readable, the action response remains available and the
+result says that verification was unavailable.
 
 ## Not on this surface
 

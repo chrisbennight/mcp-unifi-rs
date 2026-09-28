@@ -5,7 +5,7 @@ use std::time::Duration;
 use unifi_api::{
     ApiError, ControllerConfig, IntegrationClient, TlsMode,
     capability::{self, FirewallGeneration},
-    models::{PageRequest, VoucherCreate},
+    models::{GuestAuthorizationLimits, PageRequest, VoucherCreate},
 };
 use url::Url;
 use wiremock::{
@@ -225,7 +225,14 @@ async fn actions_post_their_typed_envelopes() {
         .and(body_json(
             serde_json::json!({"action": "AUTHORIZE_GUEST_ACCESS"}),
         ))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "action": "AUTHORIZE_GUEST_ACCESS",
+            "grantedAuthorization": {
+                "authorizationMethod": "API",
+                "authorizedAt": "2026-09-28T00:00:00Z",
+                "expiresAt": "2026-09-29T00:00:00Z"
+            }
+        })))
         .expect(1)
         .mount(&server)
         .await;
@@ -236,7 +243,10 @@ async fn actions_post_their_typed_envelopes() {
         .power_cycle_port("s1", "d1", 7)
         .await
         .expect("power cycle");
-    client.authorize_guest("s1", "c1").await.expect("authorize");
+    client
+        .authorize_guest("s1", "c1", GuestAuthorizationLimits::default())
+        .await
+        .expect("authorize");
 }
 
 #[tokio::test]

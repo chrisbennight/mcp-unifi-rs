@@ -111,7 +111,7 @@ accepted write proves nothing. Every write tool shares one path:
   the modeled subset, so a write that clears an unmodeled property is visible.
   `verified` is true only when every requested field persisted and nothing
   else moved.
-- **One identity across two APIs.** `guests.authorize` takes the hardware
+- **One identity across two APIs.** Guest tools take the hardware
   address the legacy client reads report and finds the Integration API client
   carrying the same address, because the authorization endpoint addresses a
   client by the Integration id and no read on this surface emits one. That a

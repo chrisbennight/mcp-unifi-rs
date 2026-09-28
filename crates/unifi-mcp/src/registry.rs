@@ -51,7 +51,9 @@ pub enum ToolKind {
     WlansUpdate,
     ClientsControl,
     DevicesControl,
+    GuestsStatus,
     GuestsAuthorize,
+    GuestsUnauthorize,
     PortForwardsUpdate,
     FirewallPoliciesUpdate,
     VouchersSearch,
@@ -79,6 +81,7 @@ impl ToolKind {
             | Self::ClientsControl
             | Self::DevicesControl
             | Self::GuestsAuthorize
+            | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
             | Self::VouchersRevoke
@@ -91,6 +94,7 @@ impl ToolKind {
             | Self::ClientsContext
             | Self::DevicesSearch
             | Self::DevicesStatus
+            | Self::GuestsStatus
             | Self::FirewallRead
             | Self::NetworksRead
             | Self::CamerasSearch
@@ -132,7 +136,9 @@ impl ToolKind {
             | Self::WlansUpdate
             | Self::ClientsControl
             | Self::DevicesControl
+            | Self::GuestsStatus
             | Self::GuestsAuthorize
+            | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
             | Self::VouchersSearch
@@ -461,16 +467,22 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         // Not idempotent: each restart restarts, each port cycle cycles.
         ToolBehavior::write(false),
     ),
+    sensitive_read_spec(
+        ToolKind::GuestsStatus,
+        "guests.status",
+        "Read one connected guest's current authorization state, grant limits, expiration, and method by MAC address.",
+    ),
     write_spec(
         ToolKind::GuestsAuthorize,
         "guests.authorize",
-        "Authorize one client for guest access by MAC address, as \
-         clients.search reports it. Previews the action and its consequence \
-         unless confirm is true. The controller exposes no authorization \
-         field on a client, so the result says the effect cannot be read back \
-         rather than implying it was checked.",
-        // Idempotent: authorizing an authorized client leaves it authorized.
-        ToolBehavior::write(true),
+        "Preview or authorize one guest by MAC address, with optional time, data, and rate limits. Reauthorization replaces the active grant and resets traffic counters. Confirmed calls return the action grant and check current guest access.",
+        ToolBehavior::write(false).result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::GuestsUnauthorize,
+        "guests.unauthorize",
+        "Preview or revoke one connected guest's access by MAC address. A confirmed action disconnects the client, returns the revoked grant, and checks the reported access state when still readable.",
+        ToolBehavior::write(false).result_sensitive(),
     ),
     write_spec(
         ToolKind::PortForwardsUpdate,
@@ -565,7 +577,9 @@ mod tests {
         ToolKind::WlansUpdate,
         ToolKind::ClientsControl,
         ToolKind::DevicesControl,
+        ToolKind::GuestsStatus,
         ToolKind::GuestsAuthorize,
+        ToolKind::GuestsUnauthorize,
         ToolKind::PortForwardsUpdate,
         ToolKind::FirewallPoliciesUpdate,
         ToolKind::VouchersSearch,
@@ -602,7 +616,9 @@ mod tests {
                 | ToolKind::WlansUpdate
                 | ToolKind::ClientsControl
                 | ToolKind::DevicesControl
+                | ToolKind::GuestsStatus
                 | ToolKind::GuestsAuthorize
+                | ToolKind::GuestsUnauthorize
                 | ToolKind::PortForwardsUpdate
                 | ToolKind::FirewallPoliciesUpdate
                 | ToolKind::VouchersSearch
