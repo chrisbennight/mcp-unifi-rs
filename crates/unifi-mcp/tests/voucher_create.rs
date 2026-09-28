@@ -511,6 +511,41 @@ async fn slow_readback_returns_the_creation_response_before_the_tool_deadline() 
 }
 
 #[tokio::test]
+async fn short_configured_tool_deadline_leaves_time_for_the_creation_response() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890"])).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-0"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(3))
+                .set_body_json(serde_json::json!({
+                    "id": "voucher-0", "code": "1234567890", "name": "guests",
+                    "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+                    "authorizedGuestCount": 0, "timeLimitMinutes": 60,
+                })),
+        )
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server).with_request_limits(32, Duration::from_secs(2));
+    let started = tokio::time::Instant::now();
+    let request = create(&serde_json::json!({
+        "name": "guests", "count": 1, "timeLimitMinutes": 60, "confirm": true,
+    }));
+    let output = tokio::time::timeout(Duration::from_secs(2), handler.call(&request, None))
+        .await
+        .expect("outer tool deadline")
+        .expect("creation result")
+        .structured_content
+        .expect("structured");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(output["verified"], false);
+    assert_eq!(output["vouchers"][0]["code"], "1234567890");
+}
+
+#[tokio::test]
 async fn creation_verifies_the_code_from_the_detail_endpoint() {
     let server = MockServer::start().await;
     mints(&server, &batch(&["1234567890"])).await;

@@ -3869,6 +3869,31 @@ impl UnifiMcp {
         verified
     }
 
+    async fn verify_created_vouchers_before_deadline(
+        &self,
+        site_id: &str,
+        requested: u32,
+        vouchers: &[Voucher],
+        started: tokio::time::Instant,
+    ) -> bool {
+        // A slow detail endpoint must not consume the outer tool deadline
+        // after minting. Reserve time to shape and return the creation result.
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(VOUCHER_RESPONSE_RESERVE)
+            .min(VOUCHER_READBACK_BUDGET);
+        if budget.is_zero() {
+            return false;
+        }
+        tokio::time::timeout(
+            budget,
+            self.verify_created_vouchers(site_id, requested, vouchers),
+        )
+        .await
+        .unwrap_or(false)
+    }
+
     /// Mint hotspot vouchers, previewing unless the caller confirms.
     /// A confirmed call checks each returned id and code against the detail
     /// endpoint; incomplete verification is reported with the created rows.
@@ -3876,6 +3901,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<VouchersCreateInput>(params)?;
         let batch = voucher_batch(&input)?;
         let mut warnings = vec![
@@ -3911,15 +3937,14 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
 
-        // A slow detail endpoint must not consume the outer tool deadline
-        // after the controller has minted credentials. Readback is best effort
-        // within this small budget; the codes and ids are returned either way.
-        let verified = tokio::time::timeout(
-            VOUCHER_READBACK_BUDGET,
-            self.verify_created_vouchers(&site_id, input.count, &created.vouchers),
-        )
-        .await
-        .unwrap_or(false);
+        let verified = self
+            .verify_created_vouchers_before_deadline(
+                &site_id,
+                input.count,
+                &created.vouchers,
+                started,
+            )
+            .await;
         if !verified {
             warnings.push(
                 "not every created voucher could be read back with the same id and code; inspect vouchers.status or vouchers.search"
@@ -5266,6 +5291,8 @@ const VOUCHER_BATCH_CEILING: u32 = 100;
 /// Reserve most of the tool deadline for returning a successful creation
 /// response, even when the detail endpoint stalls during verification.
 const VOUCHER_READBACK_BUDGET: Duration = Duration::from_secs(5);
+/// Leave time for output shaping and transport serialization after readback.
+const VOUCHER_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the

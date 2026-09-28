@@ -124,6 +124,10 @@ impl UnifiMcp {
         self.access
     }
 
+    pub(crate) fn request_timeout(&self) -> std::time::Duration {
+        self.request_timeout
+    }
+
     /// Bound concurrent tool execution and total time, including stdio calls.
     #[must_use]
     pub fn with_request_limits(mut self, concurrency: usize, timeout: std::time::Duration) -> Self {
