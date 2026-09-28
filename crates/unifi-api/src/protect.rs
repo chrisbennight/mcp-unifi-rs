@@ -11,11 +11,11 @@
 //! The models here are deliberately narrower than either API. Official wire
 //! fields are kept separate from the local application's richer operational
 //! fields, and the local bootstrap has an allowlisted camera/NVR projection
-//! rather than a model of the full response. Accounts, streams, channels,
+//! rather than a model of the full response. Accounts and streams,
 //! network names, disk identifiers, and unrelated application state never
 //! enter these types.
 
-use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::error::Category;
@@ -427,6 +427,57 @@ impl ProtectClient {
             validate_identifier("cameras.by_id", &camera.id)
         })
         .await
+    }
+
+    /// A bounded JPEG snapshot from the official camera endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, format, or size failures.
+    pub async fn camera_snapshot(
+        &self,
+        camera_id: &str,
+        channel: &str,
+        high_quality: bool,
+    ) -> Result<Vec<u8>, ApiError> {
+        let mut segments = PREFIX.to_vec();
+        segments.extend(["cameras", camera_id, "snapshot"]);
+        let url = http::build_url(
+            &self.base,
+            &segments,
+            &[
+                ("channel", channel.to_owned()),
+                ("highQuality", high_quality.to_string()),
+            ],
+        )?;
+        let request = self
+            .http
+            .get(url)
+            .header("X-API-Key", self.api_key.as_str())
+            .header(header::ACCEPT, "image/jpeg");
+        let response = self.send(request, "cameras.snapshot").await?;
+        let jpeg = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/jpeg"))
+            });
+        if !jpeg {
+            return Err(ApiError::Decode(BoundedMessage::new(
+                "camera snapshot response was not a JPEG",
+            )));
+        }
+        let bytes = http::read_bounded_body(response).await?;
+        if !bytes.starts_with(&[0xff, 0xd8]) {
+            return Err(ApiError::Decode(BoundedMessage::new(
+                "camera snapshot response did not start with a JPEG marker",
+            )));
+        }
+        Ok(bytes)
     }
 
     /// The recorder this console runs. The official endpoint returns one

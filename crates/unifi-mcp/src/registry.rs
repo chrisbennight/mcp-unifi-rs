@@ -38,6 +38,7 @@ pub enum ToolKind {
     NetworksRead,
     CamerasSearch,
     CamerasStatus,
+    CamerasSnapshot,
     ProtectOverview,
     ProtectEvents,
     WifiDiagnose,
@@ -73,6 +74,7 @@ impl ToolKind {
             | Self::NetworksRead
             | Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::CamerasSnapshot
             | Self::ProtectOverview
             | Self::ProtectEvents
             | Self::WifiDiagnose
@@ -86,6 +88,7 @@ impl ToolKind {
         match self {
             Self::CamerasSearch
             | Self::CamerasStatus
+            | Self::CamerasSnapshot
             | Self::ProtectOverview
             | Self::ProtectEvents => ToolSurface::Protect,
             Self::NetworkOverview
@@ -314,7 +317,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "One camera on the Protect console, selected by id or exact reported \
          display name. Public identity and state remain authoritative; bounded \
          local enrichment supplies hardware, connection, firmware, recording, \
-         audio, and feature facts. Returns no image, stream, or talkback.",
+         audio, and feature facts. Use cameras.snapshot to fetch an image.",
+    ),
+    sensitive_read_spec(
+        ToolKind::CamerasSnapshot,
+        "cameras.snapshot",
+        "Fetch one bounded JPEG snapshot from a Protect camera, selected by id or exact reported name. Choose the main or package camera channel and optional high quality. Returns the image as MCP image content with concise metadata.",
     ),
     sensitive_read_spec(
         ToolKind::ProtectOverview,
@@ -480,6 +488,7 @@ mod tests {
         ToolKind::NetworksRead,
         ToolKind::CamerasSearch,
         ToolKind::CamerasStatus,
+        ToolKind::CamerasSnapshot,
         ToolKind::ProtectOverview,
         ToolKind::ProtectEvents,
         ToolKind::WifiDiagnose,
@@ -509,6 +518,7 @@ mod tests {
                 | ToolKind::NetworksRead
                 | ToolKind::CamerasSearch
                 | ToolKind::CamerasStatus
+                | ToolKind::CamerasSnapshot
                 | ToolKind::ProtectOverview
                 | ToolKind::ProtectEvents
                 | ToolKind::WifiDiagnose
@@ -552,6 +562,7 @@ mod tests {
             [
                 "cameras.search",
                 "cameras.status",
+                "cameras.snapshot",
                 "protect.overview",
                 "protect.events"
             ]

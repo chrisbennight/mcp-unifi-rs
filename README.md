@@ -24,9 +24,11 @@ changes preview before you confirm them.
   and recent events with `clients.context`.
 - **Investigate slow Wi-Fi.** Use `wifi.diagnose` to inspect radio load and
   weak-signal clients, then check a device or recent controller events.
-- **Check Protect inventory.** Find cameras and inspect their reported state.
+- **Check Protect inventory and images.** Find cameras, inspect their reported state,
+  and fetch a camera JPEG with `cameras.snapshot`.
   An optional local account adds recording details, recorder health, and
-  historical detections. These tools do not return video or snapshots.
+  historical detections. Event search returns metadata; camera snapshots use
+  the dedicated image tool.
 - **Review a network change before applying it.** Preview a wireless-network
   update or a selected device action. Writes require an operator grant and
   explicit confirmation; previews do not change the controller.

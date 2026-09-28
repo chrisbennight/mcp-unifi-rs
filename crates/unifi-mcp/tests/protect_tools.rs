@@ -11,7 +11,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rmcp::model::CallToolRequestParams;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use rmcp::model::{CallToolRequestParams, ContentBlock};
 use unifi_api::{
     ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, ProtectClient, TlsMode,
 };
@@ -479,6 +480,50 @@ async fn cameras_status_selects_by_id_or_exact_name() {
     assert_eq!(output["id"], "cam-front");
     assert_eq!(output["productType"], "G4 Doorbell");
     assert_eq!(output["localEnrichment"], "notConfigured");
+}
+
+#[tokio::test]
+async fn camera_snapshot_returns_image_content_and_small_metadata() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    let jpeg = vec![0xff, 0xd8, 0x11, 0x22, 0xff, 0xd9];
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/cameras/cam-front/snapshot")))
+        .and(query_param("channel", "package"))
+        .and(query_param("highQuality", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg.clone(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "cameras.snapshot",
+                &serde_json::json!({"camera": "front door", "channel": "package", "highQuality": true}),
+            ),
+            None,
+        )
+        .await
+        .expect("snapshot");
+    assert_eq!(
+        result.structured_content.as_ref().expect("metadata")["cameraId"],
+        "cam-front"
+    );
+    assert_eq!(
+        result.structured_content.as_ref().expect("metadata")["byteSize"],
+        6
+    );
+    let image = result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            ContentBlock::Image(image) => Some(image),
+            _ => None,
+        })
+        .expect("MCP image content");
+    assert_eq!(image.mime_type, "image/jpeg");
+    assert_eq!(STANDARD.decode(&image.data).expect("base64"), jpeg);
 }
 
 #[tokio::test]

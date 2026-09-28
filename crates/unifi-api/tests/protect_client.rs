@@ -11,7 +11,7 @@ use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, 
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{header, method, path},
+    matchers::{header, method, path, query_param},
 };
 use zeroize::Zeroizing;
 
@@ -114,6 +114,58 @@ async fn a_camera_id_carrying_url_syntax_stays_one_path_segment() {
 
     let camera = client_for(&server).camera("../nvrs").await.expect("camera");
     assert_eq!(camera.id, "../nvrs");
+}
+
+#[tokio::test]
+async fn snapshot_fetches_a_bounded_jpeg_with_channel_and_quality() {
+    let server = MockServer::start().await;
+    let jpeg = vec![0xff, 0xd8, 0x11, 0x22, 0xff, 0xd9];
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+        .and(query_param("channel", "package"))
+        .and(query_param("highQuality", "true"))
+        .and(header("X-API-Key", API_KEY))
+        .and(header("Accept", "image/jpeg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(jpeg.clone(), "image/jpeg"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert_eq!(
+        client_for(&server)
+            .camera_snapshot("cam-1", "package", true)
+            .await
+            .expect("snapshot"),
+        jpeg
+    );
+}
+
+#[tokio::test]
+async fn snapshot_refuses_non_jpeg_and_oversized_bodies() {
+    let wrong_type = MockServer::start().await;
+    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("secret text", "text/plain"))
+        .mount(&wrong_type)
+        .await;
+    assert!(matches!(
+        client_for(&wrong_type)
+            .camera_snapshot("cam-1", "main", false)
+            .await,
+        Err(ApiError::Decode(_))
+    ));
+
+    let oversized = MockServer::start().await;
+    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(vec![0xff; 4 * 1024 * 1024 + 1], "image/jpeg"),
+        )
+        .mount(&oversized)
+        .await;
+    assert!(matches!(
+        client_for(&oversized)
+            .camera_snapshot("cam-1", "main", false)
+            .await,
+        Err(ApiError::ResponseTooLarge { limit: 4_194_304 })
+    ));
 }
 
 #[tokio::test]

@@ -7,9 +7,12 @@
 
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rmcp::{
     ErrorData as McpError,
-    model::{CallToolRequestParams, CallToolResult, MetaObject, Tool, ToolAnnotations},
+    model::{
+        CallToolRequestParams, CallToolResult, ContentBlock, MetaObject, Tool, ToolAnnotations,
+    },
 };
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -432,11 +435,48 @@ struct CameraSelectorInput {
     camera: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CameraSnapshotInput {
+    /// Camera id or exact reported name from `cameras.search`.
+    camera: String,
+    /// Use `package` for a doorbell's package camera.
+    #[serde(default)]
+    channel: SnapshotChannel,
+    /// Request a snapshot at 1080p or higher when available.
+    #[serde(default)]
+    high_quality: bool,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum SnapshotChannel {
+    #[default]
+    Main,
+    Package,
+}
+
+impl SnapshotChannel {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Package => "package",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CameraSnapshotOutput {
+    camera_id: String,
+    channel: String,
+    mime_type: &'static str,
+    byte_size: usize,
+}
+
 /// One camera as this surface reports it.
 ///
-/// No image, stream URL, or talkback handle appears here. Those are a
-/// different class of data from a device state, and if they are ever exposed
-/// it will be by a tool a caller has to reach for deliberately.
+/// Camera images are available through `cameras.snapshot`.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct CameraView {
@@ -1696,6 +1736,7 @@ impl ToolSpec {
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
             ToolKind::CamerasSearch => tool::<CamerasSearchInput, CamerasSearchOutput>(self),
             ToolKind::CamerasStatus => tool::<CameraSelectorInput, CameraView>(self),
+            ToolKind::CamerasSnapshot => tool::<CameraSnapshotInput, CameraSnapshotOutput>(self),
             ToolKind::ProtectOverview => tool::<EmptyInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
@@ -1947,6 +1988,7 @@ impl UnifiMcp {
             ToolKind::NetworksRead => self.networks_read(params, principal).await,
             ToolKind::CamerasSearch => self.cameras_search(params).await,
             ToolKind::CamerasStatus => self.cameras_status(params).await,
+            ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
             ToolKind::ProtectOverview => self.protect_overview(params).await,
             ToolKind::ProtectEvents => self.protect_events_search(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
@@ -2551,6 +2593,65 @@ impl UnifiMcp {
                 None,
             )),
         }
+    }
+
+    async fn cameras_snapshot(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<CameraSnapshotInput>(params)?;
+        let selector = camera_selector(&input.camera)?;
+        let inventory = self.camera_inventory(CameraInventoryScope::Public).await?;
+        let mut matches: Vec<&CameraView> = inventory
+            .cameras
+            .iter()
+            .filter(|camera| camera.id == selector)
+            .collect();
+        if matches.is_empty() {
+            let normalized = selector.to_lowercase();
+            matches = inventory
+                .cameras
+                .iter()
+                .filter(|camera| {
+                    camera
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| camera_name_matches(name, &normalized))
+                        || camera_name_matches(&camera.display_name, &normalized)
+                })
+                .collect();
+        }
+        let camera_id = match matches.as_slice() {
+            [] => {
+                return Err(McpError::invalid_params(
+                    "no camera on this console has that id or name",
+                    None,
+                ));
+            }
+            [camera] => camera.id.clone(),
+            _ => {
+                return Err(McpError::invalid_params(
+                    "multiple cameras share that name; select by id",
+                    None,
+                ));
+            }
+        };
+        let channel = input.channel.as_str();
+        let bytes = self
+            .protect()
+            .camera_snapshot(&camera_id, channel, input.high_quality)
+            .await
+            .map_err(api_error)?;
+        let mut result = structured(CameraSnapshotOutput {
+            camera_id,
+            channel: channel.to_owned(),
+            mime_type: "image/jpeg",
+            byte_size: bytes.len(),
+        })?;
+        result
+            .content
+            .push(ContentBlock::image(STANDARD.encode(bytes), "image/jpeg"));
+        Ok(result)
     }
 
     /// One console snapshot: version, cameras grouped by their reported
@@ -5851,7 +5952,14 @@ fn finalize(
             None,
         ));
     }
-    Ok(trust_annotated(CallToolResult::structured(value), behavior))
+    let mut finalized = CallToolResult::structured(value);
+    finalized.content.extend(
+        result
+            .content
+            .into_iter()
+            .filter(|content| matches!(content, ContentBlock::Image(_))),
+    );
+    Ok(trust_annotated(finalized, behavior))
 }
 
 /// Replace any occurrence of a configured secret value in string values
