@@ -402,6 +402,9 @@ struct DeviceStatusOutput {
     /// device; identity and state above remain authoritative.
     #[serde(skip_serializing_if = "Option::is_none")]
     statistics: Option<DeviceStatisticsView>,
+    /// Controller error from the optional statistics read, if that read failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    statistics_error: Option<String>,
     /// Summarized port table, bounded.
     ports: Vec<DevicePortRow>,
     /// Present when the port table was cut at its ceiling.
@@ -882,6 +885,9 @@ struct CameraView {
     details: Option<Map<String, Value>>,
     /// Whether optional local data enriched this row.
     local_enrichment: String,
+    /// Controller error from an optional local inventory read, on status calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1147,6 +1153,7 @@ struct CameraInventory {
     public_nvr: Option<ProtectNvr>,
     local_bootstrap: Option<ProtectBootstrap>,
     local_state: LocalEnrichmentState,
+    local_error: Option<ApiError>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2977,50 +2984,56 @@ impl UnifiMcp {
             .map_err(api_error)?;
         // Statistics are best-effort by contract: an offline device still
         // reports identity and state, with `statistics` absent.
-        let statistics = self
+        let (statistics, statistics_error) = match self
             .integration()
             .device_statistics(&site_id, &device.id)
             .await
-            .ok()
-            .map(|statistics| statistics_view(&statistics));
+        {
+            Ok(statistics) => (Some(statistics_view(&statistics)), None),
+            Err(error) => (None, Some(error)),
+        };
 
         let interfaces = detail.interfaces.unwrap_or_default();
         let ports_truncated = interfaces.ports.len() > PORT_TABLE_CEILING;
         let radios_truncated = interfaces.radios.len() > RADIO_TABLE_CEILING;
-        structured(DeviceStatusOutput {
-            id: detail.id,
-            name: detail.name,
-            model: detail.model,
-            mac: detail.mac_address,
-            ip: detail.ip_address,
-            state: detail.state,
-            firmware_version: detail.firmware_version,
-            statistics,
-            ports: interfaces
-                .ports
-                .into_iter()
-                .take(PORT_TABLE_CEILING)
-                .map(|port| DevicePortRow {
-                    idx: port.idx,
-                    state: port.state,
-                    connector: port.connector,
-                    speed_mbps: port.speed_mbps,
-                })
-                .collect(),
-            ports_truncated: ports_truncated.then_some(true),
-            radios: interfaces
-                .radios
-                .into_iter()
-                .take(RADIO_TABLE_CEILING)
-                .map(|radio| DeviceRadioRow {
-                    wlan_standard: radio.wlan_standard,
-                    frequency_ghz: radio.frequency_g_hz,
-                    channel: radio.channel,
-                    channel_width_mhz: radio.channel_width_m_hz,
-                })
-                .collect(),
-            radios_truncated: radios_truncated.then_some(true),
-        })
+        structured_with_upstream_error(
+            DeviceStatusOutput {
+                id: detail.id,
+                name: detail.name,
+                model: detail.model,
+                mac: detail.mac_address,
+                ip: detail.ip_address,
+                state: detail.state,
+                firmware_version: detail.firmware_version,
+                statistics,
+                statistics_error: statistics_error.as_ref().map(ToString::to_string),
+                ports: interfaces
+                    .ports
+                    .into_iter()
+                    .take(PORT_TABLE_CEILING)
+                    .map(|port| DevicePortRow {
+                        idx: port.idx,
+                        state: port.state,
+                        connector: port.connector,
+                        speed_mbps: port.speed_mbps,
+                    })
+                    .collect(),
+                ports_truncated: ports_truncated.then_some(true),
+                radios: interfaces
+                    .radios
+                    .into_iter()
+                    .take(RADIO_TABLE_CEILING)
+                    .map(|radio| DeviceRadioRow {
+                        wlan_standard: radio.wlan_standard,
+                        frequency_ghz: radio.frequency_g_hz,
+                        channel: radio.channel,
+                        channel_width_mhz: radio.channel_width_m_hz,
+                    })
+                    .collect(),
+                radios_truncated: radios_truncated.then_some(true),
+            },
+            statistics_error.as_ref(),
+        )
     }
 
     /// Every camera on the console, fetched once and reduced to the view.
@@ -3029,6 +3042,10 @@ impl UnifiMcp {
     /// result: a console without the integration API is refused, never
     /// returned as a console with no cameras. That distinction is the whole
     /// reason the probe exists.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "inventory combines the required public source with optional local state"
+    )]
     async fn camera_inventory(
         &self,
         scope: CameraInventoryScope,
@@ -3056,13 +3073,17 @@ impl UnifiMcp {
             self.protect_local()
         };
         let mut local_camera_inventory = None;
+        let mut local_error = None;
         let local_bootstrap = if let Some(local) = local {
             match scope {
                 CameraInventoryScope::Public => None,
                 CameraInventoryScope::CameraNames => {
-                    if let Ok(cameras) = local.protect_camera_inventory().await {
-                        reject_duplicate_local_camera_ids(&cameras)?;
-                        local_camera_inventory = Some(cameras);
+                    match local.protect_camera_inventory().await {
+                        Ok(cameras) => {
+                            reject_duplicate_local_camera_ids(&cameras)?;
+                            local_camera_inventory = Some(cameras);
+                        }
+                        Err(error) => local_error = Some(error),
                     }
                     None
                 }
@@ -3071,7 +3092,10 @@ impl UnifiMcp {
                         reject_duplicate_local_camera_ids(&bootstrap.cameras)?;
                         Some(bootstrap)
                     }
-                    Err(_) => None,
+                    Err(error) => {
+                        local_error = Some(error);
+                        None
+                    }
                 },
             }
         } else {
@@ -3129,6 +3153,7 @@ impl UnifiMcp {
             public_nvr,
             local_bootstrap,
             local_state,
+            local_error,
         })
     }
 
@@ -3153,15 +3178,22 @@ impl UnifiMcp {
                     .iter()
                     .any(|camera| camera.hardware_model.is_none()))
         {
-            return Err(unavailable_camera_filter("model"));
+            return Err(inventory.local_error.as_ref().map_or_else(
+                || unavailable_camera_filter("model"),
+                |error| api_error(error.clone()),
+            ));
         }
         if let Some(wanted) = class_filter.as_deref() {
             let class_data_complete = class_filter_available(&inventory.cameras, wanted)?;
             if inventory.local_state != LocalEnrichmentState::Available || !class_data_complete {
-                return Err(unavailable_camera_filter("class"));
+                return Err(inventory.local_error.as_ref().map_or_else(
+                    || unavailable_camera_filter("class"),
+                    |error| api_error(error.clone()),
+                ));
             }
         }
-        let capabilities = protect_capabilities(inventory.local_state);
+        let capabilities =
+            protect_capabilities(inventory.local_state, inventory.local_error.as_ref());
 
         let matched: Vec<CameraView> = inventory
             .cameras
@@ -3197,12 +3229,15 @@ impl UnifiMcp {
             .take(usize::from(limit))
             .collect();
         let next_offset = next_offset(usize::from(offset), rows.len(), total);
-        structured(CamerasSearchOutput {
-            cameras: rows,
-            total,
-            next_offset,
-            capabilities,
-        })
+        structured_with_upstream_error(
+            CamerasSearchOutput {
+                cameras: rows,
+                total,
+                next_offset,
+                capabilities,
+            },
+            inventory.local_error.as_ref(),
+        )
     }
 
     /// One camera by id or exact name.
@@ -3216,7 +3251,10 @@ impl UnifiMcp {
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
         let details = if input.include_details || input.detail_fields.is_some() {
             let raw = inventory.local_bootstrap.as_ref().ok_or_else(|| {
-                McpError::invalid_params("local Protect details are unavailable", None)
+                inventory.local_error.as_ref().map_or_else(
+                    || McpError::invalid_params("local Protect details are unavailable", None),
+                    |error| api_error(error.clone()),
+                )
             })?;
             let camera = camera_by_selector_ref(&inventory, selector)?;
             let row = raw.raw["cameras"]
@@ -3238,7 +3276,8 @@ impl UnifiMcp {
         };
         let mut camera = camera_by_selector(&inventory, selector)?;
         camera.details = details;
-        structured(camera)
+        camera.local_error = inventory.local_error.as_ref().map(ToString::to_string);
+        structured_with_upstream_error(camera, inventory.local_error.as_ref())
     }
 
     async fn cameras_settings_read(
@@ -3602,6 +3641,7 @@ impl UnifiMcp {
             public_nvr,
             local_bootstrap,
             local_state,
+            local_error,
         } = inventory;
 
         // Grouped on the console's own state words. Sorted by state so the
@@ -3635,7 +3675,10 @@ impl UnifiMcp {
         let bootstrap_details = match input.detail_fields.as_deref() {
             Some(fields) => {
                 let bootstrap = local_bootstrap.as_ref().ok_or_else(|| {
-                    McpError::invalid_params("local Protect details are unavailable", None)
+                    local_error.as_ref().map_or_else(
+                        || McpError::invalid_params("local Protect details are unavailable", None),
+                        |error| api_error(error.clone()),
+                    )
                 })?;
                 Some(select_bootstrap_details(
                     &bootstrap.raw,
@@ -3645,21 +3688,25 @@ impl UnifiMcp {
             }
             None => None,
         };
-        structured(ProtectOverviewOutput {
-            console: self.protect_name().to_owned(),
-            application_version,
-            cameras_by_state: counts
-                .into_iter()
-                .map(|(state, count)| CameraCountRow { state, count })
-                .collect(),
-            camera_count: cameras.len(),
-            not_recording: recording_summary_complete.then_some(idle),
-            not_recording_truncated: (recording_summary_complete && idle_truncated).then_some(true),
-            not_recording_count: recording_summary_complete.then_some(idle_count),
-            recorders,
-            bootstrap_details,
-            capabilities: protect_capabilities(local_state),
-        })
+        structured_with_upstream_error(
+            ProtectOverviewOutput {
+                console: self.protect_name().to_owned(),
+                application_version,
+                cameras_by_state: counts
+                    .into_iter()
+                    .map(|(state, count)| CameraCountRow { state, count })
+                    .collect(),
+                camera_count: cameras.len(),
+                not_recording: recording_summary_complete.then_some(idle),
+                not_recording_truncated: (recording_summary_complete && idle_truncated)
+                    .then_some(true),
+                not_recording_count: recording_summary_complete.then_some(idle_count),
+                recorders,
+                bootstrap_details,
+                capabilities: protect_capabilities(local_state, local_error.as_ref()),
+            },
+            local_error.as_ref(),
+        )
     }
 
     /// Historical detections through the Protect application route.
@@ -3685,9 +3732,9 @@ impl UnifiMcp {
                 .camera_inventory(CameraInventoryScope::CameraNames)
                 .await?;
             if named_inventory.local_state != LocalEnrichmentState::Available {
-                return Err(McpError::invalid_params(
+                return Err(local_inventory_error(
+                    named_inventory.local_error.as_ref(),
                     "camera name selection requires complete local Protect inventory; select by id",
-                    None,
                 ));
             }
             inventory = named_inventory.cameras;
@@ -5885,9 +5932,9 @@ fn camera_by_selector_ref<'a>(
         inventory.local_state,
         LocalEnrichmentState::Partial | LocalEnrichmentState::Unavailable
     ) {
-        return Err(McpError::invalid_params(
+        return Err(local_inventory_error(
+            inventory.local_error.as_ref(),
             "camera name selection requires complete local Protect inventory; select by id",
-            None,
         ));
     }
     let normalized_selector = selector.to_lowercase();
@@ -7207,6 +7254,7 @@ fn camera_view(
         connection: local.and_then(camera_connection),
         details: None,
         local_enrichment: local_enrichment_word(local, local_state).to_owned(),
+        local_error: None,
     }
 }
 
@@ -7592,7 +7640,10 @@ fn recorder_storage_view(storage: &unifi_api::protect::ProtectStorageStats) -> R
     }
 }
 
-fn protect_capabilities(state: LocalEnrichmentState) -> ProtectCapabilitiesView {
+fn protect_capabilities(
+    state: LocalEnrichmentState,
+    local_error: Option<&ApiError>,
+) -> ProtectCapabilitiesView {
     let (local_enrichment, local_inventory_source, local_unavailable_reason) = match state {
         LocalEnrichmentState::Available => ("available", Some("authenticatedLocalBootstrap"), None),
         LocalEnrichmentState::Partial => (
@@ -7618,7 +7669,9 @@ fn protect_capabilities(state: LocalEnrichmentState) -> ProtectCapabilitiesView 
         local_inventory_source: local_inventory_source.map(str::to_owned),
         snapshot_consistency: "sequentialRequestSnapshots".to_owned(),
         historical_events_configured: state != LocalEnrichmentState::NotConfigured,
-        local_unavailable_reason: local_unavailable_reason.map(str::to_owned),
+        local_unavailable_reason: local_error
+            .map(ToString::to_string)
+            .or_else(|| local_unavailable_reason.map(str::to_owned)),
     }
 }
 
@@ -7679,6 +7732,13 @@ fn unavailable_camera_filter(field: &str) -> McpError {
             "camera {field} filtering is unavailable because this console supplied no complete {field} data"
         ),
         None,
+    )
+}
+
+fn local_inventory_error(error: Option<&ApiError>, fallback: &'static str) -> McpError {
+    error.map_or_else(
+        || McpError::invalid_params(fallback, None),
+        |error| api_error(error.clone()),
     )
 }
 
@@ -7960,6 +8020,22 @@ pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpE
     Ok(CallToolResult::structured(value))
 }
 
+/// Preserve a secondary controller failure when its text cannot fit beside
+/// the otherwise useful primary result.
+fn structured_with_upstream_error<T: Serialize>(
+    output: T,
+    upstream_error: Option<&ApiError>,
+) -> Result<CallToolResult, McpError> {
+    let value = serde_json::to_value(output)
+        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Some(error) = upstream_error
+    {
+        return Err(api_error(error.clone()));
+    }
+    Ok(CallToolResult::structured(value))
+}
+
 /// Enforce the response budget on the values returned by the tool, then
 /// attach the gateway's sensitivity and trust labels.
 fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolResult, McpError> {
@@ -8022,13 +8098,15 @@ mod tests {
 
     use rmcp::model::CallToolRequestParams;
     use serde_json::{Map, Value, json};
+    use unifi_api::{ApiError, BoundedMessage};
 
     use super::{
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
         FirewallPolicyChanges, JSON_SCHEMA_TYPES, MAXIMUM_RESULT_BYTES, POLICY_WIRE_NAMES,
         PORT_FORWARD_CHANGE_FIELDS, PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges,
         PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView, finalize,
-        normalize_portable_schema, parse, schema_object, structured, trust_annotated,
+        normalize_portable_schema, parse, schema_object, structured,
+        structured_with_upstream_error, trust_annotated,
     };
     use crate::mutation::FieldOutcome;
     use crate::registry::{TOOL_REGISTRY, ToolBehavior};
@@ -8249,6 +8327,20 @@ mod tests {
         assert!(error.message.contains("narrow the query"));
         let small = structured(vec!["small"]).expect("built result");
         assert!(finalize(small, ToolBehavior::read()).is_ok());
+    }
+
+    #[test]
+    fn secondary_controller_error_survives_the_structured_result_budget() {
+        let body = format!("{}controller-error-tail", "x".repeat(MAXIMUM_RESULT_BYTES));
+        let error = ApiError::Status {
+            status: 503,
+            message: BoundedMessage::new(&body),
+        };
+        let result =
+            structured_with_upstream_error(json!({"error": error.to_string()}), Some(&error))
+                .expect_err("oversized secondary error");
+        assert!(result.message.contains("controller-error-tail"));
+        assert!(!result.message.contains("narrow the query"));
     }
 
     #[test]

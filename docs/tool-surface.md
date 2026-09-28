@@ -74,7 +74,9 @@ Reports `inventoryTruncated` when the underlying scan hit its ceiling.
 `device` — id, MAC, or exact name.
 
 One device's status: identity, state, firmware, uptime, CPU and memory, uplink
-rates, and summarized port and radio tables.
+rates, and summarized port and radio tables. If the optional statistics read
+fails, `statisticsError` carries the controller response while identity and
+interface state remain available.
 
 ### `firewall.read`
 
@@ -221,6 +223,10 @@ recorder list.
 from the original local bootstrap, including recorder, account, and user
 records. These fields are returned as the console reports them. A result over
 the 48 KiB response budget fails explicitly; request fewer fields when needed.
+If the optional local inventory read fails, `cameras.search` and
+`protect.overview` include the controller error in
+`capabilities.localUnavailableReason`, and `cameras.status` includes it in
+`localError`. Requests that need the missing local data return that error.
 
 `cameras.snapshot` fetches a JPEG from the official Protect API by camera id
 or exact reported name. It returns MCP image content plus small structured
