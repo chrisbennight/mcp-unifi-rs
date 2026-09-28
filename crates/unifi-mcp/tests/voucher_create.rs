@@ -473,6 +473,44 @@ async fn failed_readback_is_reported_without_hiding_created_codes() {
 }
 
 #[tokio::test]
+async fn slow_readback_returns_the_creation_response_before_the_tool_deadline() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890", "2345678901"])).await;
+    for (index, code) in ["1234567890", "2345678901"].iter().enumerate() {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-{index}"
+            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(3))
+                    .set_body_json(serde_json::json!({
+                        "id": format!("voucher-{index}"), "code": code, "name": "guests",
+                        "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+                        "authorizedGuestCount": 0, "timeLimitMinutes": 60,
+                    })),
+            )
+            .mount(&server)
+            .await;
+    }
+
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 2, "timeLimitMinutes": 60, "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("creation response survives slow verification")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], false, "{output}");
+    assert_eq!(output["vouchers"][0]["code"], "1234567890");
+    assert_eq!(output["vouchers"][1]["code"], "2345678901");
+}
+
+#[tokio::test]
 async fn creation_verifies_the_code_from_the_detail_endpoint() {
     let server = MockServer::start().await;
     mints(&server, &batch(&["1234567890"])).await;

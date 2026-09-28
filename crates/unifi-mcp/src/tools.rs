@@ -9,6 +9,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -3910,9 +3911,15 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
 
-        let verified = self
-            .verify_created_vouchers(&site_id, input.count, &created.vouchers)
-            .await;
+        // A slow detail endpoint must not consume the outer tool deadline
+        // after the controller has minted credentials. Readback is best effort
+        // within this small budget; the codes and ids are returned either way.
+        let verified = tokio::time::timeout(
+            VOUCHER_READBACK_BUDGET,
+            self.verify_created_vouchers(&site_id, input.count, &created.vouchers),
+        )
+        .await
+        .unwrap_or(false);
         if !verified {
             warnings.push(
                 "not every created voucher could be read back with the same id and code; inspect vouchers.status or vouchers.search"
@@ -5256,6 +5263,9 @@ fn firewall_policy_warnings(wanted: bool, record: &Map<String, Value>) -> Vec<St
 /// Most vouchers one call will mint. The limit bounds request size and
 /// readback work; callers can create additional batches when needed.
 const VOUCHER_BATCH_CEILING: u32 = 100;
+/// Reserve most of the tool deadline for returning a successful creation
+/// response, even when the detail endpoint stalls during verification.
+const VOUCHER_READBACK_BUDGET: Duration = Duration::from_secs(5);
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// Widest code this server will call well formed. Generous on purpose — the
