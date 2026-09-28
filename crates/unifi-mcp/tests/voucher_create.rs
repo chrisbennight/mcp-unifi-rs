@@ -1,9 +1,7 @@
 //! End-to-end tests for voucher creation against loopback fakes.
 //!
-//! The property that matters most here is unusual: the codes must survive to
-//! the caller even when a check fails. They exist on the controller from the
-//! moment the request succeeds, and no read reproduces them, so a result that
-//! withheld them would be credentials nobody can reach.
+//! Creation results retain controller-returned codes when checks fail, and
+//! readback verifies identified codes through the detail endpoint.
 
 use std::{sync::Arc, time::Duration};
 
@@ -130,7 +128,7 @@ async fn an_unconfirmed_call_describes_the_batch_and_mints_nothing() {
         "{output}"
     );
     let warnings = output["warnings"].to_string();
-    assert!(warnings.contains("only copy"), "{output}");
+    assert!(warnings.contains("vouchers.status"), "{output}");
     assert!(warnings.contains("credential"), "{output}");
 }
 
@@ -182,10 +180,7 @@ async fn a_confirmed_call_sends_the_batch_and_returns_every_code() {
 
 #[tokio::test]
 async fn a_batch_that_fails_a_check_still_returns_its_codes() {
-    // This is the property the whole design turns on. These vouchers exist on
-    // the controller the moment the request succeeded, and nothing can read
-    // their codes again. Withholding them because a check failed would create
-    // guest access that nobody can use and nobody can find.
+    // A check on the creation response must not hide controller-returned rows.
     for (label, minted, failed) in [
         (
             "fewer than requested",
@@ -228,9 +223,7 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
 
         assert_eq!(output["wellFormed"], false, "{label}: {output}");
         assert_eq!(output["checks"][failed], false, "{label}: {output}");
-        // Every code the controller produced is here, not merely the first:
-        // a result that carried one and dropped the rest would strand exactly
-        // the credentials this test exists to protect.
+        // Every code in the creation response remains available to the caller.
         let returned: Vec<&str> = output["vouchers"]
             .as_array()
             .expect("vouchers")
@@ -326,10 +319,9 @@ async fn a_voucher_whose_id_was_redacted_is_not_described_as_recoverable() {
 }
 
 #[tokio::test]
-async fn a_batch_far_larger_than_the_response_budget_still_returns_every_code() {
-    // The response budget refuses a result the caller can ask for again. This
-    // result cannot be asked for again, so it is exempt: neither an error nor
-    // a trimmed batch is an acceptable answer once the vouchers exist.
+async fn a_batch_far_larger_than_the_response_budget_fails_loudly() {
+    // The controller can return pathological codes. The result budget applies
+    // because the voucher list and detail endpoints can recover the codes.
     let server = MockServer::start().await;
     mount_site(&server).await;
     let long_code = "c".repeat(20_000);
@@ -349,7 +341,7 @@ async fn a_batch_far_larger_than_the_response_budget_still_returns_every_code() 
         .mount(&server)
         .await;
 
-    let output = handler_for(&server)
+    let error = handler_for(&server)
         .call(
             &create(&serde_json::json!({
                 "name": "guests",
@@ -360,20 +352,11 @@ async fn a_batch_far_larger_than_the_response_budget_still_returns_every_code() 
             None,
         )
         .await
-        .expect("a result, never an error")
-        .structured_content
-        .expect("structured");
-    let returned: Vec<&str> = output["vouchers"]
-        .as_array()
-        .expect("vouchers")
-        .iter()
-        .map(|voucher| voucher["code"].as_str().expect("code"))
-        .collect();
-    assert_eq!(returned, minted, "every minted code comes back");
-    assert_eq!(
-        output["checks"]["countMatches"], true,
+        .expect_err("over budget");
+    assert!(
+        error.message.contains("response budget"),
         "{}",
-        output["checks"]
+        error.message
     );
 }
 
@@ -445,9 +428,7 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
             serde_json::json!({"name": "   ", "count": 1, "timeLimitMinutes": 60}),
             "name must be 1-",
         ),
-        // Unbounded caller text would be reflected into a result that is
-        // deliberately exempt from the response budget, which is what makes
-        // this bound part of the exemption rather than tidiness.
+        // Caller supplied names remain bounded before a mutation.
         (
             serde_json::json!({
                 "name": "g".repeat(129),
@@ -468,7 +449,7 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
 }
 
 #[tokio::test]
-async fn the_result_never_claims_the_vouchers_were_read_back() {
+async fn failed_readback_is_reported_without_hiding_created_codes() {
     let server = MockServer::start().await;
     mints(&server, &batch(&["1234567890"])).await;
 
@@ -486,9 +467,81 @@ async fn the_result_never_claims_the_vouchers_were_read_back() {
         .expect("applied")
         .structured_content
         .expect("structured");
-    // `verified` belongs to the writes that re-read their resource. This one
-    // cannot, so it must not borrow the word: `wellFormed` says only that the
-    // batch looks usable, which is all that was established.
-    assert!(output.get("verified").is_none(), "{output}");
+    assert_eq!(output["verified"], false, "{output}");
+    assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert!(output.get("wellFormed").is_some(), "{output}");
+}
+
+#[tokio::test]
+async fn creation_verifies_the_code_from_the_detail_endpoint() {
+    let server = MockServer::start().await;
+    mints(&server, &batch(&["1234567890"])).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-0"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "voucher-0", "code": "1234567890", "name": "guests",
+            "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+            "authorizedGuestCount": 0, "timeLimitMinutes": 60,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 1, "timeLimitMinutes": 60, "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("applied")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], true, "{output}");
+}
+
+#[tokio::test]
+async fn duplicate_created_ids_cannot_verify_as_two_persisted_vouchers() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "vouchers": [
+                {"id": "v1", "code": "1234567890"},
+                {"id": "v1", "code": "1234567890"},
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/v1"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "v1", "code": "1234567890", "name": "guests",
+            "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+            "authorizedGuestCount": 0, "timeLimitMinutes": 60,
+        })))
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name": "guests", "count": 2, "timeLimitMinutes": 60, "confirm": true,
+            })),
+            None,
+        )
+        .await
+        .expect("creation response")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["verified"], false, "{output}");
+    assert_eq!(output["vouchers"].as_array().expect("rows").len(), 2);
 }

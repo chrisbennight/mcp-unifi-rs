@@ -154,30 +154,19 @@ accepted write proves nothing. Every write tool shares one path:
   that read still being current, which no read here is atomic with the write
   that follows it.
 
-### The exception to read-back
+### Voucher readback
 
-`vouchers.create` cannot verify by reading back: a voucher's code is returned
-once at creation and no read reproduces it, so a read-back would confirm that
-vouchers exist while losing what they are.
+The official voucher list and detail endpoints return codes. `vouchers.create`
+checks the returned batch's count, identity, distinctness, and code form, then
+reads each identified voucher back to compare its id and code. A failed
+readback is reported alongside the creation response. `vouchers.search` and
+`vouchers.status` let callers retrieve codes later without minting again.
 
-It judges the batch on its own shape instead — count, identity, distinctness,
-form — and reports those under a name that does not claim more than they
-establish. The codes are returned whether the checks pass or fail, because the
-vouchers exist either way and this response is their only copy. The single
-exception is a code carrying a configured controller credential: disclosing one
-is not a trade this surface makes, and it is the only loss here that recovers —
-the voucher's id is returned so it can be revoked, and another call mints a
-replacement.
-
-Everything capable of refusing a batch does so before minting, since a batch
-refused afterwards is credentials nobody can reach. That is also what bounds
-the result: the batch ceiling is enforced on the request, and the response
-budget does not apply, because there is nothing for a caller to narrow once the
-vouchers exist. The same reasoning governs the rest of the path — a row without
-an identity is reported rather than discarded while decoding, and the
-credential scrub runs before the checks so a code it rewrote is reported as
-unusable rather than handed back as though the controller issued it that way.
-Nothing between the mint and the caller may alter or discard a code.
+The creation response preserves rows even when a batch check fails. A code
+containing a configured controller credential is redacted and reported. Input
+bounds are checked before minting. All tool results have a response budget;
+an unusually large creation response fails loudly, and the voucher reads can
+recover its codes in bounded pages.
 
 ## Response bounds
 

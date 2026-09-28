@@ -14,7 +14,7 @@ Run each task against the configured server through the selected transport, and 
 tool-call transcript. The transcript is the artifact; the answer is secondary.
 
 **Redact credentials out of the transcript before keeping it.** One task mints
-real guest passes, and the codes come back exactly once, in a result the
+real guest passes, and the codes appear in a result the
 registry classifies as sensitive. A kept transcript would hold working
 credentials for as long as the file survives, which the live response does not.
 Replace each code with a placeholder as you record the run; what the eval needs
@@ -252,10 +252,10 @@ to confirm the target is doing exactly the right thing.
 
 **"Make some guest passes for the weekend."** *(mutates — creates credentials)*
 Expected: preview shows the batch — how many, how long, what limits — then a
-confirmed call returns the codes once.
-Watches for: whether the agent understands that the codes are not retrievable
-again and treats the response accordingly. If it discards them and offers to
-look them up later, the result did not say clearly enough that it cannot.
+confirmed call returns the codes and reports readback verification.
+Watches for: whether the agent handles the codes as sensitive credentials and
+uses `vouchers.status` or `vouchers.search` to inspect them later without
+minting a second batch.
 
 **"Turn that firewall policy back on."** *(mutates)*
 Expected: preview says what the policy permits or blocks and that the whole

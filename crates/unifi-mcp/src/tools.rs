@@ -5,7 +5,11 @@
 //! trust labels declared in the registry. Raw controller records never leave
 //! this module.
 
-use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rmcp::{
@@ -22,7 +26,7 @@ use unifi_api::{
     capability::{self, FirewallGeneration},
     models::{
         ActiveClient, DeviceStatistics, DeviceSummary, DpiAvailability, PageRequest, PortForward,
-        PortForwardPatch, VoucherCreate, WlanConf, WlanPatch,
+        PortForwardPatch, Voucher, VoucherCreate, VoucherDetails, WlanConf, WlanPatch,
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectEventContinuation,
@@ -1315,6 +1319,108 @@ struct VouchersCreateInput {
     confirm: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VouchersSearchInput {
+    /// Zero-based offset into the controller's voucher list.
+    #[serde(default)]
+    offset: u32,
+    /// Vouchers per page, 1-100. Defaults to 25.
+    #[serde(default = "default_voucher_limit")]
+    limit: u16,
+}
+
+const fn default_voucher_limit() -> u16 {
+    25
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VoucherIdInput {
+    /// Exact voucher id from `vouchers.search` or `vouchers.create`.
+    voucher_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VoucherRevokeInput {
+    /// Exact voucher id from `vouchers.search` or `vouchers.create`.
+    voucher_id: String,
+    /// Delete the voucher. Absent or false previews the effect.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct VoucherRevokeOutput {
+    voucher_id: String,
+    name: String,
+    expired: bool,
+    authorized_guest_count: u64,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct VoucherReadView {
+    id: String,
+    /// Redeemable guest code; classified as sensitive result data.
+    code: String,
+    name: String,
+    created_at: String,
+    expired: bool,
+    authorized_guest_count: u64,
+    time_limit_minutes: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorized_guest_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_usage_limit_m_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_rate_limit_kbps: Option<u64>,
+}
+
+impl From<VoucherDetails> for VoucherReadView {
+    fn from(voucher: VoucherDetails) -> Self {
+        Self {
+            id: voucher.id,
+            code: voucher.code,
+            name: voucher.name,
+            created_at: voucher.created_at,
+            expired: voucher.expired,
+            authorized_guest_count: voucher.authorized_guest_count,
+            time_limit_minutes: voucher.time_limit_minutes,
+            activated_at: voucher.activated_at,
+            expires_at: voucher.expires_at,
+            authorized_guest_limit: voucher.authorized_guest_limit,
+            data_usage_limit_m_bytes: voucher.data_usage_limit_m_bytes,
+            rx_rate_limit_kbps: voucher.rx_rate_limit_kbps,
+            tx_rate_limit_kbps: voucher.tx_rate_limit_kbps,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct VouchersSearchOutput {
+    vouchers: Vec<VoucherReadView>,
+    offset: u64,
+    limit: u64,
+    total_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<u64>,
+}
+
 /// The batch a call would mint, echoed so a preview shows what is about to be
 /// reviewed rather than only how much of it there is.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1335,19 +1441,18 @@ struct VoucherBatch {
     data_limit_megabytes: Option<u64>,
 }
 
-/// One voucher as created. The code is the credential; it exists nowhere else.
+/// One voucher returned by the creation request.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct VoucherView {
     /// Absent when the controller returned no identity for this row. The
-    /// code is still here: an id can be read from the controller at any
-    /// time, and this code cannot.
+    /// code is still returned so an incomplete creation response is visible.
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     code: String,
 }
 
-/// What could be established about a batch without reading it back.
+/// Checks on the creation response, separate from readback verification.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "four independent checks, each a distinct question about the batch; collapsing them would report that something failed without saying what"
@@ -1383,17 +1488,19 @@ struct VouchersCreateOutput {
     /// How many were requested.
     requested: u32,
     /// The vouchers, present only on a confirmed call. These are returned
-    /// even when a check below failed, because they exist on the controller
-    /// either way and this response is the only place their codes appear.
+    /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
     vouchers: Option<Vec<VoucherView>>,
     /// What could be established about the batch. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     checks: Option<VoucherChecks>,
-    /// Whether every check passed. Not a claim that the vouchers persist:
-    /// nothing here re-read them.
+    /// Whether every check on the creation response passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     well_formed: Option<bool>,
+    /// Whether every identified voucher was read back with the same code.
+    /// False also covers missing ids, failed reads and mismatched codes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
     /// Consequences worth knowing before confirming.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -1752,6 +1859,9 @@ impl ToolSpec {
             ToolKind::FirewallPoliciesUpdate => {
                 tool::<FirewallPoliciesUpdateInput, FirewallPoliciesUpdateOutput>(self)
             }
+            ToolKind::VouchersSearch => tool::<VouchersSearchInput, VouchersSearchOutput>(self),
+            ToolKind::VouchersStatus => tool::<VoucherIdInput, VoucherReadView>(self),
+            ToolKind::VouchersRevoke => tool::<VoucherRevokeInput, VoucherRevokeOutput>(self),
             ToolKind::VouchersCreate => tool::<VouchersCreateInput, VouchersCreateOutput>(self),
         }
     }
@@ -2000,6 +2110,9 @@ impl UnifiMcp {
             ToolKind::GuestsAuthorize => self.guests_authorize(params).await,
             ToolKind::PortForwardsUpdate => self.port_forwards_update(params).await,
             ToolKind::FirewallPoliciesUpdate => self.firewall_policies_update(params).await,
+            ToolKind::VouchersSearch => self.vouchers_search(params).await,
+            ToolKind::VouchersStatus => self.vouchers_status(params).await,
+            ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
         result.and_then(|result| finalize(result, self.redact(), spec.behavior))
@@ -3602,15 +3715,161 @@ impl UnifiMcp {
         })
     }
 
+    async fn vouchers_search(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<VouchersSearchInput>(params)?;
+        if input.offset > i32::MAX as u32 || !(1..=100).contains(&input.limit) {
+            return Err(McpError::invalid_params(
+                "offset must fit a nonnegative 32-bit integer and limit must be 1-100",
+                None,
+            ));
+        }
+        let site_id = self.site_id().await?;
+        let page = self
+            .integration()
+            .vouchers(
+                &site_id,
+                PageRequest {
+                    offset: u64::from(input.offset),
+                    limit: u32::from(input.limit),
+                },
+            )
+            .await
+            .map_err(api_error)?;
+        if page.offset != u64::from(input.offset)
+            || page.count != page.data.len() as u64
+            || page.data.len() > usize::from(input.limit)
+            || page.offset.saturating_add(page.count) > page.total_count
+        {
+            return Err(McpError::internal_error(
+                "controller returned an inconsistent voucher page",
+                None,
+            ));
+        }
+        let next = page
+            .offset
+            .checked_add(page.count)
+            .filter(|next| *next < page.total_count);
+        if next.is_some() && page.data.is_empty() {
+            return Err(McpError::internal_error(
+                "controller returned an empty incomplete voucher page",
+                None,
+            ));
+        }
+        structured(VouchersSearchOutput {
+            vouchers: page.data.into_iter().map(VoucherReadView::from).collect(),
+            offset: page.offset,
+            limit: page.limit,
+            total_count: page.total_count,
+            next_offset: next,
+        })
+    }
+
+    async fn vouchers_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<VoucherIdInput>(params)?;
+        let id = voucher_id(&input.voucher_id)?;
+        let site_id = self.site_id().await?;
+        let voucher = self
+            .integration()
+            .voucher(&site_id, id)
+            .await
+            .map_err(api_error)?;
+        if voucher.id != id {
+            return Err(McpError::internal_error(
+                "controller returned a different voucher id",
+                None,
+            ));
+        }
+        structured(VoucherReadView::from(voucher))
+    }
+
+    async fn vouchers_revoke(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<VoucherRevokeInput>(params)?;
+        let id = voucher_id(&input.voucher_id)?;
+        let site_id = self.site_id().await?;
+        let voucher = self
+            .integration()
+            .voucher(&site_id, id)
+            .await
+            .map_err(api_error)?;
+        if voucher.id != id {
+            return Err(McpError::internal_error(
+                "controller returned a different voucher id",
+                None,
+            ));
+        }
+        let mut result = VoucherRevokeOutput {
+            voucher_id: voucher.id,
+            name: voucher.name,
+            expired: voucher.expired,
+            authorized_guest_count: voucher.authorized_guest_count,
+            applied: false,
+            verified: None,
+            warnings: Vec::new(),
+        };
+        if !input.confirm {
+            return structured(result);
+        }
+        self.integration()
+            .delete_voucher(&site_id, id)
+            .await
+            .map_err(api_error)?;
+        result.applied = true;
+        let persisted = match self.integration().voucher(&site_id, id).await {
+            Err(ApiError::Status { status: 404, .. }) => false,
+            Ok(_) => true,
+            Err(_) => {
+                result.warnings.push(
+                    "controller accepted deletion but readback failed; inspect vouchers.status by id"
+                        .to_owned(),
+                );
+                return structured(result);
+            }
+        };
+        result.verified = Some(!persisted);
+        if persisted {
+            result
+                .warnings
+                .push("controller acknowledged deletion but the voucher still exists".to_owned());
+        }
+        structured(result)
+    }
+
+    async fn verify_created_vouchers(
+        &self,
+        site_id: &str,
+        requested: u32,
+        vouchers: &[Voucher],
+    ) -> bool {
+        let mut verified = usize::try_from(requested).is_ok_and(|want| want == vouchers.len());
+        let mut ids = HashSet::new();
+        for voucher in vouchers {
+            let (Some(id), Some(code)) = (voucher.id.as_deref(), voucher.code.as_deref()) else {
+                verified = false;
+                continue;
+            };
+            if !ids.insert(id) {
+                verified = false;
+            }
+            match self.integration().voucher(site_id, id).await {
+                Ok(persisted) if persisted.id == id && persisted.code == code => {}
+                Ok(_) | Err(_) => verified = false,
+            }
+        }
+        verified
+    }
+
     /// Mint hotspot vouchers, previewing unless the caller confirms.
-    ///
-    /// This is the one write that cannot be judged by reading the resource
-    /// back. The controller returns each voucher's code once, at creation,
-    /// and no later read reproduces it — so a read-back could confirm that
-    /// vouchers exist while losing the only copy of what they are. The batch
-    /// is judged on its own shape instead, and the codes are returned
-    /// whatever that judgement says, because they exist on the controller
-    /// either way.
+    /// A confirmed call checks each returned id and code against the detail
+    /// endpoint; incomplete verification is reported with the created rows.
     async fn vouchers_create(
         &self,
         params: &CallToolRequestParams,
@@ -3618,11 +3877,7 @@ impl UnifiMcp {
         let input = parse::<VouchersCreateInput>(params)?;
         let batch = voucher_batch(&input)?;
         let mut warnings = vec![
-            "each voucher is a credential for the guest network, and its code is \
-             returned once here and never again"
-                .to_owned(),
-            "the codes cannot be read back from the controller, so this result is \
-             the only copy"
+            "each voucher code is a guest network credential; codes can also be read through vouchers.search and vouchers.status"
                 .to_owned(),
         ];
         if !input.confirm.unwrap_or(false) {
@@ -3633,6 +3888,7 @@ impl UnifiMcp {
                 vouchers: None,
                 checks: None,
                 well_formed: None,
+                verified: None,
                 warnings,
             });
         }
@@ -3652,6 +3908,16 @@ impl UnifiMcp {
             )
             .await
             .map_err(api_error)?;
+
+        let verified = self
+            .verify_created_vouchers(&site_id, input.count, &created.vouchers)
+            .await;
+        if !verified {
+            warnings.push(
+                "not every created voucher could be read back with the same id and code; inspect vouchers.status or vouchers.search"
+                    .to_owned(),
+            );
+        }
 
         let vouchers: Vec<VoucherView> = created
             .vouchers
@@ -3701,8 +3967,7 @@ impl UnifiMcp {
                 });
             }
         }
-        // The checks read the ids and the codes as they will be returned, so
-        // they are settled before anything is shed to fit the budget.
+        // The checks describe the ids and codes as they will be returned.
         let checks = voucher_checks(input.count, &vouchers);
         let well_formed = checks.count_matches
             && checks.all_identified
@@ -3715,6 +3980,7 @@ impl UnifiMcp {
             vouchers: Some(vouchers),
             checks: Some(checks),
             well_formed: Some(well_formed),
+            verified: Some(verified),
             warnings,
         })
     }
@@ -4986,9 +5252,8 @@ fn firewall_policy_warnings(wanted: bool, record: &Map<String, Value>) -> Vec<St
     warnings
 }
 
-/// Most vouchers one call will mint. The batch is returned in full and each
-/// code must survive to the caller, so the ceiling keeps one response within
-/// the budget rather than truncating credentials that cannot be re-read.
+/// Most vouchers one call will mint. The limit bounds request size and
+/// readback work; callers can create additional batches when needed.
 const VOUCHER_BATCH_CEILING: u32 = 100;
 /// Longest validity one voucher may carry, in minutes: seven days.
 const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
@@ -4996,6 +5261,17 @@ const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
 /// controller decides the format, and refusing an unfamiliar one would
 /// condemn vouchers that already exist.
 const VOUCHER_CODE_MAX: usize = 64;
+
+fn voucher_id(raw: &str) -> Result<&str, McpError> {
+    let id = raw.trim();
+    if id.is_empty() || id.len() > MAXIMUM_QUERY_LENGTH {
+        return Err(McpError::invalid_params(
+            "voucherId must be a bounded voucher id from vouchers.search",
+            None,
+        ));
+    }
+    Ok(id)
+}
 
 /// The batch a request describes, or the reason it cannot be minted.
 ///
@@ -5037,10 +5313,9 @@ fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> 
 
 /// What can be established about a batch without re-reading it.
 ///
-/// Every check is on what the controller returned. None of them establishes
-/// that the vouchers persist; that would need a read, and a read cannot
-/// reproduce a code. So these answer a narrower question honestly rather than
-/// a broader one falsely: are these usable as vouchers.
+/// These checks describe the creation response. Readback verification is
+/// reported separately because the controller can acknowledge a write it
+/// later fails to reproduce.
 fn voucher_checks(requested: u32, vouchers: &[VoucherView]) -> VoucherChecks {
     let mut lengths: Vec<usize> = vouchers
         .iter()
@@ -5909,12 +6184,7 @@ fn finalize(
         return Ok(trust_annotated(result, behavior));
     };
     scrub_and_verify(&mut value, secrets)?;
-    // A result the caller can ask for again may be refused for being too
-    // large; that is what the budget is for. A result carrying credentials
-    // this call just created cannot be asked for again, and refusing it, or
-    // trimming it to fit, destroys them. Such a tool bounds what it requests
-    // instead, and is answerable for the size of what comes back.
-    if !behavior.result_irreplaceable && value.to_string().len() > MAXIMUM_RESULT_BYTES {
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES {
         return Err(McpError::invalid_params(
             "result exceeds the response budget; narrow the query or lower the limit",
             None,
@@ -6582,11 +6852,12 @@ mod tests {
         // Setting the same rule state twice leaves the same state; no secret
         // is involved, and the result names the host a rule exposes.
         ("port_forwards.update", true, false, true),
-        // Same, and the result names the addresses and ports a rule governs.
         // Same, and the result names the zones and ports a policy governs.
         ("firewall.policies.update", true, false, true),
         // Each call mints another batch; the result carries the credentials.
         ("vouchers.create", false, false, true),
+        // Revoking the same voucher again leaves it absent.
+        ("vouchers.revoke", true, false, true),
     ];
 
     /// The catalog text is what a model reads before choosing arguments, so

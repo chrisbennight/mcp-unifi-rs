@@ -50,6 +50,9 @@ pub enum ToolKind {
     GuestsAuthorize,
     PortForwardsUpdate,
     FirewallPoliciesUpdate,
+    VouchersSearch,
+    VouchersStatus,
+    VouchersRevoke,
     VouchersCreate,
 }
 
@@ -64,6 +67,7 @@ impl ToolKind {
             | Self::GuestsAuthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
+            | Self::VouchersRevoke
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -79,7 +83,9 @@ impl ToolKind {
             | Self::ProtectEvents
             | Self::WifiDiagnose
             | Self::EventsSearch
-            | Self::StatsQuery => false,
+            | Self::StatsQuery
+            | Self::VouchersSearch
+            | Self::VouchersStatus => false,
         }
     }
 
@@ -107,6 +113,9 @@ impl ToolKind {
             | Self::GuestsAuthorize
             | Self::PortForwardsUpdate
             | Self::FirewallPoliciesUpdate
+            | Self::VouchersSearch
+            | Self::VouchersStatus
+            | Self::VouchersRevoke
             | Self::VouchersCreate => ToolSurface::Network,
         }
     }
@@ -128,7 +137,6 @@ pub struct ToolBehavior {
     pub(crate) input_sensitive: bool,
     pub(crate) result_sensitive: bool,
     pub(crate) result_untrusted: bool,
-    pub(crate) result_irreplaceable: bool,
 }
 
 impl ToolBehavior {
@@ -136,20 +144,6 @@ impl ToolBehavior {
     /// still matters, labeled so the gateway can treat it accordingly.
     pub(crate) const fn result_sensitive(mut self) -> Self {
         self.result_sensitive = true;
-        self
-    }
-
-    /// Mark the result irreplaceable: it carries values this call created that
-    /// no read reproduces. Such a result is exempt from the response budget,
-    /// because refusing or trimming it destroys them and leaves the caller
-    /// nothing to narrow.
-    ///
-    /// A tool claiming this must bound every caller-supplied value it echoes,
-    /// before the call that creates anything. Otherwise the exemption stops
-    /// being a guarantee about generated values and becomes an amplifier for
-    /// text the caller chose.
-    pub(crate) const fn result_irreplaceable(mut self) -> Self {
-        self.result_irreplaceable = true;
         self
     }
 
@@ -169,7 +163,6 @@ impl ToolBehavior {
             input_sensitive: false,
             result_sensitive: false,
             result_untrusted: true,
-            result_irreplaceable: false,
         }
     }
 
@@ -192,7 +185,6 @@ impl ToolBehavior {
             input_sensitive: false,
             result_sensitive: false,
             result_untrusted: true,
-            result_irreplaceable: false,
         }
     }
 }
@@ -218,6 +210,22 @@ const fn sensitive_read_spec(
     ToolSpec {
         name,
         risk: "low",
+        behavior: ToolBehavior::read().result_sensitive(),
+        description,
+        kind,
+    }
+}
+
+/// A read that returns redeemable guest credentials. The gateway uses the
+/// classification and sensitivity label to decide who may invoke it.
+const fn credential_read_spec(
+    kind: ToolKind,
+    name: &'static str,
+    description: &'static str,
+) -> ToolSpec {
+    ToolSpec {
+        name,
+        risk: "high",
         behavior: ToolBehavior::read().result_sensitive(),
         description,
         kind,
@@ -445,22 +453,33 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         // state. The result reports the zones and ports a policy governs.
         ToolBehavior::write(true).result_sensitive(),
     ),
+    credential_read_spec(
+        ToolKind::VouchersSearch,
+        "vouchers.search",
+        "Page through hotspot vouchers with redeemable codes, expiration state, usage and limits. Returns the controller's total count and next offset; narrow each page with limit.",
+    ),
+    credential_read_spec(
+        ToolKind::VouchersStatus,
+        "vouchers.status",
+        "Read one hotspot voucher by id, including its redeemable code, expiration, usage and limits.",
+    ),
+    write_spec(
+        ToolKind::VouchersRevoke,
+        "vouchers.revoke",
+        "Preview or revoke one hotspot voucher by id. A confirmed revocation reads back the id and reports whether it disappeared from the controller.",
+        ToolBehavior::write(true).result_sensitive(),
+    ),
     write_spec(
         ToolKind::VouchersCreate,
         "vouchers.create",
         "Mint hotspot vouchers for the guest network. Previews the batch and \
-         its consequences unless confirm is true. The controller returns each \
-         code once and no read reproduces it, so the result is the only copy: \
-         the batch is judged on its own shape rather than by reading back, and \
-         the codes are returned whatever that judgement says. The one exception \
-         is a code that would disclose a configured controller credential: it \
-         is redacted, reported, and its voucher identified so it can be revoked \
-         and replaced.",
+         its consequences unless confirm is true. A confirmed call returns the \
+         created codes and reads each identified voucher back to verify its code. \
+         Codes remain available through vouchers.search and vouchers.status. \
+         A code containing a configured controller credential is redacted.",
         // Not idempotent: each call mints another batch. The result carries
         // credentials, which is why it exists.
-        ToolBehavior::write(false)
-            .result_sensitive()
-            .result_irreplaceable(),
+        ToolBehavior::write(false).result_sensitive(),
     ),
 ];
 
@@ -500,6 +519,9 @@ mod tests {
         ToolKind::GuestsAuthorize,
         ToolKind::PortForwardsUpdate,
         ToolKind::FirewallPoliciesUpdate,
+        ToolKind::VouchersSearch,
+        ToolKind::VouchersStatus,
+        ToolKind::VouchersRevoke,
         ToolKind::VouchersCreate,
     ];
 
@@ -530,6 +552,9 @@ mod tests {
                 | ToolKind::GuestsAuthorize
                 | ToolKind::PortForwardsUpdate
                 | ToolKind::FirewallPoliciesUpdate
+                | ToolKind::VouchersSearch
+                | ToolKind::VouchersStatus
+                | ToolKind::VouchersRevoke
                 | ToolKind::VouchersCreate => {}
             }
             assert_eq!(

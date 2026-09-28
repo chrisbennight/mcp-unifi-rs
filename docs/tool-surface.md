@@ -252,6 +252,7 @@ it.
 | `port_forwards.update` | yes | no | yes |
 | `firewall.policies.update` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
+| `vouchers.revoke` | yes | no | yes |
 
 ### What every write does
 
@@ -296,25 +297,27 @@ deliberately not settable. Those fields decide what the rule governs and only
 validate together against an address plan this server does not model, so
 changing one is authoring a rule rather than operating an existing one.
 
-### `vouchers.create` is the one write that cannot check its own work
+### Voucher creation and lifecycle
 
 It takes `name`, `count`, `timeLimitMinutes`, and optionally `guestLimit` and
 `dataLimitMegabytes`, and echoes all of them back under `batch`. A preview is
 what this write is reviewed from, and two batches differing only in validity or
 access limits are different batches — a count alone could not tell them apart.
 
-Every other write here is judged by reading the resource back. This one cannot
-be: the controller returns each voucher's code once, at creation, and no later
-read reproduces it. A read-back could confirm that vouchers exist while losing
-the only copy of what they are.
+The official voucher list and detail endpoints return each code. `vouchers.search`
+pages through vouchers and `vouchers.status` reads one by id; both return codes
+as sensitive results. `vouchers.revoke` previews a deletion and, when confirmed,
+checks whether the voucher disappeared from the detail endpoint.
 
-So the batch is judged on its own shape, and the result says which checks it
-made rather than borrowing the word `verified` — whether as many came back as
+Creation checks the returned batch — whether as many came back as
 were asked for, whether each carries an id and a code, whether the codes are
 distinct, and whether each is free of whitespace and within a plausible length.
 Code lengths are reported rather than judged: the controller decides the
 format, and refusing a batch for being unfamiliar would condemn vouchers that
-already exist.
+already exist. It also reads each identified voucher back and sets `verified`
+only when the count matches and every id and code matches. A failed readback is
+reported with the creation response; the caller can inspect `vouchers.status`
+or `vouchers.search` without minting the batch again.
 
 **The codes come back whether or not those checks pass.** From the moment the
 request succeeds the vouchers exist on the controller, and withholding their
@@ -340,16 +343,9 @@ full batch of real vouchers and is what keeps a hostile upstream from
 exhausting this process; trading that away would not make delivery certain, it
 would only move the failure.
 
-The response budget gives way for the same reason. It may refuse any other
-result here, because a caller can narrow the query and ask again; there is
-nothing to narrow once the vouchers exist, and neither an error nor a trimmed
-batch is an acceptable answer. So this result is exempt, and what bounds it is
-the request: the batch ceiling and the label length, both checked before
-anything is minted. Bounding the label is part of the exemption rather than
-tidiness — an exempt result that echoed unbounded caller text would amplify
-whatever the caller chose to send. Beyond those bounds the result is as large as
-the controller's own codes made it, which is the deliberate trade against
-destroying credentials.
+The standard response budget applies to creation too. If a controller returns
+an unusually large batch that exceeds it, the call fails loudly and the codes
+can be retrieved through the bounded voucher reads.
 
 The credential scrub runs over the codes before the checks do. Every result
 here is scrubbed of configured controller credentials, and a
