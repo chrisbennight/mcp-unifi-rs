@@ -66,6 +66,33 @@ async fn arm_profile_list_pages_full_controller_records() {
 }
 
 #[tokio::test]
+async fn a_single_large_arm_profile_remains_retrievable() {
+    let server = MockServer::start().await;
+    let detail = format!("{}profile-end-marker", "x".repeat(60_000));
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/arm-profiles")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!([{"id":"profile-1","controllerSpecific":detail}])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(&call("protect.arm_profiles.list", json!({"limit":1})), None)
+        .await
+        .expect("complete large profile");
+    let structured = result.structured_content.expect("structured result");
+    assert_eq!(structured["profilesInContent"], true);
+    assert_eq!(structured["totalCount"], 1);
+    assert!(structured.get("nextOffset").is_none());
+    assert!(result.content.iter().any(|item| matches!(item,
+        ContentBlock::Text(text) if text.text.contains(&detail)
+    )));
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn arm_profile_operations_use_documented_routes_and_preserve_accepted_body() {
     let create = json!({"name":"Away","automations":[],"schedules":[],"recordEverything":true,"activationDelay":60000});
     let cases = [

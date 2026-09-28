@@ -302,7 +302,9 @@ bodies move to labeled content. The gateway decides access to these actions.
 
 The list tool pages the complete arm-profile records from Protect's documented
 `arm-profiles` endpoint. It accepts `offset` and `limit` (1-200, default 50)
-and returns `totalCount` and `nextOffset` with each page.
+and returns `totalCount` and `nextOffset` with each page. If the selected page
+exceeds the structured-result budget, `profilesInContent` points to the
+complete page in labeled content, including when one record alone is large.
 
 The configuration tool previews or creates, updates, deletes, or selects an arm
 profile. Create requires `name`, `automations`, `schedules`,

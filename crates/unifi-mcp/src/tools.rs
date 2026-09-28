@@ -610,7 +610,10 @@ struct ProtectArmProfilesListInput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ProtectArmProfilesListOutput {
-    profiles: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles_in_content: Option<bool>,
     total_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<usize>,
@@ -4049,8 +4052,9 @@ impl UnifiMcp {
             .take(usize::from(input.limit))
             .collect::<Vec<_>>();
         let next = input.offset.saturating_add(page.len());
-        structured(ProtectArmProfilesListOutput {
-            profiles: page,
+        arm_profiles_list_result(ProtectArmProfilesListOutput {
+            profiles: Some(page),
+            profiles_in_content: None,
             total_count,
             next_offset: (next < total_count).then_some(next),
         })
@@ -10144,6 +10148,27 @@ fn protect_arm_operation_result(
     let mut result = structured(output)?;
     result.content.extend(extra);
     Ok(result)
+}
+
+fn arm_profiles_list_result(
+    mut output: ProtectArmProfilesListOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+    {
+        let profiles = output.profiles.take().expect("page records exist");
+        output.profiles_in_content = Some(true);
+        let mut result = structured(output)?;
+        result.content.push(ContentBlock::text(format!(
+            "profiles: {}",
+            Value::Array(profiles)
+        )));
+        return Ok(result);
+    }
+    Ok(full)
 }
 
 fn viewer_settings_result(
