@@ -386,3 +386,60 @@ async fn removal_keeps_accepted_response_when_readback_fails() {
             .contains("upstream readback unavailable")
     );
 }
+
+#[tokio::test]
+async fn removal_rejection_and_ambiguous_transport_are_returned_without_retry() {
+    let rejected = MockServer::start().await;
+    mount_site(&rejected).await;
+    Mock::given(method("DELETE"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/devices/{DEVICE_ID}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_string("controller refused removal: exact body"),
+        )
+        .expect(1)
+        .mount(&rejected)
+        .await;
+    let error = handler_for(&rejected, Duration::from_secs(5))
+        .call(
+            &call(
+                "devices.remove",
+                json!({"deviceId": DEVICE_ID, "confirm": true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("upstream rejection");
+    assert!(
+        error
+            .message
+            .contains("controller refused removal: exact body")
+    );
+
+    let slow = MockServer::start().await;
+    mount_site(&slow).await;
+    Mock::given(method("DELETE"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/devices/{DEVICE_ID}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(300))
+                .set_body_string("accepted after client timeout"),
+        )
+        .expect(1)
+        .mount(&slow)
+        .await;
+    let error = handler_for(&slow, Duration::from_millis(100))
+        .call(
+            &call(
+                "devices.remove",
+                json!({"deviceId": DEVICE_ID, "confirm": true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("ambiguous transport");
+    assert!(error.message.contains("transport failure"));
+}
