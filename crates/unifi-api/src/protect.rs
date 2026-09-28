@@ -1221,7 +1221,8 @@ impl ProtectClient {
         Ok((camera, complete))
     }
 
-    /// Execute one PTZ action. POST is never retried after an ambiguous result.
+    /// Execute one PTZ action and return the accepted status and complete
+    /// bounded body. POST is never retried after an ambiguous result.
     ///
     /// # Errors
     ///
@@ -1230,7 +1231,7 @@ impl ProtectClient {
         &self,
         camera_id: &str,
         command: ProtectPtzCommand,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         validate_identifier("cameras.ptz", camera_id)?;
         let slot = match command {
             ProtectPtzCommand::GotoPreset(value) if value < -1 => {
@@ -1253,9 +1254,12 @@ impl ProtectClient {
             }
             ProtectPtzCommand::StopPatrol => segments.extend(["patrol", "stop"]),
         }
-        self.send(self.request(Method::POST, &segments)?, "cameras.ptz")
+        let response = self
+            .send(self.request(Method::POST, &segments)?, "cameras.ptz")
             .await?;
-        Ok(())
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
     /// Get the existing RTSPS stream handles for one camera.
@@ -1287,8 +1291,9 @@ impl ProtectClient {
         self.send_json_once(request, "cameras.streams.create").await
     }
 
-    /// Remove RTSPS stream handles for selected camera qualities. This write
-    /// is never retried after an ambiguous transport result.
+    /// Remove RTSPS stream handles for selected camera qualities. The accepted
+    /// status and complete bounded body are returned. This write is never
+    /// retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
@@ -1297,7 +1302,7 @@ impl ProtectClient {
         &self,
         camera_id: &str,
         qualities: &[ProtectStreamQuality],
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         validate_identifier("cameras.streams.delete", camera_id)?;
         validate_stream_qualities(qualities)?;
         let query: Vec<(&str, String)> = qualities
@@ -1309,8 +1314,10 @@ impl ProtectClient {
             &["cameras", camera_id, "rtsps-stream"],
             &query,
         )?;
-        self.send(request, "cameras.streams.delete").await?;
-        Ok(())
+        let response = self.send(request, "cameras.streams.delete").await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
     /// Create a talkback session and return its audio parameters and handle.
