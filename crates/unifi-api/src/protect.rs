@@ -801,6 +801,28 @@ impl ProtectClient {
         .await
     }
 
+    /// Patch one viewer's documented settings once and return its complete response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for transport, status, or accepted response failures.
+    pub async fn viewer_settings_patch(
+        &self,
+        viewer_id: &str,
+        changes: &Value,
+    ) -> Result<Value, ApiError> {
+        validate_identifier("protect.viewers.patch", viewer_id)?;
+        let request = self
+            .request(Method::PATCH, &["viewers", viewer_id])?
+            .json(changes);
+        let (viewer, bytes): (Value, Vec<u8>) = self
+            .send_json_once_with_response(request, "protect.viewers.patch")
+            .await?;
+        validate_resource_record("protect.viewers.patch", &viewer, Some(viewer_id))
+            .map_err(|error| error.with_controller_response(&bytes))?;
+        Ok(viewer)
+    }
+
     /// Read complete Protect live-view configuration records.
     ///
     /// # Errors

@@ -1,6 +1,12 @@
 //! Protect viewer and live-view reads against bounded loopback responses.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use rmcp::model::CallToolRequestParams;
 use unifi_api::{ControllerConfig, ProtectClient, TlsMode};
@@ -8,7 +14,7 @@ use unifi_mcp::UnifiMcp;
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_json, method, path},
 };
 use zeroize::Zeroizing;
 
@@ -186,4 +192,223 @@ async fn empty_viewer_inventory_is_distinct_from_an_absent_route() {
         .await
         .expect_err("missing route");
     assert!(error.message.contains("HTTP 404: viewer route absent"));
+}
+
+#[tokio::test]
+async fn viewer_settings_preview_preserves_an_explicit_null_without_patching() {
+    let server = MockServer::start().await;
+    let before = serde_json::json!({"id":"viewer-1","liveview":"liveview-1","extra":{"kept":true}});
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&before))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.viewers.settings.update",
+                &serde_json::json!({
+                    "viewerId":"viewer-1", "changes":{"liveview":null}
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured preview");
+    assert_eq!(result["applied"], false);
+    assert_eq!(result["requested"], serde_json::json!({"liveview":null}));
+    assert_eq!(result["before"], before);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn viewer_settings_patch_returns_complete_response_and_readback() {
+    let server = MockServer::start().await;
+    let before = serde_json::json!({"id":"viewer-1","name":"Old","liveview":"liveview-1"});
+    let response = serde_json::json!({"id":"viewer-1","name":"New","liveview":null,"upstreamOnly":{"a":[1,2,3]}});
+    let after =
+        serde_json::json!({"id":"viewer-1","name":"New","liveview":null,"persistedOnly":"yes"});
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
+    let first = before.clone();
+    let second = after.clone();
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(move |_: &wiremock::Request| {
+            if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200).set_body_json(&first)
+            } else {
+                ResponseTemplate::new(200).set_body_json(&second)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .and(body_json(serde_json::json!({"name":"New","liveview":null})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.viewers.settings.update",
+                &serde_json::json!({
+                    "viewerId":"viewer-1", "changes":{"name":"New","liveview":null}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("patch");
+    assert_eq!(
+        result.meta.expect("metadata").0["io.modelcontextprotocol/trust-annotations"]["sensitive"],
+        true
+    );
+    let body = result.structured_content.expect("structured patch result");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["verified"], true);
+    assert_eq!(body["before"], before);
+    assert_eq!(body["response"], response);
+    assert_eq!(body["after"], after);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn wrong_viewer_patch_identity_keeps_the_accepted_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"viewer-1"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = serde_json::json!({"id":"different","controllerSpecific":"upstream-patch-tail".repeat(100)});
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "protect.viewers.settings.update",
+                &serde_json::json!({
+                    "viewerId":"viewer-1", "changes":{"name":"New"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect_err("wrong patch identity");
+    assert!(error.message.contains(&response.to_string()));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn large_accepted_viewer_patch_response_remains_available() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!({"id":"viewer-1","name":"New","futureField":"controller-tail".repeat(5000)});
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(move |_: &wiremock::Request| {
+            let name = if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                "Old"
+            } else {
+                "New"
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id":"viewer-1","name":name}))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.viewers.settings.update",
+                &serde_json::json!({
+                    "viewerId":"viewer-1", "changes":{"name":"New"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("patch with large response");
+    let body = result.structured_content.expect("structured result");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["verified"], true);
+    assert_eq!(body["responseInContent"], true);
+    assert!(result.content.iter().any(|item| matches!(item,
+        rmcp::model::ContentBlock::Text(text) if text.text.contains(&response.to_string())
+    )));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn viewer_patch_readback_error_keeps_the_controller_failure() {
+    let server = MockServer::start().await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let read_count = Arc::clone(&reads);
+    let failure = format!("{}upstream-readback-tail", "x".repeat(900));
+    let failure_for_mock = failure.clone();
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(move |_: &wiremock::Request| {
+            if read_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id":"viewer-1","name":"Old"}))
+            } else {
+                ResponseTemplate::new(503).set_body_string(failure_for_mock.clone())
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let response = serde_json::json!({"id":"viewer-1","name":"New","upstreamOnly":"kept"});
+    Mock::given(method("PATCH"))
+        .and(path(format!("{PREFIX}/viewers/viewer-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "protect.viewers.settings.update",
+                &serde_json::json!({
+                    "viewerId":"viewer-1", "changes":{"name":"New"}, "confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted patch remains available");
+    let body = result.structured_content.expect("structured result");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["response"], response);
+    assert!(body["verified"].is_null());
+    assert!(
+        body["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&failure)
+    );
+    server.verify().await;
 }
