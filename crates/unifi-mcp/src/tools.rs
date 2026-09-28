@@ -31,10 +31,10 @@ use unifi_api::{
     },
     protect::{
         ProtectBootstrap, ProtectCamera, ProtectCameraFeatureFlags, ProtectCameraSettingsPatch,
-        ProtectDeviceFamily, ProtectEventContinuation, ProtectLedSettings, ProtectLocalCamera,
-        ProtectLocalNvr, ProtectNvr, ProtectOsdSettings, ProtectPatrolState, ProtectPtzCommand,
-        ProtectSmartDetectSettings, ProtectStreamQuality, ProtectStreamUrls,
-        ProtectTalkbackSession, ProtectUserFamily,
+        ProtectDeviceActionRoute, ProtectDeviceFamily, ProtectEventContinuation,
+        ProtectLedSettings, ProtectLocalCamera, ProtectLocalNvr, ProtectNvr, ProtectOsdSettings,
+        ProtectPatrolState, ProtectPtzCommand, ProtectSmartDetectSettings, ProtectStreamQuality,
+        ProtectStreamUrls, ProtectTalkbackSession, ProtectUserFamily,
     },
 };
 use zeroize::Zeroizing;
@@ -526,6 +526,75 @@ struct ProtectDevicesStatusInput {
 struct ProtectDevicesStatusOutput {
     kind: ProtectDeviceKind,
     device: Value,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum RelayOutputState {
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ProtectDeviceAction {
+    SirenPlay {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration: Option<u8>,
+    },
+    SirenStop,
+    SirenTestSound {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volume: Option<u8>,
+    },
+    RelayActivate {
+        output_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<RelayOutputState>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pulse_duration: Option<u64>,
+    },
+    SpeakerTestSound {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volume: Option<u8>,
+    },
+    AlarmHubTrigger {
+        output_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enable: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        delay: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration: Option<u64>,
+    },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectDevicesActionInput {
+    device_id: String,
+    action: ProtectDeviceAction,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectDevicesActionOutput {
+    device_id: String,
+    action: ProtectDeviceAction,
+    submitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
 }
 
 /// Protect users and `UniFi` Identity users are separate documented resources.
@@ -2845,6 +2914,9 @@ impl ToolSpec {
             ToolKind::ProtectDevicesStatus => {
                 tool::<ProtectDevicesStatusInput, ProtectDevicesStatusOutput>(self)
             }
+            ToolKind::ProtectDevicesAction => {
+                tool::<ProtectDevicesActionInput, ProtectDevicesActionOutput>(self)
+            }
             ToolKind::ProtectUsersList => {
                 tool::<ProtectUsersListInput, ProtectUsersListOutput>(self)
             }
@@ -3136,6 +3208,7 @@ impl UnifiMcp {
             ToolKind::CamerasStatus => self.cameras_status(params).await,
             ToolKind::ProtectDevicesList => self.protect_devices_list(params).await,
             ToolKind::ProtectDevicesStatus => self.protect_devices_status(params).await,
+            ToolKind::ProtectDevicesAction => self.protect_devices_action(params).await,
             ToolKind::ProtectUsersList => self.protect_users_list(params).await,
             ToolKind::ProtectUsersStatus => self.protect_users_status(params).await,
             ToolKind::CamerasPosTransaction => self.cameras_pos_transaction(params).await,
@@ -3803,6 +3876,38 @@ impl UnifiMcp {
             kind: input.kind,
             device,
         })
+    }
+
+    async fn protect_devices_action(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectDevicesActionInput>(params)?;
+        validate_protect_action_id("deviceId", &input.device_id)?;
+        let mut output = ProtectDevicesActionOutput {
+            device_id: input.device_id,
+            action: input.action,
+            submitted: false,
+            accepted_status: None,
+            response_body: None,
+            response_body_in_content: None,
+        };
+        let (route, body) = protect_action_request(&output.action)?;
+        if !input.confirm {
+            return structured(output);
+        }
+        let response = self
+            .protect()
+            .device_action(&output.device_id, route, body.as_ref())
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.accepted_status = Some(response.status);
+        if !response.body.is_empty() {
+            output.response_body =
+                Some(BoundedMessage::from_controller_bytes(&response.body).to_string());
+        }
+        protect_action_result(output)
     }
 
     async fn protect_users_list(
@@ -9457,6 +9562,130 @@ fn viewer_settings_match(changes: &ProtectViewerSettingsChanges, after: &Value) 
             })
 }
 
+fn validate_protect_action_id(field: &str, id: &str) -> Result<(), McpError> {
+    if id.is_empty() || id.len() > 256 || matches!(id, "." | "..") {
+        return Err(McpError::invalid_params(
+            format!("{field} must be a nonempty, non-dot id of at most 256 bytes"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn protect_action_request(
+    action: &ProtectDeviceAction,
+) -> Result<(ProtectDeviceActionRoute<'_>, Option<Value>), McpError> {
+    let result = match action {
+        ProtectDeviceAction::SirenPlay { duration } => {
+            if duration.is_some_and(|value| !matches!(value, 5 | 10 | 20 | 30)) {
+                return Err(McpError::invalid_params(
+                    "siren duration must be 5, 10, 20, or 30 seconds",
+                    None,
+                ));
+            }
+            (
+                ProtectDeviceActionRoute::SirenPlay,
+                duration.map(|value| json!({"duration":value})),
+            )
+        }
+        ProtectDeviceAction::SirenStop => (ProtectDeviceActionRoute::SirenStop, None),
+        ProtectDeviceAction::SirenTestSound { volume } => {
+            if volume.is_some_and(|value| !(1..=100).contains(&value)) {
+                return Err(McpError::invalid_params(
+                    "siren test volume must be 1-100",
+                    None,
+                ));
+            }
+            (
+                ProtectDeviceActionRoute::SirenTestSound,
+                volume.map(|value| json!({"volume":value})),
+            )
+        }
+        ProtectDeviceAction::RelayActivate {
+            output_id,
+            state,
+            pulse_duration,
+        } => {
+            validate_protect_action_id("outputId", output_id)?;
+            let mut body = Map::new();
+            if let Some(state) = state {
+                body.insert(
+                    "state".to_owned(),
+                    Value::String(
+                        match state {
+                            RelayOutputState::On => "on",
+                            RelayOutputState::Off => "off",
+                        }
+                        .to_owned(),
+                    ),
+                );
+            }
+            if let Some(duration) = pulse_duration {
+                body.insert("pulseDuration".to_owned(), json!(duration));
+            }
+            (
+                ProtectDeviceActionRoute::RelayActivate { output_id },
+                (!body.is_empty()).then_some(Value::Object(body)),
+            )
+        }
+        ProtectDeviceAction::SpeakerTestSound { volume } => {
+            if volume.is_some_and(|value| value > 100) {
+                return Err(McpError::invalid_params(
+                    "speaker test volume must be 0-100",
+                    None,
+                ));
+            }
+            (
+                ProtectDeviceActionRoute::SpeakerTestSound,
+                volume.map(|value| json!({"volume":value})),
+            )
+        }
+        ProtectDeviceAction::AlarmHubTrigger {
+            output_id,
+            enable,
+            delay,
+            duration,
+        } => {
+            validate_protect_action_id("outputId", output_id)?;
+            let mut body = Map::new();
+            if let Some(enable) = enable {
+                body.insert("enable".to_owned(), json!(enable));
+            }
+            if let Some(delay) = delay {
+                body.insert("delay".to_owned(), json!(delay));
+            }
+            if let Some(duration) = duration {
+                body.insert("duration".to_owned(), json!(duration));
+            }
+            (
+                ProtectDeviceActionRoute::AlarmHubTrigger { output_id },
+                (!body.is_empty()).then_some(Value::Object(body)),
+            )
+        }
+    };
+    Ok(result)
+}
+
+fn protect_action_result(
+    mut output: ProtectDevicesActionOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        let mut result = structured(output)?;
+        result
+            .content
+            .push(ContentBlock::text(format!("responseBody: {body}")));
+        return Ok(result);
+    }
+    Ok(full)
+}
+
 fn viewer_settings_result(
     mut output: ProtectViewerSettingsUpdateOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -10079,6 +10308,9 @@ mod tests {
         // The upstream idempotency window is short and resets on restart;
         // transaction details and event results can contain sensitive data.
         ("cameras.pos.transaction", false, true, true),
+        // Siren, relay, speaker, and alarm-hub actions can have another effect
+        // when repeated; device identities and responses can be sensitive.
+        ("protect.devices.action", false, true, true),
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         // Applying the same named settings leaves the same configuration.

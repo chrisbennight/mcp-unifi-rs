@@ -59,6 +59,24 @@ impl ProtectDeviceFamily {
     }
 }
 
+/// Fixed action routes documented for Protect devices.
+#[derive(Debug, Clone, Copy)]
+pub enum ProtectDeviceActionRoute<'a> {
+    SirenPlay,
+    SirenStop,
+    SirenTestSound,
+    RelayActivate { output_id: &'a str },
+    SpeakerTestSound,
+    AlarmHubTrigger { output_id: &'a str },
+}
+
+/// The accepted status and body returned by one Protect device action.
+#[derive(Debug, Clone)]
+pub struct ProtectActionResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
 /// Documented Protect and `UniFi` Identity user resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtectUserFamily {
@@ -702,6 +720,61 @@ impl ProtectClient {
             validate_resource_record("protect.devices.by_id", device, Some(device_id))
         })
         .await
+    }
+
+    /// Invoke one documented device action exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for invalid identifiers, transport failure,
+    /// controller rejection, or a response beyond the transport byte budget.
+    pub async fn device_action(
+        &self,
+        device_id: &str,
+        route: ProtectDeviceActionRoute<'_>,
+        body: Option<&Value>,
+    ) -> Result<ProtectActionResponse, ApiError> {
+        validate_identifier("protect.devices.action", device_id)?;
+        let (segments, endpoint): (Vec<&str>, &'static str) = match route {
+            ProtectDeviceActionRoute::SirenPlay => {
+                (vec!["sirens", device_id, "play"], "protect.sirens.play")
+            }
+            ProtectDeviceActionRoute::SirenStop => {
+                (vec!["sirens", device_id, "stop"], "protect.sirens.stop")
+            }
+            ProtectDeviceActionRoute::SirenTestSound => (
+                vec!["sirens", device_id, "test-sound"],
+                "protect.sirens.test_sound",
+            ),
+            ProtectDeviceActionRoute::RelayActivate { output_id } => {
+                validate_identifier("protect.relays.activate", output_id)?;
+                (
+                    vec!["relays", device_id, "outputs", output_id, "activate"],
+                    "protect.relays.activate",
+                )
+            }
+            ProtectDeviceActionRoute::SpeakerTestSound => (
+                vec!["speakers", device_id, "test-sound"],
+                "protect.speakers.test_sound",
+            ),
+            ProtectDeviceActionRoute::AlarmHubTrigger { output_id } => {
+                validate_identifier("protect.alarm_hubs.trigger", output_id)?;
+                (
+                    vec!["alarm-hubs", device_id, "outputs", output_id, "trigger"],
+                    "protect.alarm_hubs.trigger",
+                )
+            }
+        };
+        let mut request = self.request(Method::POST, &segments)?;
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = self.send(request, endpoint).await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response)
+            .await
+            .inspect_err(|error| log_response_rejection(endpoint, status, error))?;
+        Ok(ProtectActionResponse { status, body })
     }
 
     /// Read complete records from one documented Protect user family.
