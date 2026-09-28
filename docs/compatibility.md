@@ -121,7 +121,7 @@ accounting. No controller configuration was changed during discovery.
 | Wireless updates, client block/unblock/reconnect, device locate | Network legacy API |
 | Port forwards, traffic rules/routes, historical statistics, neighboring APs | Network legacy API |
 | Network event search, recent client events, overview event counts | Network v2 system-log API, using the local session |
-| Protect camera and recorder identity | Protect Integration API |
+| Protect camera and recorder identity, snapshots, PTZ, RTSPS streams, and talkback sessions | Protect Integration API |
 | Protect hardware/firmware/recording and recorder/storage enrichment | Optional Protect local session |
 | Historical Protect detections | Protect local session |
 

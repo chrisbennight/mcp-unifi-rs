@@ -40,6 +40,9 @@ pub enum ToolKind {
     CamerasStatus,
     CamerasSnapshot,
     CamerasPtzControl,
+    CamerasStreamsList,
+    CamerasStreamsUpdate,
+    CamerasTalkbackStart,
     ProtectOverview,
     ProtectEvents,
     WifiDiagnose,
@@ -58,11 +61,14 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    /// Existing voucher codes require the independent transport's operator
-    /// secret-disclosure grant. Gateway authorization uses the catalog risk
-    /// and sensitivity labels instead.
+    /// Existing voucher codes and camera stream handles require the
+    /// independent transport's operator secret-disclosure grant. Gateway
+    /// authorization uses the catalog risk and sensitivity labels instead.
     pub(crate) const fn discloses_existing_credentials(self) -> bool {
-        matches!(self, Self::VouchersSearch | Self::VouchersStatus)
+        matches!(
+            self,
+            Self::VouchersSearch | Self::VouchersStatus | Self::CamerasStreamsList
+        )
     }
 
     /// Explicit authorization classification, independent of advisory annotations.
@@ -77,6 +83,8 @@ impl ToolKind {
             | Self::FirewallPoliciesUpdate
             | Self::VouchersRevoke
             | Self::CamerasPtzControl
+            | Self::CamerasStreamsUpdate
+            | Self::CamerasTalkbackStart
             | Self::VouchersCreate => true,
             Self::NetworkOverview
             | Self::ClientsSearch
@@ -88,6 +96,7 @@ impl ToolKind {
             | Self::CamerasSearch
             | Self::CamerasStatus
             | Self::CamerasSnapshot
+            | Self::CamerasStreamsList
             | Self::ProtectOverview
             | Self::ProtectEvents
             | Self::WifiDiagnose
@@ -105,6 +114,9 @@ impl ToolKind {
             | Self::CamerasStatus
             | Self::CamerasSnapshot
             | Self::CamerasPtzControl
+            | Self::CamerasStreamsList
+            | Self::CamerasStreamsUpdate
+            | Self::CamerasTalkbackStart
             | Self::ProtectOverview
             | Self::ProtectEvents => ToolSurface::Protect,
             Self::NetworkOverview
@@ -348,6 +360,23 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Preview or run a Protect PTZ action for one camera: go to a preset (including home), start a patrol slot, or stop the patrol. Confirmed patrol actions read the active slot back; preset movement reports acceptance because the API exposes no position readback.",
         ToolBehavior::write(false).result_sensitive(),
     ),
+    credential_read_spec(
+        ToolKind::CamerasStreamsList,
+        "cameras.streams.list",
+        "List the existing RTSPS stream URLs for one Protect camera. URLs grant access to the camera feed and are sensitive results.",
+    ),
+    write_spec(
+        ToolKind::CamerasStreamsUpdate,
+        "cameras.streams.update",
+        "Preview or create/remove selected RTSPS stream qualities for one Protect camera. A confirmed create returns the stream URLs; readback reports whether the requested qualities persisted.",
+        ToolBehavior::write(false).result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::CamerasTalkbackStart,
+        "cameras.talkback.start",
+        "Preview or create one Protect camera talkback session. A confirmed call returns the RTP handle and audio configuration for the caller to use.",
+        ToolBehavior::write(false).result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::ProtectOverview,
         "protect.overview",
@@ -525,6 +554,9 @@ mod tests {
         ToolKind::CamerasStatus,
         ToolKind::CamerasSnapshot,
         ToolKind::CamerasPtzControl,
+        ToolKind::CamerasStreamsList,
+        ToolKind::CamerasStreamsUpdate,
+        ToolKind::CamerasTalkbackStart,
         ToolKind::ProtectOverview,
         ToolKind::ProtectEvents,
         ToolKind::WifiDiagnose,
@@ -559,6 +591,9 @@ mod tests {
                 | ToolKind::CamerasStatus
                 | ToolKind::CamerasSnapshot
                 | ToolKind::CamerasPtzControl
+                | ToolKind::CamerasStreamsList
+                | ToolKind::CamerasStreamsUpdate
+                | ToolKind::CamerasTalkbackStart
                 | ToolKind::ProtectOverview
                 | ToolKind::ProtectEvents
                 | ToolKind::WifiDiagnose
@@ -607,6 +642,9 @@ mod tests {
                 "cameras.status",
                 "cameras.snapshot",
                 "cameras.ptz.control",
+                "cameras.streams.list",
+                "cameras.streams.update",
+                "cameras.talkback.start",
                 "protect.overview",
                 "protect.events"
             ]

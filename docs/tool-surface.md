@@ -166,10 +166,10 @@ there is no silent scan truncation. Display text uses visible truncation markers
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
 
-### Protect camera inventory, snapshots, PTZ, overview, and events
+### Protect cameras, streams, talkback, overview, and events
 
 The Protect console, which is a separate console from the network controller
-with its own key and its own certificate. These six tools are served by their
+with its own key and its own certificate. These nine tools are served by their
 own process: a server started with `UNIFI_MCP_SURFACE=protect` advertises and
 dispatches exactly them, and a `network` server does not list them at all, so
 a deployment without cameras simply runs no Protect server.
@@ -212,6 +212,20 @@ move, so that action reports controller acceptance without claiming position
 verification. `cameras.status` includes `activePatrolSlot` when reported by the
 console; null means no patrol is running.
 
+`cameras.streams.list` returns the existing RTSPS stream URLs for a camera.
+These URLs grant access to the camera feed, so the result is classified high
+risk and sensitive. Independent server modes require the operator's secret
+disclosure grant for this read. `cameras.streams.update` previews by default;
+with `confirm`, it creates or removes one or more distinct qualities: `high`,
+`medium`, `low`, or `package`. A created URL is returned even if the follow-up
+readback fails or times out. The result says whether the requested qualities
+were observed afterward. `package` requires a camera with a package camera.
+
+`cameras.talkback.start` previews or creates a talkback session. A confirmed
+call returns its RTP URL, codec, sampling rate, and bit depth. The API does not
+provide a session readback, so the tool reports creation and the returned
+session data without claiming that the caller has sent audio.
+
 Search and overview responses include capabilities. Basic public inventory is
 available with only the API key. Hardware model, functional class, recording,
 firmware, storage, and recorder health remain absent until a local inventory
@@ -241,8 +255,8 @@ is larger than the requested page, the call fails loudly and asks for a higher
 limit instead of silently splitting it. The per-page `limit` controls work
 and result size; there is no whole-window row cap or silent truncation.
 
-Streams and talkback have separate follow-up work; the snapshot tool covers
-still images from cameras.
+The snapshot tool covers still images from cameras; RTSPS URLs are transport
+handles for a caller capable of consuming a live stream.
 
 ## Writes
 
@@ -262,12 +276,14 @@ it.
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
+| `cameras.streams.update` | **no** | no | yes |
+| `cameras.talkback.start` | **no** | no | yes |
 
 ### What every write does
 
 **Previews by default.** A call without `confirm` reaches no write endpoint and
-describes what would change, with the consequences worth knowing first. A field
-already holding the requested value is not listed as a change.
+describes the requested action and its consequences. Configuration field updates
+omit fields already holding the requested value.
 
 **Validates before the controller.** Input that cannot be satisfied — an empty
 change set, a misspelled field, a selector of the wrong shape — is refused
@@ -438,4 +454,4 @@ outcome.
 Creating and deleting rules is out of scope throughout: these tools operate
 configuration an operator already has.
 
-RTSPS streams and talkback are not yet exposed.
+Camera settings updates remain tracked in the Protect capability issue.

@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
+use unifi_api::protect::ProtectStreamQuality;
 use unifi_api::protect::{ProtectPatrolState, ProtectPtzCommand};
 use unifi_api::{ApiError, ControllerConfig, ProtectAvailability, ProtectClient, TlsMode};
 use url::Url;
@@ -124,6 +125,89 @@ async fn a_camera_id_carrying_url_syntax_stays_one_path_segment() {
 
     let camera = client_for(&server).camera("../nvrs").await.expect("camera");
     assert_eq!(camera.id, "../nvrs");
+}
+
+#[tokio::test]
+async fn stream_lifecycle_and_talkback_use_the_documented_typed_routes() {
+    let server = MockServer::start().await;
+    let route = format!("{PREFIX}/cameras/cam-1/rtsps-stream");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp",
+            "medium": null,
+            "low": null,
+            "package": null,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .and(header("X-API-Key", API_KEY))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "qualities": ["high", "medium"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp",
+            "medium": "rtsps://192.0.2.1:7441/synthetic-medium?enableSrtp",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(&route))
+        .and(query_param("qualities", "high"))
+        .and(query_param("qualities", "medium"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/cameras/cam-1/talkback-session")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "url": "rtp://192.0.2.1:7004", "codec": "opus",
+            "samplingRate": 24000, "bitsPerSample": 16,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let existing = client.camera_streams("cam-1").await.expect("streams");
+    assert!(existing.high.is_some());
+    assert!(existing.medium.is_none());
+    let created = client
+        .camera_streams_create(
+            "cam-1",
+            &[ProtectStreamQuality::High, ProtectStreamQuality::Medium],
+        )
+        .await
+        .expect("create streams");
+    assert!(created.medium.is_some());
+    client
+        .camera_streams_delete(
+            "cam-1",
+            &[ProtectStreamQuality::High, ProtectStreamQuality::Medium],
+        )
+        .await
+        .expect("delete streams");
+    let session = client
+        .camera_talkback_session("cam-1")
+        .await
+        .expect("talkback session");
+    assert_eq!(session.codec, "opus");
+    assert_eq!(session.sampling_rate, 24000);
+    assert!(client.camera_streams_create("cam-1", &[]).await.is_err());
+    assert!(
+        client
+            .camera_streams_delete(
+                "cam-1",
+                &[ProtectStreamQuality::High, ProtectStreamQuality::High]
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
