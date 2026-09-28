@@ -65,6 +65,7 @@ const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 /// A tool whose result carries credentials this call created is exempt, since
 /// there is nothing for the caller to recover by narrowing.
 pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
+const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 
 /// Search pagination bounds shared by the list tools.
 const MAXIMUM_SEARCH_LIMIT: u16 = 200;
@@ -1075,6 +1076,88 @@ struct CameraPosTransactionOutput {
     response: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_in_content: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectAssetsListInput {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectAssetsListOutput {
+    file_type: &'static str,
+    assets: Vec<Value>,
+    total_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+enum ProtectAssetMimeType {
+    #[serde(rename = "image/gif")]
+    ImageGif,
+    #[serde(rename = "image/jpeg")]
+    ImageJpeg,
+    #[serde(rename = "image/png")]
+    ImagePng,
+    #[serde(rename = "audio/mpeg")]
+    AudioMpeg,
+    #[serde(rename = "audio/mp4")]
+    AudioMp4,
+    #[serde(rename = "audio/wave")]
+    AudioWave,
+    #[serde(rename = "audio/x-caf")]
+    AudioCaf,
+}
+
+impl ProtectAssetMimeType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ImageGif => "image/gif",
+            Self::ImageJpeg => "image/jpeg",
+            Self::ImagePng => "image/png",
+            Self::AudioMpeg => "audio/mpeg",
+            Self::AudioMp4 => "audio/mp4",
+            Self::AudioWave => "audio/wave",
+            Self::AudioCaf => "audio/x-caf",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectAssetUploadInput {
+    file_name: String,
+    mime_type: ProtectAssetMimeType,
+    content_base64: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ProtectAssetUploadOutput {
+    file_type: &'static str,
+    file_name: String,
+    mime_type: ProtectAssetMimeType,
+    byte_size: usize,
+    submitted: bool,
+    accepted: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_in_content: Option<bool>,
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -3535,6 +3618,12 @@ impl ToolSpec {
             ToolKind::CamerasMicrophoneDisable => {
                 tool::<CameraDisableMicInput, CameraDisableMicOutput>(self)
             }
+            ToolKind::ProtectAssetsList => {
+                tool::<ProtectAssetsListInput, ProtectAssetsListOutput>(self)
+            }
+            ToolKind::ProtectAssetsUpload => {
+                tool::<ProtectAssetUploadInput, ProtectAssetUploadOutput>(self)
+            }
             ToolKind::CamerasStreamsList => {
                 tool::<CameraStreamsListInput, CameraStreamsListOutput>(self)
             }
@@ -3820,6 +3909,8 @@ impl UnifiMcp {
             ToolKind::CamerasSnapshot => self.cameras_snapshot(params).await,
             ToolKind::CamerasPtzControl => self.cameras_ptz_control(params).await,
             ToolKind::CamerasMicrophoneDisable => self.cameras_microphone_disable(params).await,
+            ToolKind::ProtectAssetsList => self.protect_assets_list(params).await,
+            ToolKind::ProtectAssetsUpload => self.protect_assets_upload(params).await,
             ToolKind::CamerasStreamsList => self.cameras_streams_list(params).await,
             ToolKind::CamerasStreamsUpdate => self.cameras_streams_update(params).await,
             ToolKind::CamerasTalkbackStart => self.cameras_talkback_start(params).await,
@@ -5559,6 +5650,113 @@ impl UnifiMcp {
             }
         }
         camera_disable_mic_result(output)
+    }
+
+    async fn protect_assets_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<ProtectAssetsListInput>(params)?;
+        if !(1..=200).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let assets = self.protect().animation_assets().await.map_err(api_error)?;
+        let total_count = assets.len();
+        let page: Vec<Value> = assets
+            .into_iter()
+            .skip(input.offset)
+            .take(usize::from(input.limit))
+            .collect();
+        let next = input.offset.saturating_add(page.len());
+        structured(ProtectAssetsListOutput {
+            file_type: "animations",
+            assets: page,
+            total_count,
+            next_offset: (next < total_count).then_some(next),
+        })
+    }
+
+    async fn protect_assets_upload(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<ProtectAssetUploadInput>(params)?;
+        if input.file_name.is_empty()
+            || input.file_name.len() > 255
+            || input.file_name.chars().any(char::is_control)
+        {
+            return Err(McpError::invalid_params(
+                "fileName must contain 1-255 bytes without control characters",
+                None,
+            ));
+        }
+        if input.content_base64.len() > MAXIMUM_ANIMATION_ASSET_BYTES.div_ceil(3) * 4 {
+            return Err(McpError::invalid_params(
+                "animation asset exceeds the 3 MiB upload bound",
+                None,
+            ));
+        }
+        let bytes = STANDARD.decode(&input.content_base64).map_err(|_| {
+            McpError::invalid_params("contentBase64 must be standard padded base64", None)
+        })?;
+        if bytes.is_empty() || bytes.len() > MAXIMUM_ANIMATION_ASSET_BYTES {
+            return Err(McpError::invalid_params(
+                "animation asset must contain 1 byte to 3 MiB",
+                None,
+            ));
+        }
+        let mut output = ProtectAssetUploadOutput {
+            file_type: "animations",
+            file_name: input.file_name,
+            mime_type: input.mime_type,
+            byte_size: bytes.len(),
+            submitted: false,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return structured(output);
+        }
+        let accepted = self
+            .protect()
+            .animation_asset_upload(&output.file_name, output.mime_type.as_str(), bytes)
+            .await
+            .map_err(api_error)?;
+        let asset_name = accepted
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        output.submitted = true;
+        output.accepted = Some(accepted);
+        if let Some(asset_name) = asset_name {
+            let budget = self
+                .request_timeout()
+                .saturating_sub(started.elapsed())
+                .saturating_sub(CAMERA_SETTINGS_RESPONSE_RESERVE)
+                .min(CAMERA_SETTINGS_READBACK_BUDGET);
+            if budget.is_zero() {
+                output.readback_error =
+                    Some("asset readback skipped because the request deadline was near".to_owned());
+            } else {
+                match tokio::time::timeout(budget, self.protect().animation_assets()).await {
+                    Ok(Ok(assets)) => {
+                        output.after = assets.into_iter().find(|asset| {
+                            asset.get("name").and_then(Value::as_str) == Some(asset_name.as_str())
+                        });
+                        output.verified = Some(output.after.is_some());
+                    }
+                    Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                    Err(_) => output.readback_error = Some("asset readback timed out".to_owned()),
+                }
+            }
+        }
+        protect_asset_upload_result(output)
     }
 
     async fn cameras_streams_list(
@@ -11117,6 +11315,38 @@ fn camera_settings_update_result(
     Ok(result)
 }
 
+fn protect_asset_upload_result(
+    mut output: ProtectAssetUploadOutput,
+) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &ProtectAssetUploadOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(accepted) = output.accepted.take()
+    {
+        output.accepted_in_content = Some(true);
+        content.push(ContentBlock::text(format!("accepted: {accepted}")));
+    }
+    if exceeds(&output)?
+        && let Some(after) = output.after.take()
+    {
+        output.after_in_content = Some(true);
+        content.push(ContentBlock::text(format!("after: {after}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn protect_action_result(
     mut output: ProtectDevicesActionOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -11929,6 +12159,7 @@ mod tests {
         // Repeating a movement or patrol command may trigger another action.
         ("cameras.ptz.control", false, false, true),
         ("cameras.microphone.disable", true, false, true),
+        ("protect.assets.upload", false, true, true),
         // Applying the same named settings leaves the same configuration.
         ("cameras.settings.update", true, false, true),
         // A viewer assignment is stable when repeated; device names and

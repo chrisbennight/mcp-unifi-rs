@@ -479,6 +479,21 @@ microphone is disabled. Protect says restoring the microphone requires a
 camera reset. Large records and responses move to labeled content blocks,
 with `InContent` flags in the structured result.
 
+`protect.assets.list` pages through complete records from Protect's documented
+`animations` file family. Results include the controller's asset name,
+original filename, type, path, and any additional fields. `totalCount` and
+`nextOffset` show whether more records remain. `protect.assets.upload` accepts
+one of the documented image or audio MIME types, a filename, and standard
+padded `contentBase64`. It previews the decoded byte size by default. With
+`confirm: true`, it sends one multipart `file` part to the fixed animations
+route and returns Protect's complete accepted record. A follow-up list checks
+whether the returned asset name appears; a failed or inconclusive readback
+does not hide the accepted result. The upload is bounded to 3 MiB of decoded
+data. HTTP ingress also applies its configured request-body limit (1 MiB by
+default, adjustable to 4 MiB). Uploads above that default require a higher
+configured ingress limit or stdio. Large accepted records move to labeled
+content blocks.
+
 `cameras.streams.list` returns the existing RTSPS stream URLs for a camera.
 These URLs grant access to the camera feed, so the result is classified high
 risk and sensitive. The gateway decides caller access in gateway mode.
@@ -560,7 +575,8 @@ it.
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
 | `cameras.ptz.control` | **no** | no | yes |
-| `cameras.microphone.disable` | yes | yes | yes |
+| `cameras.microphone.disable` | yes | no | yes |
+| `protect.assets.upload` | **no** | yes | yes |
 | `cameras.settings.update` | yes | no | yes |
 | `cameras.streams.update` | **no** | no | yes |
 | `cameras.talkback.start` | **no** | no | yes |
