@@ -180,13 +180,15 @@ async fn search_rejects_invalid_page_before_contacting_the_controller() {
 async fn search_refuses_a_controller_page_for_the_wrong_offset() {
     let server = MockServer::start().await;
     mount_site(&server).await;
+    let response = serde_json::json!({
+        "offset": 0, "limit": 1, "count": 1, "totalCount": 2,
+        "data": [voucher("v1", "111-222")],
+        "controllerDetail": "voucher-page-tail".repeat(100),
+    });
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers")))
         .and(query_param("offset", "1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "offset": 0, "limit": 1, "count": 1, "totalCount": 2,
-            "data": [voucher("v1", "111-222")],
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
         .expect(1)
         .mount(&server)
         .await;
@@ -201,6 +203,37 @@ async fn search_refuses_a_controller_page_for_the_wrong_offset() {
         .await
         .expect_err("wrong page");
     assert!(error.message.contains("inconsistent voucher page"));
+    assert!(error.message.contains(&response.to_string()));
+}
+
+#[tokio::test]
+async fn status_and_revoke_preview_preserve_a_mismatched_controller_detail() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let response = serde_json::json!({
+        "id": "other-voucher", "code": "111-222", "name": "visitor",
+        "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+        "authorizedGuestCount": 1, "timeLimitMinutes": 60,
+        "authorizedGuestLimit": 3,
+        "controllerDetail": "voucher-detail-tail".repeat(100),
+    });
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    for name in ["vouchers.status", "vouchers.revoke"] {
+        let error = handler
+            .call(&call(name, &serde_json::json!({"voucherId": "v1"})), None)
+            .await
+            .expect_err("wrong voucher");
+        assert!(error.message.contains("different voucher id"), "{error}");
+        assert!(error.message.contains(&response.to_string()), "{error}");
+    }
 }
 
 #[tokio::test]
@@ -317,11 +350,18 @@ async fn revoke_returns_controller_readback_failure_after_accepted_delete() {
 async fn revoke_reports_a_controller_that_acknowledges_but_keeps_the_voucher() {
     let server = MockServer::start().await;
     mount_site(&server).await;
+    let response = serde_json::json!({
+        "id": "v1", "code": "111-222", "name": "visitor",
+        "createdAt": "2026-09-28T00:00:00Z", "expired": false,
+        "authorizedGuestCount": 1, "timeLimitMinutes": 60,
+        "authorizedGuestLimit": 3,
+        "controllerDetail": "persisted-voucher-tail".repeat(100),
+    });
     Mock::given(method("GET"))
         .and(path(format!(
             "{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
         .expect(2)
         .mount(&server)
         .await;
@@ -346,8 +386,62 @@ async fn revoke_reports_a_controller_that_acknowledges_but_keeps_the_voucher() {
         .structured_content
         .expect("structured");
     assert_eq!(result["verified"], false);
+    assert!(
+        result["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&response.to_string())
+    );
     assert_eq!(
         result["warnings"][0],
         "controller acknowledged deletion but the voucher still exists"
+    );
+}
+
+#[tokio::test]
+async fn revoke_keeps_a_readback_for_a_different_voucher_without_claiming_absence() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let mut response = voucher("another-voucher", "333-444");
+    response["controllerDetail"] = serde_json::json!("wrong-voucher-tail".repeat(100));
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "vouchers.revoke",
+                &serde_json::json!({"voucherId": "v1", "confirm": true}),
+            ),
+            None,
+        )
+        .await
+        .expect("deletion was accepted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verified").is_none());
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("readback error")
+            .contains(&response.to_string())
     );
 }

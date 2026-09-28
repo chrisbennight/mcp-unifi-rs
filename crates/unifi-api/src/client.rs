@@ -396,11 +396,28 @@ impl IntegrationClient {
         site_id: &str,
         page: PageRequest,
     ) -> Result<Page<VoucherDetails>, ApiError> {
-        self.get_json(
+        self.vouchers_with_response(site_id, page)
+            .await
+            .map(|(page, _)| page)
+    }
+
+    /// Read a voucher page and retain its complete accepted response for
+    /// caller-side page validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn vouchers_with_response(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+    ) -> Result<(Page<VoucherDetails>, BoundedMessage), ApiError> {
+        self.get_json_with_response(
             &["sites", site_id, "hotspot", "vouchers"],
             &page_query(page),
         )
         .await
+        .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// One persisted hotspot voucher, including its retrievable code.
@@ -413,8 +430,25 @@ impl IntegrationClient {
         site_id: &str,
         voucher_id: &str,
     ) -> Result<VoucherDetails, ApiError> {
-        self.get_json(&["sites", site_id, "hotspot", "vouchers", voucher_id], &[])
+        self.voucher_with_response(site_id, voucher_id)
             .await
+            .map(|(voucher, _)| voucher)
+    }
+
+    /// Read one voucher and retain its complete accepted response for
+    /// caller-side identity validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn voucher_with_response(
+        &self,
+        site_id: &str,
+        voucher_id: &str,
+    ) -> Result<(VoucherDetails, BoundedMessage), ApiError> {
+        self.get_json_with_response(&["sites", site_id, "hotspot", "vouchers", voucher_id], &[])
+            .await
+            .map(|(voucher, bytes)| (voucher, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Create hotspot vouchers. Never retried.

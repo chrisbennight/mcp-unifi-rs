@@ -433,8 +433,12 @@ The official voucher list and detail endpoints return each code. `vouchers.searc
 pages through vouchers and `vouchers.status` reads one by id; both return codes
 as sensitive results. `vouchers.revoke` previews a deletion and, when confirmed,
 checks whether the voucher disappeared from the detail endpoint. Its
-`readbackError` carries the controller's response when that lookup fails,
-including the HTTP 404 response used to confirm absence.
+`readbackError` carries the controller's response when that lookup fails or
+still returns the voucher, including the HTTP 404 response used to confirm
+absence.
+If a voucher page or detail response disagrees with the requested offset or id,
+the error includes the complete accepted controller response alongside the
+validation diagnostic, including fields outside the typed voucher view.
 
 Creation checks the returned batch — whether as many came back as
 were asked for, whether each carries an id and a code, whether the codes are
@@ -444,7 +448,7 @@ format, and refusing a batch for being unfamiliar would condemn vouchers that
 already exist. It also reads each identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
-and complete controller error. `readbackComplete` says whether verification
+and complete controller response or error. `readbackComplete` says whether verification
 reached the end of the returned batch. A deadline or accumulated error
 response budget that stops later reads is named in `readbackStopReason`; those
 vouchers remain reachable through `vouchers.status` or `vouchers.search`
