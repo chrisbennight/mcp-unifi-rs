@@ -217,7 +217,7 @@ async fn revoke_previews_without_deleting_and_confirmed_revoke_checks_absence() 
             if reads_for_response.fetch_add(1, Ordering::SeqCst) < 2 {
                 ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222"))
             } else {
-                ResponseTemplate::new(404)
+                ResponseTemplate::new(404).set_body_string("voucher no longer exists")
             }
         })
         .expect(3)
@@ -260,7 +260,57 @@ async fn revoke_previews_without_deleting_and_confirmed_revoke_checks_absence() 
         .expect("structured");
     assert_eq!(confirmed["applied"], true);
     assert_eq!(confirmed["verified"], true);
+    assert_eq!(
+        confirmed["readbackError"],
+        "controller returned HTTP 404: voucher no longer exists"
+    );
     assert_eq!(reads.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn revoke_returns_controller_readback_failure_after_accepted_delete() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1");
+    let failure = format!(
+        "voucher lookup failed: {}voucher-readback-tail",
+        "x".repeat(50_000)
+    );
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "vouchers.revoke",
+                &serde_json::json!({"voucherId": "v1", "confirm": true}),
+            ),
+            None,
+        )
+        .await
+        .expect("delete was accepted");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert!(output.get("verified").is_none());
+    assert!(output.get("readbackError").is_none());
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(content.to_string().contains(&failure));
 }
 
 #[tokio::test]
