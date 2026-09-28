@@ -1399,15 +1399,18 @@ struct WlanView {
     /// this tool's result as sensitive.
     #[serde(skip_serializing_if = "Option::is_none")]
     passphrase: Option<String>,
+    /// Controller id of the selected RADIUS profile, when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    radius_profile_id: Option<String>,
 }
 
-/// Security modes this tool can set. Enterprise modes need RADIUS fields the
-/// server does not model.
+/// Security modes accepted by the legacy wireless-network API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum WlanSecurity {
     Open,
     Wpapsk,
+    Wpaeap,
 }
 
 impl WlanSecurity {
@@ -1415,6 +1418,7 @@ impl WlanSecurity {
         match self {
             Self::Open => "open",
             Self::Wpapsk => "wpapsk",
+            Self::Wpaeap => "wpaeap",
         }
     }
 }
@@ -1426,12 +1430,14 @@ impl WlanSecurity {
 struct WlanChanges {
     ssid: Option<String>,
     enabled: Option<bool>,
-    /// `open` or `wpapsk`.
+    /// `open`, `wpapsk`, or `wpaeap`.
     security: Option<WlanSecurity>,
     /// Whether the ssid is hidden from scans.
     hidden: Option<bool>,
-    /// New pre-shared key. Never echoed back.
+    /// New pre-shared key. The readback reports the controller's stored value.
     passphrase: Option<String>,
+    /// Controller id of a configured RADIUS profile.
+    radius_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -3932,6 +3938,7 @@ impl UnifiMcp {
                     .and_then(|id| network_names.get(id).cloned())
                     .flatten(),
                 passphrase: wlan.x_passphrase,
+                radius_profile_id: wlan.radius_profile_id,
             })
             .collect();
         structured(NetworksReadOutput {
@@ -6366,7 +6373,14 @@ fn client_control_warnings(action: ClientControl, connected: bool) -> Vec<String
 
 /// Every field `changes` accepts. A misspelling is the likeliest way a caller
 /// loses a change, so the rejection names what was accepted.
-const WLAN_CHANGE_FIELDS: &[&str] = &["ssid", "enabled", "security", "hidden", "passphrase"];
+const WLAN_CHANGE_FIELDS: &[&str] = &[
+    "ssid",
+    "enabled",
+    "security",
+    "hidden",
+    "passphrase",
+    "radiusProfileId",
+];
 
 fn reject_unknown_change_fields(
     params: &CallToolRequestParams,
@@ -7358,6 +7372,7 @@ fn wlan_projection(wlan: &WlanConf) -> Value {
         "hidden": wlan.hide_ssid,
         "passphrase": wlan.x_passphrase,
         "networkId": wlan.networkconf_id,
+        "radiusProfileId": wlan.radius_profile_id,
     })
 }
 
@@ -7382,6 +7397,9 @@ fn requested_fields(changes: &WlanChanges) -> Map<String, Value> {
     if let Some(passphrase) = &changes.passphrase {
         requested.insert("passphrase".to_owned(), Value::String(passphrase.clone()));
     }
+    if let Some(profile) = &changes.radius_profile_id {
+        requested.insert("radiusProfileId".to_owned(), Value::String(profile.clone()));
+    }
     requested
 }
 
@@ -7400,7 +7418,11 @@ fn wlan_warnings(requested: &Map<String, Value>, current: &Value) -> Vec<String>
     {
         warnings.push("switching to open removes encryption from this network".to_owned());
     }
-    if changing("ssid") || changing("passphrase") || changing("security") {
+    if changing("ssid")
+        || changing("passphrase")
+        || changing("security")
+        || changing("radiusProfileId")
+    {
         warnings.push("every client must reconnect after this change".to_owned());
     }
     warnings
@@ -7418,6 +7440,7 @@ fn wlan_patch(changes: &WlanChanges) -> WlanPatch {
             .as_ref()
             .map(|passphrase| Zeroizing::new(passphrase.clone())),
         hide_ssid: changes.hidden,
+        radius_profile_id: changes.radius_profile_id.clone(),
     }
 }
 
@@ -7458,6 +7481,7 @@ const WLAN_WIRE_NAMES: &[(&str, &str)] = &[
     ("security", "security"),
     ("hidden", "hide_ssid"),
     ("passphrase", "x_passphrase"),
+    ("radiusProfileId", "radius_profile_id"),
 ];
 
 /// A port forward stores both settable fields under the names the read

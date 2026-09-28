@@ -303,7 +303,7 @@ async fn networks_mocks(server: &MockServer) {
             ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([{
                 "_id": "wlan-1", "name": "HomeNet", "enabled": true, "security": "wpapsk",
                 "x_passphrase": WIFI_PASSPHRASE, "networkconf_id": "net-1",
-                "hide_ssid": false
+                "hide_ssid": false, "radius_profile_id": "radius-office"
             }]))),
         )
         .mount(server)
@@ -326,6 +326,7 @@ async fn networks_read_returns_passphrases() {
     assert_eq!(output["wlans"][0]["ssid"], "HomeNet");
     assert_eq!(output["wlans"][0]["network"], "LAN");
     assert_eq!(output["wlans"][0]["passphrase"], WIFI_PASSPHRASE);
+    assert_eq!(output["wlans"][0]["radiusProfileId"], "radius-office");
     assert!(output.to_string().contains(WIFI_PASSPHRASE));
 }
 
