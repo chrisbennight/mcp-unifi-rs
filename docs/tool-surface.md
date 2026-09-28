@@ -301,12 +301,16 @@ bodies move to labeled content. The gateway decides access to these actions.
 ### `protect.devices.settings.update`
 
 This tool previews and patches documented settings by exact `deviceId` for
-lights, sirens, relays, speakers, fobs, bridges, link stations, and alarm hubs.
+lights, sensors, chimes, sirens, relays, speakers, fobs, bridges, link stations,
+and alarm hubs.
 `changes.kind` selects the device family and its typed fields. Light settings
 include force enablement, mode, activation time, and hardware controls; sirens,
 relays, and speakers expose their documented LED and audio settings. The other
-four families currently expose their documented name setting. Sensor and chime
-settings remain in issue #75.
+four families expose their documented name setting. Sensor settings include
+light, humidity, temperature, motion, glass break, alarm, schedule, and arm
+profile controls. Chime settings include paired camera ids and per-camera
+ringtone, repetition, and volume. An explicit `null` clears nullable sensor
+thresholds or `armProfileIds`; omitted fields stay off the PATCH body.
 
 Preview reads and returns the complete device record without a PATCH. With
 `confirm: true`, the tool sends one PATCH containing only named fields, keeps

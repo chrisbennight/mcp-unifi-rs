@@ -649,6 +649,103 @@ struct ProtectRelayLedSettings {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum ProtectNullableNumber {
+    Number(f64),
+    Clear,
+}
+
+fn deserialize_present_nullable_number<'de, D>(
+    deserializer: D,
+) -> Result<Option<ProtectNullableNumber>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<f64>::deserialize(deserializer).map(|value| {
+        Some(match value {
+            Some(number) => ProtectNullableNumber::Number(number),
+            None => ProtectNullableNumber::Clear,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum ProtectNullableIds {
+    Ids(Vec<String>),
+    Clear,
+}
+
+fn deserialize_present_nullable_ids<'de, D>(
+    deserializer: D,
+) -> Result<Option<ProtectNullableIds>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Vec<String>>::deserialize(deserializer).map(|value| {
+        Some(match value {
+            Some(ids) => ProtectNullableIds::Ids(ids),
+            None => ProtectNullableIds::Clear,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectSensorThresholdSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    margin: Option<f64>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_nullable_number",
+        skip_serializing_if = "Option::is_none"
+    )]
+    low_threshold: Option<ProtectNullableNumber>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_nullable_number",
+        skip_serializing_if = "Option::is_none"
+    )]
+    high_threshold: Option<ProtectNullableNumber>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectSensorMotionSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sensitivity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sensitivity_when_armed: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectSensorAlarmSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ProtectSensorScheduleMode {
+    Always,
+    WhenArmed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProtectChimeRingSettings {
+    camera_id: String,
+    repeat_times: f64,
+    ringtone_id: String,
+    volume: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -661,6 +758,28 @@ enum ProtectDeviceSettingsChanges {
         is_light_force_enabled: Option<bool>,
         light_mode_settings: Option<ProtectLightModeSettings>,
         light_device_settings: Option<ProtectLightDeviceSettings>,
+    },
+    Sensor {
+        name: Option<String>,
+        light_settings: Option<Box<ProtectSensorThresholdSettings>>,
+        humidity_settings: Option<Box<ProtectSensorThresholdSettings>>,
+        temperature_settings: Option<Box<ProtectSensorThresholdSettings>>,
+        motion_settings: Option<Box<ProtectSensorMotionSettings>>,
+        glass_break_settings: Option<Box<ProtectSensorMotionSettings>>,
+        schedule_mode: Option<ProtectSensorScheduleMode>,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_present_nullable_ids",
+            skip_serializing_if = "Option::is_none"
+        )]
+        arm_profile_ids: Option<ProtectNullableIds>,
+        has_custom_sensitivity_when_armed: Option<bool>,
+        alarm_settings: Option<ProtectSensorAlarmSettings>,
+    },
+    Chime {
+        name: Option<String>,
+        camera_ids: Option<Vec<String>>,
+        ring_settings: Option<Vec<ProtectChimeRingSettings>>,
     },
     Siren {
         name: Option<String>,
@@ -10263,6 +10382,7 @@ fn protect_action_request(
     Ok(result)
 }
 
+#[allow(clippy::too_many_lines)]
 fn device_settings_request(
     changes: &ProtectDeviceSettingsChanges,
 ) -> Result<(ProtectDeviceKind, Value), McpError> {
@@ -10286,6 +10406,75 @@ fn device_settings_request(
                 ));
             }
             ProtectDeviceKind::Light
+        }
+        ProtectDeviceSettingsChanges::Sensor {
+            light_settings,
+            humidity_settings,
+            temperature_settings,
+            motion_settings,
+            glass_break_settings,
+            arm_profile_ids,
+            ..
+        } => {
+            for (field, settings, minimum, maximum) in [
+                ("lightSettings", light_settings.as_ref(), 1.0, 503_192.0),
+                ("humiditySettings", humidity_settings.as_ref(), 1.0, 99.0),
+                (
+                    "temperatureSettings",
+                    temperature_settings.as_ref(),
+                    -39.0,
+                    124.0,
+                ),
+            ] {
+                if settings.is_some_and(|settings| {
+                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !(minimum..=maximum).contains(value))
+                }) {
+                    return Err(McpError::invalid_params(
+                        format!("{field}.lowThreshold is outside the documented range"),
+                        None,
+                    ));
+                }
+            }
+            for (field, settings) in [
+                ("motionSettings", motion_settings.as_ref()),
+                ("glassBreakSettings", glass_break_settings.as_ref()),
+            ] {
+                if settings.is_some_and(|settings| {
+                    settings
+                        .sensitivity
+                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        || settings
+                            .sensitivity_when_armed
+                            .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                }) {
+                    return Err(McpError::invalid_params(
+                        format!("{field} sensitivity must be 0-100"),
+                        None,
+                    ));
+                }
+            }
+            if matches!(arm_profile_ids, Some(ProtectNullableIds::Ids(ids)) if ids.len() > 32 || ids.iter().any(|id| id.chars().count() > 64))
+            {
+                return Err(McpError::invalid_params(
+                    "armProfileIds accepts at most 32 ids of at most 64 characters each",
+                    None,
+                ));
+            }
+            ProtectDeviceKind::Sensor
+        }
+        ProtectDeviceSettingsChanges::Chime { ring_settings, .. } => {
+            if ring_settings.as_ref().is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    !(1.0..=10.0).contains(&row.repeat_times)
+                        || !(0.0..=100.0).contains(&row.volume)
+                })
+            }) {
+                return Err(McpError::invalid_params(
+                    "ringSettings repeatTimes must be 1-10 and volume 0-100",
+                    None,
+                ));
+            }
+            ProtectDeviceKind::Chime
         }
         ProtectDeviceSettingsChanges::Siren { volume, .. } => {
             if volume.is_some_and(|value| !(1..=100).contains(&value)) {
@@ -10318,7 +10507,7 @@ fn device_settings_request(
         .as_object_mut()
         .expect("tagged changes serialize to an object");
     object.remove("kind");
-    object.retain(|_, value| !value.is_null());
+    object.retain(|key, value| key == "armProfileIds" || !value.is_null());
     if object.is_empty() {
         return Err(McpError::invalid_params(
             "changes names no field to change",
