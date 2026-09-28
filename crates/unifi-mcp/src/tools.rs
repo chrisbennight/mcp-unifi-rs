@@ -5081,7 +5081,7 @@ impl UnifiMcp {
             };
             return structured_with_mutation_readback_error(
                 FirewallPoliciesUpdateOutput {
-                    policy: policy_view_from_record(&input.policy, &record),
+                    policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
                     applied: true,
                     changes: None,
                     fields: None,

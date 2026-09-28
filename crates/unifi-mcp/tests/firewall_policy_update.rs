@@ -334,6 +334,37 @@ async fn policy_update_keeps_a_wrong_id_readback_after_the_write() {
 }
 
 #[tokio::test]
+async fn policy_update_retains_a_large_wrong_id_readback_after_an_accepted_write() {
+    let server = MockServer::start().await;
+    let mut before = stored(true, "BLOCK");
+    before["name"] = serde_json::json!("large-policy-name".repeat(4_000));
+    let mut after = stored(false, "BLOCK");
+    after["id"] = serde_json::json!("another-policy");
+    after["controllerDetail"] = serde_json::json!("large-readback".repeat(4_000));
+    reads(&server, &before, &after).await;
+    let mut expected = before.clone();
+    expected["enabled"] = serde_json::json!(false);
+    accepts_the_write(&server, &expected).await;
+
+    let result = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy": POLICY, "changes": {"enabled": false}, "confirm": true
+            })),
+            None,
+        )
+        .await
+        .expect("accepted write must retain its result");
+    let output = result.structured_content.expect("structured result");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(output.get("verified").is_none());
+    assert!(result.content.iter().any(|item| {
+        matches!(item, rmcp::model::ContentBlock::Text(text) if text.text.contains(&after.to_string()))
+    }));
+}
+
+#[tokio::test]
 async fn policy_delete_previews_scope_without_sending_delete() {
     let server = MockServer::start().await;
     let mut record = stored(true, "BLOCK");
