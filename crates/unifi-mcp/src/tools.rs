@@ -3507,6 +3507,12 @@ struct VoucherRevokeOutput {
     authorized_guest_count: u64,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     readback_error: Option<String>,
@@ -3730,6 +3736,14 @@ struct DevicesControlOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u32>,
     applied: bool,
+    /// Present for official Network actions; the legacy locate API does not
+    /// expose its HTTP status through the session client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// Controller-reported state before the action.
     #[serde(skip_serializing_if = "Option::is_none")]
     state_before: Option<String>,
@@ -3738,6 +3752,10 @@ struct DevicesControlOutput {
     /// it records what the controller showed, not that the action finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     state_after: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -8012,6 +8030,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<DevicesControlInput>(params)?;
         let port = validated_port(input.action, input.port)?;
 
@@ -8022,33 +8041,43 @@ impl UnifiMcp {
             .await
             .map_err(api_error)?;
         let warnings = device_control_warnings(input.action);
-
+        let mut output = DevicesControlOutput {
+            device: input.device,
+            name: detail.name.clone(),
+            action: input.action.word(),
+            port,
+            applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            state_before: detail.state,
+            state_after: None,
+            readback_error: None,
+            readback_error_in_content: None,
+            warnings,
+        };
         if !input.confirm.unwrap_or(false) {
-            return structured(DevicesControlOutput {
-                device: input.device,
-                name: detail.name,
-                action: input.action.word(),
-                port,
-                applied: false,
-                state_before: detail.state,
-                state_after: None,
-                warnings,
-            });
+            return devices_control_result(output);
         }
 
-        match input.action {
-            DeviceControl::Restart => self
-                .integration()
-                .restart_device(&site_id, &input.device)
-                .await
-                .map_err(api_error)?,
+        let (status, body) = match input.action {
+            DeviceControl::Restart => {
+                let (status, body) = self
+                    .integration()
+                    .restart_device(&site_id, &output.device)
+                    .await
+                    .map_err(api_error)?;
+                (Some(status), body)
+            }
             DeviceControl::PortCycle => {
                 let port = port
                     .ok_or_else(|| McpError::invalid_params("portCycle requires a port", None))?;
-                self.integration()
-                    .power_cycle_port(&site_id, &input.device, port)
+                let (status, body) = self
+                    .integration()
+                    .power_cycle_port(&site_id, &output.device, port)
                     .await
                     .map_err(api_error)?;
+                (Some(status), body)
             }
             DeviceControl::Locate | DeviceControl::EndLocate => {
                 // The locate LED is a legacy-only command, addressed by the
@@ -8060,7 +8089,8 @@ impl UnifiMcp {
                         None,
                     )
                 })?;
-                self.legacy()
+                let body = self
+                    .legacy()
                     .locate_device(
                         self.legacy_site(),
                         mac,
@@ -8068,24 +8098,36 @@ impl UnifiMcp {
                     )
                     .await
                     .map_err(api_error)?;
+                (None, body)
+            }
+        };
+        output.applied = true;
+        output.response_status = status;
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_ACTION_RESPONSE_RESERVE)
+            .min(NETWORK_ACTION_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("device readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().device_detail(&site_id, &output.device),
+            )
+            .await
+            {
+                Ok(Ok(after)) => {
+                    output.name = after.name;
+                    output.state_after = after.state;
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("device readback timed out".to_owned()),
             }
         }
-
-        let after = self
-            .integration()
-            .device_detail(&site_id, &input.device)
-            .await
-            .map_err(api_error)?;
-        structured(DevicesControlOutput {
-            device: input.device,
-            name: after.name,
-            action: input.action.word(),
-            port,
-            applied: true,
-            state_before: detail.state,
-            state_after: after.state,
-            warnings,
-        })
+        devices_control_result(output)
     }
 
     /// Block, unblock, or disconnect one client, previewing unless the
@@ -8747,6 +8789,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         let input = parse::<VoucherRevokeInput>(params)?;
         let id = voucher_id(&input.voucher_id)?;
         let site_id = self.site_id().await?;
@@ -8767,57 +8810,81 @@ impl UnifiMcp {
             expired: voucher.expired,
             authorized_guest_count: voucher.authorized_guest_count,
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             verified: None,
             readback_error: None,
             readback_error_in_content: None,
             warnings: Vec::new(),
         };
         if !input.confirm {
-            return structured(result);
+            return voucher_revoke_result(result);
         }
-        self.integration()
+        let (status, body) = self
+            .integration()
             .delete_voucher(&site_id, id)
             .await
             .map_err(api_error)?;
         result.applied = true;
-        let (persisted, upstream_error) =
-            match self.integration().voucher_with_response(&site_id, id).await {
-                Err(error @ ApiError::Status { status: 404, .. }) => {
-                    result.readback_error = Some(error.to_string());
-                    (false, error)
-                }
-                Ok((voucher, response)) => {
-                    if voucher.id != id {
-                        let error = ApiError::DecodeResponse {
-                            response,
-                            diagnostic: BoundedMessage::new(
-                                "controller voucher readback returned a different id",
-                            ),
-                        };
-                        result.readback_error = Some(error.to_string());
-                        return structured_with_mutation_readback_error(result, Some(&error));
-                    }
+        result.response_status = Some(status);
+        result.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(VOUCHER_RESPONSE_RESERVE)
+            .min(VOUCHER_READBACK_BUDGET);
+        if budget.is_zero() {
+            result.readback_error =
+                Some("voucher readback skipped near request deadline".to_owned());
+            return voucher_revoke_result(result);
+        }
+        let Ok(readback) = tokio::time::timeout(
+            budget,
+            self.integration().voucher_with_response(&site_id, id),
+        )
+        .await
+        else {
+            result.readback_error = Some("voucher readback timed out".to_owned());
+            return voucher_revoke_result(result);
+        };
+        let persisted = match readback {
+            Err(error @ ApiError::Status { status: 404, .. }) => {
+                result.readback_error = Some(error.to_string());
+                false
+            }
+            Ok((voucher, response)) => {
+                if voucher.id != id {
                     let error = ApiError::DecodeResponse {
                         response,
                         diagnostic: BoundedMessage::new(
-                            "controller acknowledged deletion but the voucher still exists",
+                            "controller voucher readback returned a different id",
                         ),
                     };
                     result.readback_error = Some(error.to_string());
-                    (true, error)
+                    return voucher_revoke_result(result);
                 }
-                Err(error) => {
-                    result.readback_error = Some(error.to_string());
-                    return structured_with_mutation_readback_error(result, Some(&error));
-                }
-            };
+                let error = ApiError::DecodeResponse {
+                    response,
+                    diagnostic: BoundedMessage::new(
+                        "controller acknowledged deletion but the voucher still exists",
+                    ),
+                };
+                result.readback_error = Some(error.to_string());
+                true
+            }
+            Err(error) => {
+                result.readback_error = Some(error.to_string());
+                return voucher_revoke_result(result);
+            }
+        };
         result.verified = Some(!persisted);
         if persisted {
             result
                 .warnings
                 .push("controller acknowledged deletion but the voucher still exists".to_owned());
         }
-        structured_with_mutation_readback_error(result, Some(&upstream_error))
+        voucher_revoke_result(result)
     }
 
     async fn verify_created_vouchers_before_deadline(
@@ -10914,6 +10981,8 @@ const FIREWALL_UPDATE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const FIREWALL_UPDATE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const DEVICE_LIFECYCLE_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const DEVICE_LIFECYCLE_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
+const NETWORK_ACTION_READBACK_BUDGET: Duration = Duration::from_secs(5);
+const NETWORK_ACTION_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const NETWORK_POLICY_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const NETWORK_POLICY_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Longest validity one voucher may carry, in minutes: seven days.
@@ -12836,6 +12905,54 @@ fn devices_remove_result(mut output: DevicesRemoveOutput) -> Result<CallToolResu
     Ok(result)
 }
 
+fn devices_control_result(mut output: DevicesControlOutput) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &DevicesControlOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn voucher_revoke_result(mut output: VoucherRevokeOutput) -> Result<CallToolResult, McpError> {
+    let exceeds = |output: &VoucherRevokeOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(body) = output.response_body.take()
+    {
+        output.response_body_in_content = Some(true);
+        content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
+    if exceeds(&output)?
+        && let Some(error) = output.readback_error.take()
+    {
+        output.readback_error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn arm_profiles_list_result(
     mut output: ProtectArmProfilesListOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -13477,7 +13594,7 @@ mod tests {
         // Disconnecting twice disconnects twice; no secret is involved.
         ("clients.control", false, false, false),
         // Each restart restarts; no secret is involved.
-        ("devices.control", false, false, false),
+        ("devices.control", false, false, true),
         ("devices.adopt", false, true, true),
         ("devices.remove", false, false, true),
         ("dns.policies.configure", false, true, true),

@@ -600,7 +600,7 @@ it.
 |---|---|---|---|
 | `wlans.update` | yes | yes | yes |
 | `clients.control` | no | no | no |
-| `devices.control` | no | no | no |
+| `devices.control` | no | no | yes |
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
 | `dns.policies.configure` | no | yes | yes |
@@ -685,10 +685,12 @@ access limits are different batches — a count alone could not tell them apart.
 The official voucher list and detail endpoints return each code. `vouchers.search`
 pages through vouchers and `vouchers.status` reads one by id; both return codes
 as sensitive results. `vouchers.revoke` previews a deletion and, when confirmed,
-checks whether the voucher disappeared from the detail endpoint. Its
+returns the controller's accepted status and complete body, then checks whether
+the voucher disappeared from the detail endpoint. Its
 `readbackError` carries the controller's response when that lookup fails or
 still returns the voucher, including the HTTP 404 response used to confirm
-absence.
+absence. A slow lookup cannot erase the accepted deletion response. Large
+accepted bodies and readback errors move to MCP content with explicit markers.
 If a voucher page or detail response disagrees with the requested offset or id,
 the error includes the complete accepted controller response alongside the
 validation diagnostic, including fields outside the typed voucher view.
@@ -802,7 +804,11 @@ connected, which is an observation and not a guarantee.
 action, so a port can never be sent with an action that would ignore it. A
 restart takes longer than the read, so the state afterwards usually still shows
 the prior value — it records what the controller showed, not that the action
-finished.
+finished. Confirmed actions retain the controller's complete response body;
+official Network actions also report its HTTP status. The legacy locate action
+returns the complete controller envelope. Readback failures are reported
+alongside the accepted action, and long readbacks are bounded so they cannot
+erase it. Large bodies move to MCP content with explicit markers.
 
 ### `devices.adopt` and `devices.remove`
 
