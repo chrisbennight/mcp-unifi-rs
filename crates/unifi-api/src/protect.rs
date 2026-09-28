@@ -613,10 +613,29 @@ impl ProtectClient {
     ///
     /// Returns an [`ApiError`] when the request or decoding fails.
     pub async fn cameras(&self) -> Result<Vec<ProtectCamera>, ApiError> {
-        self.get_json_validated(&["cameras"], |cameras: &Vec<ProtectCamera>| {
+        self.cameras_with_response()
+            .await
+            .map(|(cameras, _)| cameras)
+    }
+
+    /// Read cameras with the accepted response for inventory reconciliation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn cameras_with_response(&self) -> Result<(Vec<ProtectCamera>, Vec<u8>), ApiError> {
+        self.get_json_validated_with_response(&["cameras"], |cameras: &Vec<ProtectCamera>| {
+            let mut ids = std::collections::BTreeSet::new();
             for camera in cameras {
                 validate_model_key("cameras", &camera.model_key, "camera")?;
                 validate_identifier("cameras", &camera.id)?;
+                if !ids.insert(&camera.id) {
+                    return Err(ApiError::SchemaMismatch {
+                        endpoint: "cameras",
+                        path: BoundedMessage::new("duplicate id"),
+                        response: None,
+                    });
+                }
             }
             Ok(())
         })
@@ -845,7 +864,16 @@ impl ProtectClient {
     ///
     /// Returns an [`ApiError`] when the request or decoding fails.
     pub async fn nvr(&self) -> Result<ProtectNvr, ApiError> {
-        self.get_json_validated(&["nvrs"], |nvr: &ProtectNvr| {
+        self.nvr_with_response().await.map(|(nvr, _)| nvr)
+    }
+
+    /// Read the recorder with its accepted response for inventory reconciliation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn nvr_with_response(&self) -> Result<(ProtectNvr, Vec<u8>), ApiError> {
+        self.get_json_validated_with_response(&["nvrs"], |nvr: &ProtectNvr| {
             validate_model_key("nvrs", &nvr.model_key, "nvr")?;
             validate_identifier("nvrs", &nvr.id)
         })
@@ -894,6 +922,20 @@ impl ProtectClient {
         T: DeserializeOwned,
         F: FnOnce(&T) -> Result<(), ApiError>,
     {
+        self.get_json_validated_with_response(segments, validate)
+            .await
+            .map(|(value, _)| value)
+    }
+
+    async fn get_json_validated_with_response<T, F>(
+        &self,
+        segments: &[&str],
+        validate: F,
+    ) -> Result<(T, Vec<u8>), ApiError>
+    where
+        T: DeserializeOwned,
+        F: FnOnce(&T) -> Result<(), ApiError>,
+    {
         let endpoint = endpoint_name(segments);
         let first = self
             .send(self.request(Method::GET, segments)?, endpoint)
@@ -924,14 +966,15 @@ impl ProtectClient {
             response_bytes = bytes.len(),
             "Protect response received"
         );
-        decode_json(endpoint, &bytes)
+        let value = decode_json(endpoint, &bytes)
             .and_then(|value| {
                 validate(&value).map_err(|error| error.with_controller_response(&bytes))?;
                 Ok(value)
             })
             .inspect_err(|error| {
                 log_decode_failure(endpoint, status, bytes.len(), error);
-            })
+            })?;
+        Ok((value, bytes))
     }
 
     async fn send_json_once<T: DeserializeOwned>(

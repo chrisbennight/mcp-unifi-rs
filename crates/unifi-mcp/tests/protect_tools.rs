@@ -1613,21 +1613,20 @@ async fn an_ambiguous_camera_name_is_refused_rather_than_resolved_by_position() 
 #[tokio::test]
 async fn duplicate_public_camera_ids_fail_instead_of_merging_records() {
     let server = MockServer::start().await;
-    console_with(
-        &server,
-        serde_json::json!([
-            {"id": "cam-a", "modelKey": "camera", "name": "One", "state": "CONNECTED"},
-            {"id": "cam-a", "modelKey": "camera", "name": "Two", "state": "DISCONNECTED"}
-        ]),
-    )
-    .await;
+    let public = serde_json::json!([
+        {"id": "cam-a", "modelKey": "camera", "name": "One", "state": "CONNECTED"},
+        {"id": "cam-a", "modelKey": "camera", "name": "Two", "state": "DISCONNECTED",
+         "controllerDetail": "duplicate-public-tail".repeat(100)}
+    ]);
+    console_with(&server, public.clone()).await;
     let handler = handler_for(&server);
 
     let error = handler
         .call(&call("cameras.search", &serde_json::json!({})), None)
         .await
         .expect_err("duplicate ids");
-    assert!(error.message.contains("duplicate ids"));
+    assert!(error.message.contains("duplicate id"));
+    assert!(error.message.contains(&public.to_string()));
 }
 
 #[tokio::test]
@@ -1745,24 +1744,39 @@ async fn protect_overview_reports_enriched_recorder_storage_and_recording_state(
 }
 
 #[tokio::test]
-async fn local_inventory_identity_conflicts_and_duplicates_fail_loudly() {
+async fn duplicate_local_camera_ids_keep_the_bootstrap_response() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
     let mut bootstrap = sample_bootstrap();
     let cameras = bootstrap["cameras"].as_array_mut().expect("cameras");
     cameras.push(cameras[0].clone());
-    local_console_with(&server, bootstrap).await;
+    bootstrap["controllerDetail"] = serde_json::json!("duplicate-local-tail".repeat(100));
+    local_console_with(&server, bootstrap.clone()).await;
     let handler = handler_with_events(&server);
 
-    let error = handler
+    let inventory = handler
         .call(&call("cameras.search", &serde_json::json!({})), None)
         .await
-        .expect_err("duplicate local id");
-    assert!(
-        error
-            .message
-            .contains("local camera inventory contains duplicate ids")
-    );
+        .expect("public inventory remains available")
+        .structured_content
+        .expect("structured");
+    let reason = inventory["capabilities"]["localUnavailableReason"]
+        .as_str()
+        .expect("local error");
+    assert!(reason.contains("duplicate cameras.id"));
+    assert!(reason.contains(&bootstrap.to_string()));
+
+    let error = handler
+        .call(
+            &call(
+                "cameras.status",
+                &serde_json::json!({"camera": "cam-front", "includeDetails": true}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("requested local details need valid inventory");
+    assert!(error.message.contains(&bootstrap.to_string()));
 }
 
 #[tokio::test]
@@ -1791,16 +1805,20 @@ async fn the_same_camera_id_with_conflicting_hardware_identity_fails_loudly() {
     let server = MockServer::start().await;
     let mut public = sample_cameras();
     public[0]["guid"] = serde_json::json!("public-guid");
-    console_with(&server, public).await;
+    public[0]["controllerDetail"] = serde_json::json!("public-conflict-tail".repeat(100));
+    console_with(&server, public.clone()).await;
     let mut bootstrap = sample_bootstrap();
     bootstrap["cameras"][0]["guid"] = serde_json::json!("local-guid");
-    local_console_with(&server, bootstrap).await;
+    bootstrap["controllerDetail"] = serde_json::json!("local-conflict-tail".repeat(100));
+    local_console_with(&server, bootstrap.clone()).await;
 
     let error = handler_with_events(&server)
         .call(&call("cameras.search", &serde_json::json!({})), None)
         .await
         .expect_err("conflicting camera identity");
     assert!(error.message.contains("camera identities conflict"));
+    assert!(error.message.contains(&public.to_string()));
+    assert!(error.message.contains(&bootstrap.to_string()));
 }
 
 #[tokio::test]
@@ -1809,13 +1827,18 @@ async fn a_conflicting_local_recorder_cannot_supply_camera_global_state() {
     console_with(&server, sample_cameras()).await;
     let mut bootstrap = sample_bootstrap();
     bootstrap["nvr"]["id"] = serde_json::json!("different-nvr");
-    local_console_with(&server, bootstrap).await;
+    bootstrap["controllerDetail"] = serde_json::json!("recorder-conflict-tail".repeat(100));
+    local_console_with(&server, bootstrap.clone()).await;
 
     let error = handler_with_events(&server)
         .call(&call("cameras.search", &serde_json::json!({})), None)
         .await
         .expect_err("conflicting recorder identity");
     assert!(error.message.contains("recorder identities conflict"));
+    assert!(error.message.contains(&bootstrap.to_string()));
+    assert!(error.message.contains(
+        &serde_json::json!({"id": "nvr-1", "modelKey": "nvr", "name": "CloudKey"}).to_string()
+    ));
 }
 
 #[tokio::test]

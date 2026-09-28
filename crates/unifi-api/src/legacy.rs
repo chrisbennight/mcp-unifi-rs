@@ -651,6 +651,19 @@ impl LegacyClient {
     /// session or request fails, required camera or recorder fields cannot be
     /// decoded, or the camera count exceeds the hard inventory ceiling.
     pub async fn protect_bootstrap(&self) -> Result<ProtectBootstrap, ApiError> {
+        self.protect_bootstrap_with_response()
+            .await
+            .map(|(bootstrap, _)| bootstrap)
+    }
+
+    /// Read the local Protect bootstrap with its complete accepted response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the session, request, or validation fails.
+    pub async fn protect_bootstrap_with_response(
+        &self,
+    ) -> Result<(ProtectBootstrap, Vec<u8>), ApiError> {
         let (bootstrap, bytes) = self.protect_bootstrap_projection().await?;
         validate_protect_bootstrap(&bootstrap)
             .inspect_err(|_error| {
@@ -661,7 +674,7 @@ impl LegacyClient {
                 );
             })
             .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(bootstrap)
+        Ok((bootstrap, bytes))
     }
 
     /// Read only the camera projection from the local Protect bootstrap.
@@ -674,6 +687,19 @@ impl LegacyClient {
     /// session or request fails, the camera projection is invalid, or the
     /// camera count exceeds the hard inventory ceiling.
     pub async fn protect_camera_inventory(&self) -> Result<Vec<ProtectLocalCamera>, ApiError> {
+        self.protect_camera_inventory_with_response()
+            .await
+            .map(|(cameras, _)| cameras)
+    }
+
+    /// Read the camera projection with its complete local Protect response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the session, request, or validation fails.
+    pub async fn protect_camera_inventory_with_response(
+        &self,
+    ) -> Result<(Vec<ProtectLocalCamera>, Vec<u8>), ApiError> {
         let (bootstrap, bytes): (ProtectCameraBootstrap, Vec<u8>) =
             self.protect_bootstrap_projection().await?;
         validate_protect_cameras(&bootstrap.cameras)
@@ -685,7 +711,7 @@ impl LegacyClient {
                 );
             })
             .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(bootstrap.cameras)
+        Ok((bootstrap.cameras, bytes))
     }
 
     async fn protect_bootstrap_projection<T: DeserializeOwned>(
@@ -1399,6 +1425,7 @@ fn validate_protect_cameras(cameras: &[ProtectLocalCamera]) -> Result<(), ApiErr
             response: None,
         });
     }
+    let mut ids = std::collections::BTreeSet::new();
     for camera in cameras {
         if camera.id.is_empty() || camera.id.len() > MAXIMUM_PROTECT_DEVICE_IDENTIFIER_BYTES {
             return Err(ApiError::SchemaMismatch {
@@ -1411,6 +1438,13 @@ fn validate_protect_cameras(cameras: &[ProtectLocalCamera]) -> Result<(), ApiErr
             return Err(ApiError::SchemaMismatch {
                 endpoint: "protect.bootstrap",
                 path: BoundedMessage::new("cameras.modelKey"),
+                response: None,
+            });
+        }
+        if !ids.insert(&camera.id) {
+            return Err(ApiError::SchemaMismatch {
+                endpoint: "protect.bootstrap",
+                path: BoundedMessage::new("duplicate cameras.id"),
                 response: None,
             });
         }
