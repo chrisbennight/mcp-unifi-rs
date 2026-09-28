@@ -56,4 +56,4 @@ impl TrafficSnapshot {
 }
 
 mod totals;
-pub use totals::{Bytes, ClientRow, activity_totals};
+pub use totals::{Bytes, ClientRow, activity_totals, activity_totals_with_response};

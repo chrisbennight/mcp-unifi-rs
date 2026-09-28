@@ -786,6 +786,59 @@ async fn activity_validation_errors_keep_the_exact_controller_body() {
 }
 
 #[tokio::test]
+async fn activity_counter_errors_keep_the_exact_controller_body() {
+    const START: u64 = 1_789_200_000_000;
+    let window = ActivityWindow::new(START, START + 3_600_000).expect("window");
+    let server = logged_in_server().await;
+    let counter = serde_json::json!({
+        "application": 1,
+        "category": 2,
+        "bytes_received": 10,
+        "bytes_transmitted": 20,
+    });
+    let body = serde_json::json!({
+        "client_usage_by_app": [{
+            "client": {"mac": "02:00:00:00:00:01"},
+            "usage_by_app": [counter.clone(), counter],
+        }],
+        "total_usage_by_app": [],
+        "padding": "x".repeat(700),
+        "z_controller_field": "original-activity-tail",
+    })
+    .to_string();
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/v2/api/site/default/traffic"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+        .mount(&server)
+        .await;
+
+    let read = client_for(&server)
+        .activity_with_response("default", window)
+        .await
+        .expect("typed report");
+    let unifi_api::traffic::ActivityRead::Reported((report, response)) = read else {
+        panic!("expected reported activity");
+    };
+    assert_eq!(response, body.as_bytes());
+    let error = unifi_api::collection::activity_totals_with_response(&report, &response)
+        .err()
+        .expect("duplicate application counter");
+    let ApiError::DecodeResponse {
+        response,
+        diagnostic,
+    } = error
+    else {
+        panic!("expected controller response, got {error:?}");
+    };
+    assert_eq!(response.as_str(), body);
+    assert!(
+        diagnostic
+            .as_str()
+            .contains("duplicate application counters")
+    );
+}
+
+#[tokio::test]
 async fn resource_reads_decode_their_allowlisted_projections() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";

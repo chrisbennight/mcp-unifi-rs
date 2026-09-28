@@ -183,9 +183,9 @@ when no explicit time window was requested;
 its `counterSemantics` explicitly retain the unverified interval, direction,
 and scope. Authentication failures never trigger that fallback. An unrecognized
 Activity response is reported as such. Record/string/body bounds fail loudly;
-there is no silent scan truncation. Activity record or string bounds and graph
-bounds failures return the complete accepted controller body with the local
-diagnostic.
+there is no silent scan truncation. Activity record, string, graph, identity,
+counter, and arithmetic validation errors return the complete accepted
+controller body with the local diagnostic.
 Display text uses visible truncation markers.
 `sourceErrors` retains the controller's status and response for Activity,
 graph, and legacy DPI requests that returned 404 or 405. A console-family

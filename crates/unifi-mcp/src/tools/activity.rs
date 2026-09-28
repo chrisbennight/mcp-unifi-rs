@@ -125,11 +125,11 @@ impl UnifiMcp {
         }
         let read = self
             .legacy()
-            .activity(self.legacy_site(), window)
+            .activity_with_response(self.legacy_site(), window)
             .await
             .map_err(api_error)?;
-        let report = match read {
-            ActivityRead::Reported(report) => report,
+        let (report, response) = match read {
+            ActivityRead::Reported(result) => result,
             ActivityRead::Unsupported { response }
                 if input.report == StatsReport::DpiApplications
                     && input.hours.is_none()
@@ -144,7 +144,7 @@ impl UnifiMcp {
                 return unavailable(input.report, window, CoverageStatus::Unrecognized, None);
             }
         };
-        let (mut clients, client_totals, application_totals) = totals(&report)?;
+        let (mut clients, client_totals, application_totals) = totals(&report, &response)?;
         clients.sort_by(|a, b| {
             (u128::from(b.bytes.rx_bytes) + u128::from(b.bytes.tx_bytes))
                 .cmp(&(u128::from(a.bytes.rx_bytes) + u128::from(a.bytes.tx_bytes)))
@@ -362,9 +362,13 @@ impl UnifiMcp {
     }
 }
 
-fn totals(report: &ActivityReport) -> Result<(Vec<ClientRow>, Bytes, Bytes), McpError> {
+fn totals(
+    report: &ActivityReport,
+    response: &[u8],
+) -> Result<(Vec<ClientRow>, Bytes, Bytes), McpError> {
     let (clients, total, applications) =
-        unifi_api::collection::activity_totals(report).map_err(api_error)?;
+        unifi_api::collection::activity_totals_with_response(report, response)
+            .map_err(api_error)?;
     let convert = |value: unifi_api::collection::Bytes| Bytes {
         rx_bytes: value.rx_bytes,
         tx_bytes: value.tx_bytes,

@@ -86,6 +86,18 @@ pub fn activity_totals(
     Ok((clients, total, sum(&report.total_usage_by_app)?))
 }
 
+/// Compute Activity totals while retaining the original controller response
+/// when a counter or identity fails validation.
+/// # Errors
+/// Returns a local diagnostic with the accepted response body for invalid
+/// identities, duplicate counters, or arithmetic overflow.
+pub fn activity_totals_with_response(
+    report: &ActivityReport,
+    response: &[u8],
+) -> Result<(Vec<ClientRow>, Bytes, Bytes), ApiError> {
+    activity_totals(report).map_err(|error| error.with_controller_response(response))
+}
+
 fn sum(rows: &[ApplicationActivity]) -> Result<Bytes, ApiError> {
     let mut total = Bytes::default();
     let mut seen = BTreeSet::new();
