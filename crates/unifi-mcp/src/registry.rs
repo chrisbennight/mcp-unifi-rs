@@ -750,10 +750,10 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "devices.control",
         "Restart one adopted device, flash or stop its locate LED, or \
          power-cycle one of its switch ports. Previews the action and its \
-         consequences unless confirm is true; a confirmed action reports the \
-         controller-reported state before and after.",
+         consequences unless confirm is true; a confirmed action returns the \
+         accepted controller response and observed state or readback error.",
         // Not idempotent: each restart restarts, each port cycle cycles.
-        ToolBehavior::write(false),
+        ToolBehavior::write(false).result_sensitive(),
     ),
     write_spec(
         ToolKind::DevicesAdopt,

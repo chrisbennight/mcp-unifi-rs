@@ -574,12 +574,17 @@ impl IntegrationClient {
         .await
     }
 
-    /// Restart one device. Never retried.
+    /// Restart one device. Returns the accepted status and complete bounded
+    /// response body. Never retried.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the controller rejects the action.
-    pub async fn restart_device(&self, site_id: &str, device_id: &str) -> Result<(), ApiError> {
+    pub async fn restart_device(
+        &self,
+        site_id: &str,
+        device_id: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         self.post_action(
             &["sites", site_id, "devices", device_id, "actions"],
             &DeviceAction::Restart,
@@ -587,7 +592,8 @@ impl IntegrationClient {
         .await
     }
 
-    /// Power-cycle one `PoE` switch port. Never retried.
+    /// Power-cycle one `PoE` switch port. Returns the accepted status and
+    /// complete bounded response body. Never retried.
     ///
     /// # Errors
     ///
@@ -597,7 +603,7 @@ impl IntegrationClient {
         site_id: &str,
         device_id: &str,
         port_index: u32,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         self.post_action(
             &[
                 "sites",
@@ -795,20 +801,26 @@ impl IntegrationClient {
         decode(response).await
     }
 
-    /// Delete one voucher. Never retried.
+    /// Delete one voucher. Returns the accepted status and complete bounded
+    /// response body. Never retried.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the controller rejects the request.
-    pub async fn delete_voucher(&self, site_id: &str, voucher_id: &str) -> Result<(), ApiError> {
+    pub async fn delete_voucher(
+        &self,
+        site_id: &str,
+        voucher_id: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let response = self
             .send(self.request(
                 Method::DELETE,
                 &["sites", site_id, "hotspot", "vouchers", voucher_id],
             )?)
             .await?;
-        drop(response);
-        Ok(())
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
     /// Zone-based firewall zones. A console still on the classic firewall
@@ -883,12 +895,13 @@ impl IntegrationClient {
         &self,
         segments: &[&str],
         action: &A,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let response = self
             .send(self.request(Method::POST, segments)?.json(action))
             .await?;
-        drop(response);
-        Ok(())
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
     }
 
     async fn post_action_result<A: Serialize, T: DeserializeOwned>(

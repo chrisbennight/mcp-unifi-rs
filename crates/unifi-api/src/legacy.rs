@@ -846,39 +846,50 @@ impl LegacyClient {
         .await
     }
 
-    /// Restart one device by MAC. Never retried after an ambiguous
-    /// transport result.
+    /// Restart one device by MAC and return the complete controller envelope.
+    /// Never retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn restart_device(&self, site: &str, mac: &str) -> Result<(), ApiError> {
+    pub async fn restart_device(&self, site: &str, mac: &str) -> Result<Vec<u8>, ApiError> {
         self.device_command(site, "restart", mac).await
     }
 
-    /// Toggle one device's locate LED. Never retried after an ambiguous
-    /// transport result.
+    /// Toggle one device's locate LED and return the complete controller
+    /// envelope. Never retried after an ambiguous transport result.
     ///
     /// # Errors
     ///
     /// Returns an [`ApiError`] when the session or command fails.
-    pub async fn locate_device(&self, site: &str, mac: &str, on: bool) -> Result<(), ApiError> {
+    pub async fn locate_device(
+        &self,
+        site: &str,
+        mac: &str,
+        on: bool,
+    ) -> Result<Vec<u8>, ApiError> {
         let command = if on { "set-locate" } else { "unset-locate" };
         self.device_command(site, command, mac).await
     }
 
-    async fn device_command(&self, site: &str, command: &str, mac: &str) -> Result<(), ApiError> {
+    async fn device_command(
+        &self,
+        site: &str,
+        command: &str,
+        mac: &str,
+    ) -> Result<Vec<u8>, ApiError> {
         // The controller stores MACs lowercase and rejects other casings.
         let body = serde_json::json!({ "cmd": command, "mac": mac.to_lowercase() });
-        self.request_with_reauth::<serde_json::Value>(
-            RequestClass::Mutation,
-            Method::POST,
-            site,
-            &["cmd", "devmgr"],
-            Some(body),
-        )
-        .await?;
-        Ok(())
+        let (_, response) = self
+            .request_with_reauth_with_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::POST,
+                site,
+                &["cmd", "devmgr"],
+                Some(body),
+            )
+            .await?;
+        Ok(response)
     }
 
     async fn station_command(&self, site: &str, command: &str, mac: &str) -> Result<(), ApiError> {

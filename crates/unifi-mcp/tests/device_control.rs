@@ -19,10 +19,6 @@ const SITE_ID: &str = "9a3f0c62-3d11-4f9d-8b1a-7f4bb0d1c001";
 const DEVICE: &str = "device-1";
 const DEVICE_MAC: &str = "aa:bb:cc:dd:ee:01";
 
-fn ok_envelope(data: &serde_json::Value) -> serde_json::Value {
-    serde_json::json!({"meta": {"rc": "ok"}, "data": data})
-}
-
 fn handler_for(server: &MockServer) -> UnifiMcp {
     let base_url = Url::parse(&server.uri()).expect("mock server uri");
     let integration = IntegrationClient::new(&ControllerConfig {
@@ -123,7 +119,7 @@ async fn a_confirmed_restart_posts_the_action_and_reports_the_state_either_side(
             "{INTEGRATION}/sites/{SITE_ID}/devices/{DEVICE}/actions"
         )))
         .and(body_json(serde_json::json!({"action": "RESTART"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller queued restart"))
         .expect(1)
         .mount(&server)
         .await;
@@ -142,6 +138,8 @@ async fn a_confirmed_restart_posts_the_action_and_reports_the_state_either_side(
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "controller queued restart");
     // A restart takes longer than the read, so the state legitimately still
     // reads ONLINE; the result records what was seen, not that it finished.
     assert_eq!(output["stateBefore"], "ONLINE");
@@ -157,7 +155,7 @@ async fn a_port_cycle_posts_to_the_named_port() {
             "{INTEGRATION}/sites/{SITE_ID}/devices/{DEVICE}/interfaces/ports/7/actions"
         )))
         .and(body_json(serde_json::json!({"action": "POWER_CYCLE"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller queued port cycle"))
         .expect(1)
         .mount(&server)
         .await;
@@ -177,12 +175,122 @@ async fn a_port_cycle_posts_to_the_named_port() {
         .structured_content
         .expect("structured");
     assert_eq!(output["port"], 7);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "controller queued port cycle");
     assert!(
         output["warnings"]
             .to_string()
             .contains("reboots whatever it powers"),
         "{output}"
     );
+}
+
+#[tokio::test]
+async fn accepted_restart_survives_a_failed_device_readback() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}],
+        })))
+        .mount(&server)
+        .await;
+    let detail_route = format!("{INTEGRATION}/sites/{SITE_ID}/devices/{DEVICE}");
+    Mock::given(method("GET"))
+        .and(path(&detail_route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": DEVICE, "name": "Office Switch", "macAddress": DEVICE_MAC, "state": "ONLINE"
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&detail_route))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_string("specific device readback failure"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{detail_route}/actions")))
+        .and(body_json(serde_json::json!({"action": "RESTART"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller queued restart"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = handler_for(&server)
+        .call(
+            &control(&serde_json::json!({"device": DEVICE, "action": "restart", "confirm": true})),
+            None,
+        )
+        .await
+        .expect("accepted action remains available")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "controller queued restart");
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("error")
+            .contains("specific device readback failure")
+    );
+    assert!(output.get("stateAfter").is_none());
+}
+
+#[tokio::test]
+async fn accepted_restart_returns_before_a_stalled_readback_reaches_the_tool_deadline() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
+            "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}],
+        })))
+        .mount(&server)
+        .await;
+    let detail_route = format!("{INTEGRATION}/sites/{SITE_ID}/devices/{DEVICE}");
+    Mock::given(method("GET"))
+        .and(path(&detail_route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": DEVICE, "name": "Office Switch", "macAddress": DEVICE_MAC, "state": "ONLINE"
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&detail_route))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(6)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{detail_route}/actions")))
+        .and(body_json(serde_json::json!({"action": "RESTART"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller queued restart"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server).with_request_limits(1, Duration::from_secs(2));
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &control(&serde_json::json!({"device": DEVICE, "action": "restart", "confirm": true})),
+            None,
+        ),
+    )
+    .await
+    .expect("completed before the outer deadline")
+    .expect("accepted action remains available");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBody"], "controller queued restart");
+    assert_eq!(output["readbackError"], "device readback timed out");
 }
 
 #[tokio::test]
@@ -196,14 +304,14 @@ async fn locating_uses_the_hardware_address_the_device_record_carries() {
             .and(body_json(
                 serde_json::json!({"cmd": command, "mac": DEVICE_MAC}),
             ))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"rc": "ok"}, "data": [], "controllerExtension": "locate accepted"
+            })))
             .expect(1)
             .mount(&server)
             .await;
 
-        handler_for(&server)
+        let output = handler_for(&server)
             .call(
                 &control(&serde_json::json!({
                     "device": DEVICE,
@@ -213,7 +321,16 @@ async fn locating_uses_the_hardware_address_the_device_record_carries() {
                 None,
             )
             .await
-            .unwrap_or_else(|error| panic!("{action}: {error}"));
+            .unwrap_or_else(|error| panic!("{action}: {error}"))
+            .structured_content
+            .expect("structured");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                output["responseBody"].as_str().expect("body")
+            )
+            .expect("legacy envelope")["controllerExtension"],
+            "locate accepted"
+        );
     }
 }
 

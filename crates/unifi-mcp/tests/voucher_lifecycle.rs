@@ -260,7 +260,7 @@ async fn revoke_previews_without_deleting_and_confirmed_revoke_checks_absence() 
         .and(path(format!(
             "{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1"
         )))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string("controller revoked voucher"))
         .expect(1)
         .mount(&server)
         .await;
@@ -292,6 +292,8 @@ async fn revoke_previews_without_deleting_and_confirmed_revoke_checks_absence() 
         .structured_content
         .expect("structured");
     assert_eq!(confirmed["applied"], true);
+    assert_eq!(confirmed["responseStatus"], 200);
+    assert_eq!(confirmed["responseBody"], "controller revoked voucher");
     assert_eq!(confirmed["verified"], true);
     assert_eq!(
         confirmed["readbackError"],
@@ -309,6 +311,7 @@ async fn revoke_returns_controller_readback_failure_after_accepted_delete() {
         "voucher lookup failed: {}voucher-readback-tail",
         "x".repeat(50_000)
     );
+    let accepted_body = format!("voucher accepted: {}controller-tail", "y".repeat(50_000));
     Mock::given(method("GET"))
         .and(path(&route))
         .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
@@ -323,7 +326,7 @@ async fn revoke_returns_controller_readback_failure_after_accepted_delete() {
         .await;
     Mock::given(method("DELETE"))
         .and(path(route))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string(accepted_body.clone()))
         .expect(1)
         .mount(&server)
         .await;
@@ -340,10 +343,63 @@ async fn revoke_returns_controller_readback_failure_after_accepted_delete() {
     let content = serde_json::to_value(&result.content).expect("content");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
     assert!(output.get("verified").is_none());
     assert!(output.get("readbackError").is_none());
     assert_eq!(output["readbackErrorInContent"], true);
     assert!(content.to_string().contains(&failure));
+    assert!(content.to_string().contains(&accepted_body));
+}
+
+#[tokio::test]
+async fn accepted_voucher_deletion_returns_before_a_stalled_readback() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(6)))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(route))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("controller accepted voucher deletion"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let handler = handler_for(&server).with_request_limits(1, Duration::from_secs(2));
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &call(
+                "vouchers.revoke",
+                &serde_json::json!({"voucherId": "v1", "confirm": true}),
+            ),
+            None,
+        ),
+    )
+    .await
+    .expect("completed before the outer deadline")
+    .expect("accepted deletion remains available");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(
+        output["responseBody"],
+        "controller accepted voucher deletion"
+    );
+    assert_eq!(output["readbackError"], "voucher readback timed out");
+    assert!(output.get("verified").is_none());
 }
 
 #[tokio::test]
