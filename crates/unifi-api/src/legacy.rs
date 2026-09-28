@@ -364,8 +364,8 @@ impl LegacyClient {
         site: &str,
         id: &str,
     ) -> Result<(WlanConf, RecordFingerprint), ApiError> {
-        let rows: Vec<serde_json::Map<String, serde_json::Value>> = self
-            .request_with_reauth(
+        let (rows, bytes): (Vec<serde_json::Map<String, serde_json::Value>>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
                 RequestClass::IdempotentRead,
                 Method::GET,
                 site,
@@ -380,7 +380,7 @@ impl LegacyClient {
         })?;
         let fingerprint = RecordFingerprint(row.clone());
         let conf = serde_json::from_value(serde_json::Value::Object(row))
-            .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         Ok((conf, fingerprint))
     }
 
@@ -434,8 +434,8 @@ impl LegacyClient {
         site: &str,
         id: &str,
     ) -> Result<(PortForward, RecordFingerprint), ApiError> {
-        let rows: Vec<serde_json::Map<String, serde_json::Value>> = self
-            .request_with_reauth(
+        let (rows, bytes): (Vec<serde_json::Map<String, serde_json::Value>>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
                 RequestClass::IdempotentRead,
                 Method::GET,
                 site,
@@ -450,7 +450,7 @@ impl LegacyClient {
         })?;
         let fingerprint = RecordFingerprint(row.clone());
         let forward = serde_json::from_value(serde_json::Value::Object(row))
-            .map_err(|error| ApiError::Decode(BoundedMessage::new(&error.to_string())))?;
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         Ok((forward, fingerprint))
     }
 
@@ -1060,9 +1060,22 @@ impl LegacyClient {
         tail: &[&str],
         body: Option<serde_json::Value>,
     ) -> Result<Vec<T>, ApiError> {
+        self.request_with_reauth_with_bytes(class, method, site, tail, body)
+            .await
+            .map(|(rows, _)| rows)
+    }
+
+    async fn request_with_reauth_with_bytes<T: DeserializeOwned>(
+        &self,
+        class: RequestClass,
+        method: Method,
+        site: &str,
+        tail: &[&str],
+        body: Option<serde_json::Value>,
+    ) -> Result<(Vec<T>, Vec<u8>), ApiError> {
         let generation = self.ensure_session().await?;
         let first = self
-            .execute(class, method.clone(), site, tail, body.as_ref())
+            .execute_with_bytes(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
             // Only a read is reissued. The session is refreshed either way so
@@ -1076,14 +1089,16 @@ impl LegacyClient {
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
-                self.execute(class, method, site, tail, body.as_ref()).await
+                self.execute_with_bytes(class, method, site, tail, body.as_ref())
+                    .await
             }
             Err(ApiError::RateLimited {
                 retry_after: Some(delay),
                 ..
             }) if class == RequestClass::IdempotentRead && delay <= MAXIMUM_RETRY_AFTER => {
                 tokio::time::sleep(delay).await;
-                self.execute(class, method, site, tail, body.as_ref()).await
+                self.execute_with_bytes(class, method, site, tail, body.as_ref())
+                    .await
             }
             other => other,
         }
@@ -1097,11 +1112,24 @@ impl LegacyClient {
         tail: &[&str],
         body: Option<&serde_json::Value>,
     ) -> Result<Vec<T>, ApiError> {
+        self.execute_with_bytes(class, method, site, tail, body)
+            .await
+            .map(|(rows, _)| rows)
+    }
+
+    async fn execute_with_bytes<T: DeserializeOwned>(
+        &self,
+        class: RequestClass,
+        method: Method,
+        site: &str,
+        tail: &[&str],
+        body: Option<&serde_json::Value>,
+    ) -> Result<(Vec<T>, Vec<u8>), ApiError> {
         let (status, bytes) = self.execute_bytes(class, method, site, tail, body).await?;
         let envelope: LegacyEnvelope<T> = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         if envelope.meta.rc == "ok" {
-            Ok(envelope.data)
+            Ok((envelope.data, bytes))
         } else {
             let raw = envelope.meta.msg.as_deref();
             // A mutation is never resent based on an error in its response body.
