@@ -687,12 +687,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkPolicyList,
         "network.policy.list",
-        "Page through complete DNS policy or traffic matching list records using a typed family selector and the documented filter query.",
+        "Page through complete ACL rule, DNS policy, or traffic matching list records using a typed family selector and the documented filter query.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkPolicyDetail,
         "network.policy.detail",
-        "Read one complete DNS policy or traffic matching list by its official id and typed family selector.",
+        "Read one complete ACL rule, DNS policy, or traffic matching list by its official id and typed family selector.",
     ),
     write_spec(
         ToolKind::DnsPoliciesConfigure,

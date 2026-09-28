@@ -46,6 +46,7 @@ pub enum SwitchingDetailKind {
 /// Network policy collections documented by the Integration API.
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicyCollection {
+    AclRules,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -320,7 +321,7 @@ impl IntegrationClient {
         Ok((status, body))
     }
 
-    /// Read one page of DNS policies or traffic matching lists, retaining
+    /// Read one page of ACL rules, DNS policies, or traffic matching lists, retaining
     /// every field in each controller record.
     ///
     /// # Errors
@@ -335,6 +336,7 @@ impl IntegrationClient {
     ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
         let mut segments = vec!["sites", site_id];
         match collection {
+            NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.push("traffic-matching-lists");
@@ -349,7 +351,7 @@ impl IntegrationClient {
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
-    /// Read one complete DNS policy or traffic matching list by id.
+    /// Read one complete ACL rule, DNS policy, or traffic matching list by id.
     ///
     /// # Errors
     ///
@@ -362,6 +364,7 @@ impl IntegrationClient {
     ) -> Result<Value, ApiError> {
         let mut segments = vec!["sites", site_id];
         match collection {
+            NetworkPolicyCollection::AclRules => segments.extend(["acl-rules", id]),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies", id]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.extend(["traffic-matching-lists", id]);
@@ -1073,6 +1076,7 @@ fn policy_segments<'a>(
 ) -> Vec<&'a str> {
     let mut segments = vec!["sites", site_id];
     match collection {
+        NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
         NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
         NetworkPolicyCollection::TrafficMatchingLists => {
             segments.push("traffic-matching-lists");
