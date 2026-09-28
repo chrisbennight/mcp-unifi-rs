@@ -8270,10 +8270,36 @@ fn camera_settings_match(
     before: &CameraSettingsState,
     after: &CameraSettingsState,
 ) -> bool {
-    let requested = serde_json::to_value(patch).expect("typed patch serializes");
-    let before = serde_json::to_value(before).expect("typed camera settings serialize");
-    let after = serde_json::to_value(after).expect("typed camera settings serialize");
-    camera_settings_values_match(Some(&requested), &before, &after)
+    let mut requested = serde_json::to_value(patch).expect("typed patch serializes");
+    let mut before_value = serde_json::to_value(before).expect("typed camera settings serialize");
+    let mut after_value = serde_json::to_value(after).expect("typed camera settings serialize");
+    let requested_lcd = requested
+        .as_object_mut()
+        .and_then(|fields| fields.remove("lcdMessage"));
+    let lcd_matches = requested_lcd.as_ref().is_none_or(|wanted| {
+        let Some(wanted_fields) = wanted.as_object() else {
+            return false;
+        };
+        let Some(observed_fields) = after.lcd_message.as_ref().and_then(Value::as_object) else {
+            return false;
+        };
+        // Protect can fill an omitted resetAt from recorder defaults, and
+        // a camera can have no prior LCD message.
+        wanted_fields
+            .iter()
+            .all(|(key, value)| observed_fields.get(key) == Some(value))
+    });
+    if requested_lcd.is_some() {
+        before_value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("lcdMessage");
+        after_value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("lcdMessage");
+    }
+    lcd_matches && camera_settings_values_match(Some(&requested), &before_value, &after_value)
 }
 
 fn camera_settings_values_match(requested: Option<&Value>, before: &Value, after: &Value) -> bool {
