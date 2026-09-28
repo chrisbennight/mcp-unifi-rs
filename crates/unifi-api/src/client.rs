@@ -43,6 +43,13 @@ pub enum SwitchingDetailKind {
     SwitchStack,
 }
 
+/// Network policy collections documented by the Integration API.
+#[derive(Debug, Clone, Copy)]
+pub enum NetworkPolicyCollection {
+    DnsPolicies,
+    TrafficMatchingLists,
+}
+
 /// Client for one controller's official Network Integration API.
 ///
 /// All paths live under `/proxy/network/integration/v1` on the console
@@ -234,6 +241,56 @@ impl IntegrationClient {
         };
         self.get_json(&["sites", site_id, "switching", collection, id], &[])
             .await
+    }
+
+    /// Read one page of DNS policies or traffic matching lists, retaining
+    /// every field in each controller record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn network_policy_page(
+        &self,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut segments = vec!["sites", site_id];
+        match collection {
+            NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+            NetworkPolicyCollection::TrafficMatchingLists => {
+                segments.push("traffic-matching-lists");
+            }
+        }
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&segments, &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Read one complete DNS policy or traffic matching list by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn network_policy_detail(
+        &self,
+        site_id: &str,
+        collection: NetworkPolicyCollection,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        let mut segments = vec!["sites", site_id];
+        match collection {
+            NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies", id]),
+            NetworkPolicyCollection::TrafficMatchingLists => {
+                segments.extend(["traffic-matching-lists", id]);
+            }
+        }
+        self.get_json(&segments, &[]).await
     }
 
     /// RADIUS profiles available to wireless enterprise configurations.
