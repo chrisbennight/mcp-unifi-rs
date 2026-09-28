@@ -2077,11 +2077,12 @@ impl UnifiMcp {
             ));
         }
         if self.local_access().is_some_and(|access| !access.secrets)
-            && params
-                .arguments
-                .as_ref()
-                .and_then(|args| args.get("includeSecrets"))
-                == Some(&serde_json::Value::Bool(true))
+            && (spec.kind.discloses_existing_credentials()
+                || params
+                    .arguments
+                    .as_ref()
+                    .and_then(|args| args.get("includeSecrets"))
+                    == Some(&serde_json::Value::Bool(true)))
         {
             return Err(McpError::invalid_request(
                 "secret disclosure is not enabled for this client",

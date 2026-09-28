@@ -57,6 +57,13 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
+    /// Existing voucher codes require the independent transport's operator
+    /// secret-disclosure grant. Gateway authorization uses the catalog risk
+    /// and sensitivity labels instead.
+    pub(crate) const fn discloses_existing_credentials(self) -> bool {
+        matches!(self, Self::VouchersSearch | Self::VouchersStatus)
+    }
+
     /// Explicit authorization classification, independent of advisory annotations.
     #[must_use]
     pub const fn requires_write_access(self) -> bool {

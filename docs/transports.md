@@ -35,7 +35,8 @@ inspect controller state before deciding whether to act again.
 
 Secret disclosure is separate from write permission. Write permission can
 produce voucher codes as part of the authorized creation result. Voucher reads
-also return codes. Keep those results private. Redaction and rejection of redaction
+also return codes and require the independent mode's secret-disclosure grant.
+Keep those results private. Redaction and rejection of redaction
 markers in writes remain enabled in all modes.
 
 ## Stdio

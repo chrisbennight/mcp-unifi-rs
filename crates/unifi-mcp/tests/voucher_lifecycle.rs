@@ -10,7 +10,7 @@ use std::{
 
 use rmcp::model::CallToolRequestParams;
 use unifi_api::{ControllerConfig, IntegrationClient, LegacyClient, LegacyConfig, TlsMode};
-use unifi_mcp::UnifiMcp;
+use unifi_mcp::{UnifiMcp, handler::LocalAccess};
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -128,6 +128,65 @@ async fn search_pages_redeemable_codes_and_detail_reads_the_same_code() {
         .expect("structured");
     assert_eq!(status["code"], "111-222");
     assert_eq!(status["authorizedGuestCount"], 1);
+}
+
+#[tokio::test]
+async fn independent_transport_requires_its_secret_grant_for_existing_codes() {
+    let server = MockServer::start().await;
+    let denied = handler_for(&server).with_local_access(LocalAccess {
+        writes: false,
+        secrets: false,
+    });
+    for (tool, arguments) in [
+        ("vouchers.search", serde_json::json!({})),
+        ("vouchers.status", serde_json::json!({"voucherId": "v1"})),
+    ] {
+        let error = denied
+            .call(&call(tool, &arguments), None)
+            .await
+            .expect_err("secret disclosure is disabled");
+        assert!(error.message.contains("secret disclosure"), "{tool}");
+    }
+    // No controller endpoint was mounted, so a denial after a controller
+    // request would fail with an upstream error instead.
+
+    mount_site(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset": 0, "limit": 25, "count": 1, "totalCount": 1,
+            "data": [voucher("v1", "111-222")],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/hotspot/vouchers/v1"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(voucher("v1", "111-222")))
+        .mount(&server)
+        .await;
+    let allowed = handler_for(&server).with_local_access(LocalAccess {
+        writes: false,
+        secrets: true,
+    });
+    let list = allowed
+        .call(&call("vouchers.search", &serde_json::json!({})), None)
+        .await
+        .expect("credential read granted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(list["vouchers"][0]["code"], "111-222");
+    let detail = allowed
+        .call(
+            &call("vouchers.status", &serde_json::json!({"voucherId": "v1"})),
+            None,
+        )
+        .await
+        .expect("credential read granted")
+        .structured_content
+        .expect("structured");
+    assert_eq!(detail["code"], "111-222");
 }
 
 #[tokio::test]
