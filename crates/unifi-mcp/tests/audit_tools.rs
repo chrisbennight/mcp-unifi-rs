@@ -715,18 +715,6 @@ async fn section_offset_is_rejected_outside_the_paginated_sections() {
         .await
         .expect_err("unsupported section offset");
     assert!(error.message.contains("zones or policies"));
-
-    let error = handler
-        .call(
-            &call(
-                "firewall.read",
-                &serde_json::json!({"section": "policies", "sectionOffset": 200_000}),
-            ),
-            None,
-        )
-        .await
-        .expect_err("offset ceiling");
-    assert!(error.message.contains("sectionOffset"));
 }
 
 #[tokio::test]
@@ -779,7 +767,7 @@ async fn narrowing_isolates_a_section_from_unrelated_endpoint_failures() {
 }
 
 #[tokio::test]
-async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
+async fn firewall_continuation_keeps_paging_large_collections() {
     let server = MockServer::start().await;
     common_mocks(&server).await;
     Mock::given(method("GET"))
@@ -791,8 +779,6 @@ async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
         })))
         .mount(&server)
         .await;
-    // A scan starting at the accepted maximum that still truncates: the
-    // next offset would exceed the cap, so no offset may be advertised.
     for page_start in [100_000_u64, 100_200] {
         let rows: Vec<serde_json::Value> = (page_start..page_start + 200)
             .map(|index| serde_json::json!({"id": format!("policy-{index}")}))
@@ -823,12 +809,27 @@ async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
             None,
         )
         .await
-        .expect("boundary read");
+        .expect("large collection page");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["sectionsTruncated"], true);
-    assert!(output.get("nextSectionOffset").is_none());
-    let note = output["truncationNote"].as_str().expect("note");
-    assert!(note.contains("sectionOffset bound"));
+    assert_eq!(output["nextSectionOffset"], 100_200);
+    let continued = handler
+        .call(
+            &call(
+                "firewall.read",
+                &serde_json::json!({
+                    "section":"policies", "sectionOffset":output["nextSectionOffset"]
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("continuation beyond the first page")
+        .structured_content
+        .expect("structured continuation");
+    assert_eq!(continued["policies"][0]["id"], "policy-100200");
+    assert_eq!(continued["nextSectionOffset"], 100_400);
+    assert_eq!(continued["sectionsTruncated"], true);
 }
 
 #[tokio::test]

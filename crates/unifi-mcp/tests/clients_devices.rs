@@ -57,6 +57,74 @@ fn call(name: &str, arguments: &serde_json::Value) -> CallToolRequestParams {
     params
 }
 
+#[tokio::test]
+async fn client_search_continues_through_large_inventories() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    let rows: Vec<serde_json::Value> = (0..70_010)
+        .map(|index| serde_json::json!({"name":format!("client-{index:06}")}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/api/s/default/stat/sta"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!(rows))),
+        )
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    for offset in [10_000, 70_000] {
+        let output = handler
+            .call(
+                &call(
+                    "clients.search",
+                    &serde_json::json!({"offset":offset,"limit":2}),
+                ),
+                None,
+            )
+            .await
+            .expect("page of matching clients")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["totalMatches"], 70_010);
+        assert_eq!(output["nextOffset"], offset + 2);
+        assert_eq!(output["clients"][0]["name"], format!("client-{offset:06}"));
+        let continued = handler
+            .call(
+                &call(
+                    "clients.search",
+                    &serde_json::json!({"offset":output["nextOffset"],"limit":2}),
+                ),
+                None,
+            )
+            .await
+            .expect("following page")
+            .structured_content
+            .expect("structured");
+        assert_eq!(
+            continued["clients"][0]["name"],
+            format!("client-{:06}", offset + 2)
+        );
+    }
+    let output = handler
+        .call(
+            &call(
+                "clients.search",
+                &serde_json::json!({"offset":100_000,"limit":2}),
+            ),
+            None,
+        )
+        .await
+        .expect("valid empty page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["clients"], serde_json::json!([]));
+    assert!(output.get("nextOffset").is_none());
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one console fixture shared by every test"
@@ -566,27 +634,33 @@ async fn a_truncated_inventory_scan_is_reported_not_presented_as_complete() {
 }
 
 #[tokio::test]
-async fn search_pagination_bounds_are_enforced() {
+async fn search_page_limits_and_nonnegative_offsets_are_enforced() {
     let server = MockServer::start().await;
     let handler = handler_for(&server);
 
     for arguments in [
         serde_json::json!({"limit": 0}),
         serde_json::json!({"limit": 500}),
-        serde_json::json!({"offset": 20000}),
+        serde_json::json!({"offset": -1}),
         serde_json::json!({"query": ""}),
     ] {
         let error = handler
             .call(&call("clients.search", &arguments), None)
             .await
             .expect_err("rejected page");
-        assert!(
-            error.message.contains("limit")
-                || error.message.contains("offset")
-                || error.message.contains("filters"),
+        assert_eq!(
+            error.code,
+            rmcp::model::ErrorCode::INVALID_PARAMS,
             "{arguments}"
         );
     }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
