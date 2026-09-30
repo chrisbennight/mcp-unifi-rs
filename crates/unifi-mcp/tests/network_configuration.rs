@@ -294,6 +294,53 @@ async fn forced_delete_keeps_acceptance_and_the_upstream_absence_response() {
 }
 
 #[tokio::test]
+async fn a_large_accepted_identifier_keeps_the_response_when_readback_is_unusable() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let id = "x".repeat(60_000);
+    let accepted = json!({"id":id,"controllerExtension":"accepted"}).to_string();
+    Mock::given(method("POST"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/networks")))
+        .respond_with(ResponseTemplate::new(201).set_body_string(&accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "networks.configure",
+                json!({"operation":"create","network":unmanaged(),"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted response");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["id"], id);
+    assert_eq!(output["submitted"], true);
+    assert_eq!(output["responseStatus"], 201);
+    assert!(output["verified"].is_null());
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.starts_with("readbackError: ")
+                && text.text.contains("at most 256 bytes"))
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.strip_prefix("responseBody: ") == Some(accepted.as_str()))
+    );
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn large_accepted_body_and_failed_readback_are_preserved_in_content() {
     let server = MockServer::start().await;
     mount_site(&server).await;

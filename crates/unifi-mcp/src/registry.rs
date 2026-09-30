@@ -114,6 +114,7 @@ pub enum ToolKind {
     VouchersSearch,
     VouchersStatus,
     VouchersRevoke,
+    VouchersRevokeMatching,
     VouchersCreate,
 }
 
@@ -144,6 +145,7 @@ impl ToolKind {
             | Self::FirewallPoliciesUpdate
             | Self::FirewallPoliciesDelete
             | Self::VouchersRevoke
+            | Self::VouchersRevokeMatching
             | Self::CamerasPtzControl
             | Self::CamerasMicrophoneDisable
             | Self::ProtectAssetsUpload
@@ -299,6 +301,7 @@ impl ToolKind {
             | Self::VouchersSearch
             | Self::VouchersStatus
             | Self::VouchersRevoke
+            | Self::VouchersRevokeMatching
             | Self::VouchersCreate => ToolSurface::Network,
         }
     }
@@ -1021,6 +1024,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolBehavior::write(true).result_sensitive(),
     ),
     write_spec(
+        ToolKind::VouchersRevokeMatching,
+        "vouchers.revoke_matching",
+        "Preview a bounded page or revoke all hotspot vouchers matching the documented controller filter. Confirmation applies to every filter match, independent of preview pagination. Returns complete accepted status/body and bounded observation of remaining matches. Repeated filters can include newly created vouchers.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
         ToolKind::VouchersCreate,
         "vouchers.create",
         "Mint hotspot vouchers for the guest network. Previews the batch and \
@@ -1133,6 +1144,7 @@ mod tests {
         ToolKind::VouchersSearch,
         ToolKind::VouchersStatus,
         ToolKind::VouchersRevoke,
+        ToolKind::VouchersRevokeMatching,
         ToolKind::VouchersCreate,
     ];
 
@@ -1282,6 +1294,7 @@ mod tests {
                 | ToolKind::VouchersSearch
                 | ToolKind::VouchersStatus
                 | ToolKind::VouchersRevoke
+                | ToolKind::VouchersRevokeMatching
                 | ToolKind::VouchersCreate => {}
             }
             assert_eq!(
