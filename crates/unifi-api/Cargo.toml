@@ -10,7 +10,6 @@ description = "Bounded HTTP clients and allowlisted response models for UniFi co
 [dependencies]
 base64.workspace = true
 futures-util.workspace = true
-image.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 sha2.workspace = true
@@ -26,6 +25,7 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
 wiremock.workspace = true

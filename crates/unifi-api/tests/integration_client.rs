@@ -496,8 +496,8 @@ async fn vouchers_round_trip_create_list_and_delete() {
         .await;
 
     let client = client_for(&server);
-    let created = client
-        .create_vouchers(
+    let (created, status, body) = client
+        .create_vouchers_with_response(
             "s1",
             &VoucherCreate {
                 name: "guests".to_owned(),
@@ -509,6 +509,8 @@ async fn vouchers_round_trip_create_list_and_delete() {
         )
         .await
         .expect("create");
+    assert_eq!(status, 200);
+    assert!(String::from_utf8(body).expect("body").contains("111-222"));
     assert_eq!(created.vouchers.len(), 2);
     assert_eq!(created.vouchers[0].code.as_deref(), Some("111-222"));
 

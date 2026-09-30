@@ -463,9 +463,12 @@ impl UnifiMcp {
                 }
                 output["after"] = after;
             }
-            Ok(Err(error @ ApiError::Status { status: 404, .. }))
-                if input.operation == NetworkPolicyWriteOperation::Delete =>
-            {
+            Ok(Err(
+                error @ (ApiError::Status { status: 404, .. }
+                | ApiError::Rejected {
+                    status: Some(404), ..
+                }),
+            )) if input.operation == NetworkPolicyWriteOperation::Delete => {
                 output["verifiedAbsent"] = Value::Bool(true);
                 output["readbackError"] = Value::String(error.to_string());
             }

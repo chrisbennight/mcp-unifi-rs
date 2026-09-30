@@ -387,7 +387,7 @@ async fn a_voucher_id_and_code_are_returned_exactly() {
 }
 
 #[tokio::test]
-async fn a_large_accepted_batch_returns_every_issued_code() {
+async fn a_large_accepted_batch_keeps_every_code_in_content() {
     let server = MockServer::start().await;
     mount_site(&server).await;
     let long_code = "c".repeat(20_000);
@@ -418,16 +418,18 @@ async fn a_large_accepted_batch_returns_every_issued_code() {
             None,
         )
         .await
-        .expect("complete large accepted batch");
+        .expect("accepted codes remain available");
+    let content = serde_json::to_value(&result.content)
+        .expect("content")
+        .to_string();
     let output = result.structured_content.expect("structured");
     assert_eq!(output["applied"], true);
-    let codes: Vec<&str> = output["vouchers"]
-        .as_array()
-        .expect("voucher rows")
-        .iter()
-        .map(|row| row["code"].as_str().expect("issued code"))
-        .collect();
-    assert_eq!(codes, minted.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert_eq!(output["vouchersInContent"], true);
+    for code in minted {
+        assert!(content.contains(&code));
+    }
 }
 
 #[tokio::test]
@@ -582,7 +584,10 @@ async fn multiple_readback_failures_identify_the_vouchers_that_failed() {
 #[tokio::test]
 async fn large_readback_failure_keeps_every_issued_code_and_continues_verification() {
     let server = MockServer::start().await;
-    mints(&server, &batch(&["1234567890", "2345678901"])).await;
+    let mut accepted = batch(&["1234567890", "2345678901"]);
+    accepted["controllerExtension"] =
+        serde_json::json!(format!("{}accepted-voucher-tail", "y".repeat(50_000)));
+    mints(&server, &accepted).await;
     let failure = format!("detail failed: {}voucher-error-tail", "x".repeat(50_000));
     Mock::given(method("GET"))
         .and(path(format!(
@@ -620,6 +625,9 @@ async fn large_readback_failure_keeps_every_issued_code_and_continues_verificati
     assert_eq!(output["readbackComplete"], true);
     assert!(output.get("readbackStopReason").is_none());
     assert_eq!(output["readbackErrorsInContent"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert!(content.to_string().contains("accepted-voucher-tail"));
     assert!(content.to_string().contains("voucher-0"));
     assert!(content.to_string().contains(&failure));
 }

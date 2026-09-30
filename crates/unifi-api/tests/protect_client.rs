@@ -678,51 +678,30 @@ async fn snapshot_refuses_non_jpeg_and_oversized_bodies() {
 }
 
 #[tokio::test]
-async fn snapshot_refuses_truncated_jpeg_even_with_correct_content_type() {
-    let server = MockServer::start().await;
+async fn snapshot_returns_original_jpeg_typed_bytes_without_pixel_decoding() {
+    let mut wide = Vec::new();
+    JpegEncoder::new(&mut wide)
+        .encode(&vec![128; 9000 * 3], 9000, 1, ExtendedColorType::Rgb8)
+        .expect("encode wide synthetic JPEG");
     let mut truncated = jpeg_fixture();
     truncated.truncate(truncated.len() / 2);
-    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(truncated.clone(), "image/jpeg"))
-        .mount(&server)
-        .await;
-    let error = client_for(&server)
-        .camera_snapshot("cam-1", "main", false)
-        .await
-        .expect_err("truncated JPEG");
-    let ApiError::DecodeResponse {
-        response,
-        diagnostic,
-    } = error
-    else {
-        panic!("expected DecodeResponse");
-    };
-    assert_eq!(
-        response.as_str(),
-        format!(
-            "non-UTF-8 controller response (base64): {}",
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &truncated)
-        )
-    );
-    assert!(!diagnostic.as_str().is_empty());
-}
-
-#[tokio::test]
-async fn empty_jpeg_response_keeps_its_existing_decode_error() {
-    let server = MockServer::start().await;
-    Mock::given(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(Vec::<u8>::new(), "image/jpeg"))
-        .mount(&server)
-        .await;
-    let error = client_for(&server)
-        .camera_snapshot("cam-1", "main", false)
-        .await
-        .expect_err("empty JPEG");
-    assert!(matches!(error, ApiError::Decode(_)));
-    assert_eq!(
-        error.to_string(),
-        "response decoding failed: image response was not a decodable JPEG"
-    );
+    for bytes in [wide, truncated, Vec::new()] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/cameras/cam-1/snapshot")))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(bytes.clone(), "image/jpeg"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client_for(&server)
+                .camera_snapshot("cam-1", "main", false)
+                .await
+                .expect("original JPEG-typed bytes"),
+            bytes
+        );
+        server.verify().await;
+    }
 }
 
 #[tokio::test]

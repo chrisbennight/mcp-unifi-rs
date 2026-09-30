@@ -71,6 +71,265 @@ fn voucher(id: &str, code: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn bulk_preview_retains_complete_records_and_reports_its_partial_page() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let filter = "name.eq('Visitor Batch')";
+    let mut row = voucher("v1", "111-222");
+    row["controllerExtension"] = serde_json::json!({"credential":"fixture-value"});
+    let page = serde_json::json!({"offset":1,"limit":1,"count":1,"totalCount":2,"data":[row]});
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers")))
+        .and(query_param("filter", filter))
+        .and(query_param("offset", "1"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&page))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "vouchers.revoke_matching",
+                &serde_json::json!({
+                    "filter":filter,"previewOffset":1,"previewLimit":1
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["filter"], filter);
+    assert_eq!(output["matchesBefore"], 2);
+    assert_eq!(output["previewComplete"], false);
+    assert_eq!(output["applied"], false);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(output["beforeResponse"].as_str().expect("body"))
+            .expect("JSON"),
+        page
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+}
+
+#[tokio::test]
+async fn bulk_deletion_uses_the_full_filter_and_reports_observed_remaining_matches() {
+    for remaining in [0, 1] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers");
+        let filter = "name.eq('Visitor Batch')";
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(query_param("filter", filter))
+            .and(query_param("offset", "1"))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "offset":1,"limit":1,"count":1,"totalCount":2,"data":[voucher("v1", "111-222")]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let accepted = serde_json::json!({"vouchersDeleted":2,"controllerExtension":{"credential":"fixture-value"}});
+        Mock::given(method("DELETE"))
+            .and(path(&route))
+            .and(query_param("filter", filter))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&accepted))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let rows = if remaining == 0 {
+            vec![]
+        } else {
+            vec![voucher("new-voucher", "333-444")]
+        };
+        let after = serde_json::json!({"offset":0,"limit":1,"count":remaining,"totalCount":remaining,"data":rows});
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(query_param("filter", filter))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call(
+                    "vouchers.revoke_matching",
+                    &serde_json::json!({
+                        "filter":filter,"previewOffset":1,"previewLimit":1,"confirm":true
+                    }),
+                ),
+                None,
+            )
+            .await
+            .expect("delete")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["matchesBefore"], 2);
+        assert_eq!(output["previewComplete"], false);
+        assert_eq!(output["applied"], true);
+        assert_eq!(output["responseStatus"], 200);
+        assert_eq!(output["vouchersDeleted"], 2);
+        assert_eq!(output["matchesAfter"], remaining);
+        assert_eq!(output["verifiedAbsent"], remaining == 0);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                output["responseBody"].as_str().expect("body")
+            )
+            .expect("JSON"),
+            accepted
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                output["afterResponse"].as_str().expect("after")
+            )
+            .expect("JSON"),
+            after
+        );
+    }
+}
+
+#[tokio::test]
+async fn bulk_accepted_large_body_survives_failed_readback_with_all_controller_text() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .and(query_param("limit", "25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset":0,"limit":25,"count":1,"totalCount":1,"data":[voucher("v1", "111-222")]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(&route))
+        .and(query_param("filter", "expired.eq(true)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "vouchersDeleted":1,"extension":format!("{}bulk-acceptance-tail", "x".repeat(50_000))
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .and(query_param("limit", "1"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .set_body_string("bulk readback upstream detail with fixture credential"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "vouchers.revoke_matching",
+                &serde_json::json!({
+                    "filter":"expired.eq(true)","confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted");
+    let content = serde_json::to_value(result.content)
+        .expect("content")
+        .to_string();
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["vouchersDeleted"], 1);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(content.contains("bulk-acceptance-tail"));
+    assert!(content.contains("bulk readback upstream detail with fixture credential"));
+    assert!(output.get("verifiedAbsent").is_none());
+}
+
+#[tokio::test]
+async fn bulk_mutation_rejections_are_complete_and_never_retried() {
+    for status in [422, 429] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let route = format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers");
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "offset":0,"limit":25,"count":0,"totalCount":0,"data":[]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path(&route))
+            .and(query_param("filter", "expired.eq(true)"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Retry-After", "0")
+                    .set_body_string("controller bulk deletion rejection with full detail"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = handler_for(&server)
+            .call(
+                &call(
+                    "vouchers.revoke_matching",
+                    &serde_json::json!({
+                        "filter":"expired.eq(true)","confirm":true
+                    }),
+                ),
+                None,
+            )
+            .await
+            .expect_err("rejection");
+        assert!(
+            error
+                .message
+                .contains("controller bulk deletion rejection with full detail")
+        );
+    }
+}
+
+#[tokio::test]
+async fn bulk_invalid_bounds_fail_before_controller_calls() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for arguments in [
+        serde_json::json!({"filter":" "}),
+        serde_json::json!({"filter":"x".repeat(2049)}),
+        serde_json::json!({"filter":"expired.eq(true)","previewLimit":0}),
+        serde_json::json!({"filter":"expired.eq(true)","previewOffset":2_147_483_648_u64}),
+    ] {
+        assert!(
+            handler
+                .call(&call("vouchers.revoke_matching", &arguments), None)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn search_pages_redeemable_codes_and_detail_reads_the_same_code() {
     let server = MockServer::start().await;
     mount_site(&server).await;
