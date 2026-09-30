@@ -4,6 +4,34 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Verify supplied values and the absence of omitted writable optional fields.
+/// Controller extensions remain in the complete result and do not affect this
+/// comparison of the typed configuration.
+pub(super) fn matches(requested: &serde_json::Value, observed: &serde_json::Value) -> bool {
+    super::requested_json_matches(requested, observed)
+        && [
+            "/connectionStateFilter",
+            "/description",
+            "/ipsecFilter",
+            "/schedule",
+            "/schedule/timeFilter",
+            "/source/trafficFilter",
+            "/source/trafficFilter/portFilter",
+            "/source/trafficFilter/macAddressFilter",
+            "/destination/trafficFilter",
+            "/destination/trafficFilter/portFilter",
+            "/ipProtocolScope/protocolFilter",
+            "/ipProtocolScope/protocolFilter/protocol/typenameFilter",
+        ]
+        .iter()
+        .all(|path| {
+            requested.pointer(path).is_some()
+                || observed
+                    .pointer(path)
+                    .is_none_or(serde_json::Value::is_null)
+        })
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FirewallPolicyRequest {
