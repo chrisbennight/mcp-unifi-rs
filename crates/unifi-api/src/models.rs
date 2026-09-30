@@ -238,9 +238,13 @@ pub struct VoucherCreate {
     pub count: u32,
     pub time_limit_minutes: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorized_guest_limit: Option<u32>,
+    pub authorized_guest_limit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_usage_limit_m_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_rate_limit_kbps: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,6 +390,8 @@ mod tests {
             time_limit_minutes: 1440,
             authorized_guest_limit: None,
             data_usage_limit_m_bytes: None,
+            rx_rate_limit_kbps: None,
+            tx_rate_limit_kbps: None,
         };
         assert_eq!(
             serde_json::to_value(&minimal).expect("serialize"),
@@ -395,6 +401,8 @@ mod tests {
         let full = VoucherCreate {
             authorized_guest_limit: Some(1),
             data_usage_limit_m_bytes: Some(1024),
+            rx_rate_limit_kbps: Some(100_000),
+            tx_rate_limit_kbps: Some(2),
             ..minimal
         };
         assert_eq!(
@@ -405,6 +413,8 @@ mod tests {
                 "timeLimitMinutes": 1440,
                 "authorizedGuestLimit": 1,
                 "dataUsageLimitMBytes": 1024,
+                "rxRateLimitKbps": 100_000,
+                "txRateLimitKbps": 2,
             })
         );
     }

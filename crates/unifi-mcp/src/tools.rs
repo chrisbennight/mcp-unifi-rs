@@ -3779,15 +3779,20 @@ struct PolicyPreviewCoverage {
 struct VouchersCreateInput {
     /// Label the controller stores against the batch.
     name: String,
-    /// How many to mint, 1-100.
+    /// How many to mint, 1-1000. Defaults to one.
+    #[serde(default = "default_voucher_count")]
     count: u32,
-    /// Minutes each voucher is valid once redeemed, 1-10080 (seven days).
+    /// Minutes each voucher is valid once redeemed, 1-1000000.
     time_limit_minutes: u32,
     /// Devices one voucher may authorize. The controller's default applies
     /// when absent.
-    guest_limit: Option<u32>,
-    /// Data allowance per voucher in megabytes. Unlimited when absent.
+    guest_limit: Option<u64>,
+    /// Data allowance per voucher in megabytes, 1-1048576. Unlimited when absent.
     data_limit_megabytes: Option<u64>,
+    /// Download rate per voucher in kilobits per second, 2-100000.
+    download_rate_limit_kbps: Option<u64>,
+    /// Upload rate per voucher in kilobits per second, 2-100000.
+    upload_rate_limit_kbps: Option<u64>,
     /// Mint them. Absent or false describes the batch without creating it.
     confirm: Option<bool>,
 }
@@ -3801,6 +3806,10 @@ struct VouchersSearchInput {
     /// Vouchers per page, 1-100. Defaults to 25.
     #[serde(default = "default_voucher_limit")]
     limit: u16,
+}
+
+const fn default_voucher_count() -> u32 {
+    1
 }
 
 const fn default_voucher_limit() -> u16 {
@@ -3918,10 +3927,14 @@ struct VoucherBatch {
     /// Devices one voucher may authorize. Absent means the controller's
     /// default applies.
     #[serde(skip_serializing_if = "Option::is_none")]
-    guest_limit: Option<u32>,
+    guest_limit: Option<u64>,
     /// Data allowance per voucher in megabytes. Absent means unlimited.
     #[serde(skip_serializing_if = "Option::is_none")]
     data_limit_megabytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_rate_limit_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upload_rate_limit_kbps: Option<u64>,
 }
 
 /// One voucher returned by the creation request.
@@ -9704,6 +9717,23 @@ impl UnifiMcp {
         let started = tokio::time::Instant::now();
         let input = parse::<VouchersCreateInput>(params)?;
         let batch = voucher_batch(&input)?;
+        let request = VoucherCreate {
+            name: batch.name.clone(),
+            count: input.count,
+            time_limit_minutes: input.time_limit_minutes,
+            authorized_guest_limit: input.guest_limit,
+            data_usage_limit_m_bytes: input.data_limit_megabytes,
+            rx_rate_limit_kbps: input.download_rate_limit_kbps,
+            tx_rate_limit_kbps: input.upload_rate_limit_kbps,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        if request_bytes.len() > MAXIMUM_VOUCHER_REQUEST_BYTES {
+            return Err(McpError::invalid_params(
+                "serialized voucher request exceeds the 1 MiB transport bound",
+                None,
+            ));
+        }
         let mut warnings = vec![
             "each voucher code is a guest network credential; codes can also be read through vouchers.search and vouchers.status"
                 .to_owned(),
@@ -9731,16 +9761,7 @@ impl UnifiMcp {
         let site_id = self.site_id().await?;
         let (created, response_status, response_body) = self
             .integration()
-            .create_vouchers_with_response(
-                &site_id,
-                &VoucherCreate {
-                    name: batch.name.clone(),
-                    count: input.count,
-                    time_limit_minutes: input.time_limit_minutes,
-                    authorized_guest_limit: input.guest_limit,
-                    data_usage_limit_m_bytes: input.data_limit_megabytes,
-                },
-            )
+            .create_vouchers_with_response(&site_id, &request)
             .await
             .map_err(api_error)?;
 
@@ -11695,9 +11716,9 @@ fn firewall_policy_warnings(wanted: bool, record: &Map<String, Value>) -> Vec<St
     warnings
 }
 
-/// Most vouchers one call will mint. The limit bounds request size and
-/// readback work; callers can create additional batches when needed.
-const VOUCHER_BATCH_CEILING: u32 = 100;
+/// Maximum batch size in the Integration API voucher creation contract.
+const VOUCHER_BATCH_CEILING: u32 = 1000;
+const MAXIMUM_VOUCHER_REQUEST_BYTES: usize = 1024 * 1024;
 /// Reserve most of the tool deadline for returning a successful creation
 /// response, even when the detail endpoint stalls during verification.
 const VOUCHER_READBACK_BUDGET: Duration = Duration::from_secs(5);
@@ -11726,8 +11747,8 @@ const NETWORK_ACTION_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const NETWORK_ACTION_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 const NETWORK_POLICY_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const NETWORK_POLICY_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
-/// Longest validity one voucher may carry, in minutes: seven days.
-const VOUCHER_MINUTES_CEILING: u32 = 7 * 24 * 60;
+/// Maximum validity in the Integration API voucher creation contract.
+const VOUCHER_MINUTES_CEILING: u32 = 1_000_000;
 /// Widest code this server will call well formed. Generous on purpose — the
 /// controller decides the format, and refusing an unfamiliar one would
 /// condemn vouchers that already exist.
@@ -11762,19 +11783,45 @@ fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> 
             None,
         ));
     }
-    let name = input.name.trim();
-    if name.is_empty() || name.len() > MAXIMUM_QUERY_LENGTH {
-        return Err(McpError::invalid_params(
-            format!("name must be 1-{MAXIMUM_QUERY_LENGTH} UTF-8 bytes once trimmed"),
-            None,
-        ));
+    if input.name.is_empty() {
+        return Err(McpError::invalid_params("name must be nonempty", None));
+    }
+    for (field, value, minimum, maximum) in [
+        ("guestLimit", input.guest_limit, 1, i64::MAX as u64),
+        (
+            "dataLimitMegabytes",
+            input.data_limit_megabytes,
+            1,
+            1_048_576,
+        ),
+        (
+            "downloadRateLimitKbps",
+            input.download_rate_limit_kbps,
+            2,
+            100_000,
+        ),
+        (
+            "uploadRateLimitKbps",
+            input.upload_rate_limit_kbps,
+            2,
+            100_000,
+        ),
+    ] {
+        if value.is_some_and(|value| !(minimum..=maximum).contains(&value)) {
+            return Err(McpError::invalid_params(
+                format!("{field} must be between {minimum} and {maximum}"),
+                None,
+            ));
+        }
     }
     Ok(VoucherBatch {
-        name: name.to_owned(),
+        name: input.name.clone(),
         count: input.count,
         time_limit_minutes: input.time_limit_minutes,
         guest_limit: input.guest_limit,
         data_limit_megabytes: input.data_limit_megabytes,
+        download_rate_limit_kbps: input.download_rate_limit_kbps,
+        upload_rate_limit_kbps: input.upload_rate_limit_kbps,
     })
 }
 

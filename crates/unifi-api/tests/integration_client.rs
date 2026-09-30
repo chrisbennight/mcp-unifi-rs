@@ -505,6 +505,8 @@ async fn vouchers_round_trip_create_list_and_delete() {
                 time_limit_minutes: 1440,
                 authorized_guest_limit: None,
                 data_usage_limit_m_bytes: None,
+                rx_rate_limit_kbps: None,
+                tx_rate_limit_kbps: None,
             },
         )
         .await

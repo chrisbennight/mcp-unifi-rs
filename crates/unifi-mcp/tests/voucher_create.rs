@@ -458,6 +458,112 @@ async fn controller_generated_codes_are_returned_exactly() {
 }
 
 #[tokio::test]
+async fn native_limits_rates_and_original_names_reach_the_controller() {
+    for name in [format!("  {}  ", "g".repeat(500)), "   ".to_owned()] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let vouchers = (0..1000)
+            .map(|index| serde_json::json!({"code":format!("{index:010}")}))
+            .collect::<Vec<_>>();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
+            )))
+            .and(body_json(serde_json::json!({
+                "name":name,"count":1000,"timeLimitMinutes":1_000_000,
+                "authorizedGuestLimit":4_294_967_296_u64,"dataUsageLimitMBytes":1_048_576,
+                "rxRateLimitKbps":100_000,"txRateLimitKbps":2
+            })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"vouchers":vouchers})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &create(&serde_json::json!({
+                    "name":name,"count":1000,"timeLimitMinutes":1_000_000,
+                    "guestLimit":4_294_967_296_u64,"dataLimitMegabytes":1_048_576,
+                    "downloadRateLimitKbps":100_000,"uploadRateLimitKbps":2,"confirm":true
+                })),
+                None,
+            )
+            .await
+            .expect("native voucher creation")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["batch"]["name"], name);
+        assert_eq!(output["batch"]["guestLimit"], 4_294_967_296_u64);
+        assert_eq!(output["batch"]["downloadRateLimitKbps"], 100_000);
+        assert_eq!(output["batch"]["uploadRateLimitKbps"], 2);
+        assert_eq!(output["requested"], 1000);
+        assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 1000);
+        assert_eq!(output["vouchers"][999]["code"], "0000000999");
+        assert_eq!(output["responseStatus"], 201);
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn default_count_and_rate_preview_do_not_contact_the_controller() {
+    let server = MockServer::start().await;
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name":"  label  ","timeLimitMinutes":1_000_000,
+                "downloadRateLimitKbps":2,"uploadRateLimitKbps":100_000
+            })),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["requested"], 1);
+    assert_eq!(output["batch"]["name"], "  label  ");
+    assert_eq!(output["batch"]["downloadRateLimitKbps"], 2);
+    assert_eq!(output["batch"]["uploadRateLimitKbps"], 100_000);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn native_optional_ranges_are_validated_before_controller_calls() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for (field, values) in [
+        ("guestLimit", vec![0, 9_223_372_036_854_775_808_u64]),
+        ("dataLimitMegabytes", vec![0, 1_048_577]),
+        ("downloadRateLimitKbps", vec![1, 100_001]),
+        ("uploadRateLimitKbps", vec![1, 100_001]),
+    ] {
+        for value in values {
+            let mut input = serde_json::json!({"name":"g","timeLimitMinutes":60,"confirm":true});
+            input[field] = serde_json::json!(value);
+            let error = handler
+                .call(&create(&input), None)
+                .await
+                .expect_err("native invalid range");
+            assert!(error.message.contains(field));
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
     let server = MockServer::start().await;
     // Nothing is mounted. Every refusal must be decided from the request
@@ -471,7 +577,7 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
             "count must be between",
         ),
         (
-            serde_json::json!({"name": "g", "count": 101, "timeLimitMinutes": 60}),
+            serde_json::json!({"name": "g", "count": 1001, "timeLimitMinutes": 60}),
             "count must be between",
         ),
         (
@@ -479,21 +585,21 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
             "timeLimitMinutes must be between",
         ),
         (
-            serde_json::json!({"name": "g", "count": 1, "timeLimitMinutes": 10081}),
+            serde_json::json!({"name": "g", "count": 1, "timeLimitMinutes": 1_000_001}),
             "timeLimitMinutes must be between",
         ),
         (
-            serde_json::json!({"name": "   ", "count": 1, "timeLimitMinutes": 60}),
-            "name must be 1-",
+            serde_json::json!({"name": "", "count": 1, "timeLimitMinutes": 60}),
+            "name must be nonempty",
         ),
-        // Caller supplied names remain bounded before a mutation.
+        // Bound the complete serialized request before calling the controller.
         (
             serde_json::json!({
-                "name": "g".repeat(129),
+                "name": "\"".repeat(600_000),
                 "count": 1,
                 "timeLimitMinutes": 60,
             }),
-            "name must be 1-",
+            "serialized voucher request exceeds",
         ),
     ] {
         let mut confirmed = arguments.clone();
