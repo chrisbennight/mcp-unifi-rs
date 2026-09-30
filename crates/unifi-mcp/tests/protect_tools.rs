@@ -1811,7 +1811,7 @@ async fn camera_snapshot_returns_image_content_and_small_metadata() {
 }
 
 #[tokio::test]
-async fn camera_snapshot_forwards_the_complete_invalid_jpeg_body() {
+async fn camera_snapshot_returns_original_jpeg_typed_body_as_image_content() {
     let server = MockServer::start().await;
     console_with(&server, sample_cameras()).await;
     let invalid = vec![0xff; 700];
@@ -1820,7 +1820,7 @@ async fn camera_snapshot_forwards_the_complete_invalid_jpeg_body() {
         .respond_with(ResponseTemplate::new(200).set_body_raw(invalid.clone(), "image/jpeg"))
         .mount(&server)
         .await;
-    let error = handler_for(&server)
+    let result = handler_for(&server)
         .call(
             &call(
                 "cameras.snapshot",
@@ -1829,9 +1829,17 @@ async fn camera_snapshot_forwards_the_complete_invalid_jpeg_body() {
             None,
         )
         .await
-        .expect_err("invalid JPEG");
-    assert!(error.message.contains(&STANDARD.encode(&invalid)));
-    assert!(error.message.contains("decode error"));
+        .expect("original JPEG-typed body");
+    let image = result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            ContentBlock::Image(image) => Some(image),
+            _ => None,
+        })
+        .expect("image content");
+    assert_eq!(image.mime_type, "image/jpeg");
+    assert_eq!(STANDARD.decode(&image.data).expect("base64"), invalid);
 }
 
 #[tokio::test]
