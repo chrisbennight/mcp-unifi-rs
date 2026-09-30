@@ -735,11 +735,11 @@ struct ProtectLightDeviceSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_indicator_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_duration: Option<f64>,
+    pir_duration: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_sensitivity: Option<f64>,
+    pir_sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    led_level: Option<f64>,
+    led_level: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -758,7 +758,7 @@ struct ProtectRelayLedSettings {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum ProtectNullableNumber {
-    Number(f64),
+    Number(Number),
     Clear,
 }
 
@@ -768,7 +768,7 @@ fn deserialize_present_nullable_number<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    Option::<f64>::deserialize(deserializer).map(|value| {
+    Option::<Number>::deserialize(deserializer).map(|value| {
         Some(match value {
             Some(number) => ProtectNullableNumber::Number(number),
             None => ProtectNullableNumber::Clear,
@@ -803,7 +803,7 @@ struct ProtectSensorThresholdSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    margin: Option<f64>,
+    margin: Option<Number>,
     #[serde(
         default,
         deserialize_with = "deserialize_present_nullable_number",
@@ -824,9 +824,9 @@ struct ProtectSensorMotionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity: Option<f64>,
+    sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity_when_armed: Option<f64>,
+    sensitivity_when_armed: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -847,9 +847,9 @@ enum ProtectSensorScheduleMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectChimeRingSettings {
     camera_id: String,
-    repeat_times: f64,
+    repeat_times: Number,
     ringtone_id: String,
-    volume: f64,
+    volume: Number,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1145,7 +1145,7 @@ struct PosTransaction {
     #[serde(rename = "type")]
     transaction_type: PosTransactionType,
     external_id: String,
-    amount: f64,
+    amount: Number,
     #[serde(skip_serializing_if = "Option::is_none")]
     currency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -10836,6 +10836,21 @@ fn validate_stream_quality_selection(qualities: &[StreamQuality]) -> Result<(), 
     Ok(())
 }
 
+fn number_is_negative(value: &Number) -> bool {
+    let text = value.as_str();
+    text.starts_with('-')
+        && text
+            .split(['e', 'E'])
+            .next()
+            .is_some_and(|mantissa| mantissa.bytes().any(|digit| matches!(digit, b'1'..=b'9')))
+}
+
+fn number_in_range(value: &Number, minimum: f64, maximum: f64) -> bool {
+    value
+        .as_f64()
+        .is_some_and(|value| (minimum..=maximum).contains(&value))
+}
+
 fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError> {
     fn text_length(value: &str, name: &str) -> Result<(), McpError> {
         if !(1..=255).contains(&value.chars().count()) {
@@ -10848,9 +10863,9 @@ fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError
     }
 
     text_length(&transaction.external_id, "externalId")?;
-    if !transaction.amount.is_finite() || transaction.amount < 0.0 {
+    if number_is_negative(&transaction.amount) {
         return Err(McpError::invalid_params(
-            "amount must be a nonnegative finite number",
+            "amount must be a nonnegative number",
             None,
         ));
     }
@@ -13003,13 +13018,18 @@ fn device_settings_request(
             ..
         } => {
             if light_device_settings.as_ref().is_some_and(|settings| {
-                settings.pir_duration.is_some_and(|value| value < 0.0)
+                settings
+                    .pir_duration
+                    .as_ref()
+                    .is_some_and(number_is_negative)
                     || settings
                         .pir_sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
                     || settings
                         .led_level
-                        .is_some_and(|value| !(1.0..=6.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 1.0, 6.0))
             }) {
                 return Err(McpError::invalid_params(
                     "light pirDuration must be nonnegative, pirSensitivity 0-100, and ledLevel 1-6",
@@ -13038,7 +13058,7 @@ fn device_settings_request(
                 ),
             ] {
                 if settings.is_some_and(|settings| {
-                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !(minimum..=maximum).contains(value))
+                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !number_in_range(value, minimum, maximum))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field}.lowThreshold is outside the documented range"),
@@ -13053,10 +13073,12 @@ fn device_settings_request(
                 if settings.is_some_and(|settings| {
                     settings
                         .sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
                         || settings
                             .sensitivity_when_armed
-                            .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                            .as_ref()
+                            .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field} sensitivity must be 0-100"),
@@ -13076,8 +13098,8 @@ fn device_settings_request(
         ProtectDeviceSettingsChanges::Chime { ring_settings, .. } => {
             if ring_settings.as_ref().is_some_and(|rows| {
                 rows.iter().any(|row| {
-                    !(1.0..=10.0).contains(&row.repeat_times)
-                        || !(0.0..=100.0).contains(&row.volume)
+                    !number_in_range(&row.repeat_times, 1.0, 10.0)
+                        || !number_in_range(&row.volume, 0.0, 100.0)
                 })
             }) {
                 return Err(McpError::invalid_params(
