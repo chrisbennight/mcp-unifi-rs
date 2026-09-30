@@ -146,7 +146,13 @@ async fn create_and_update_forward_all_fields_and_preserve_full_acceptance_and_o
 
 #[tokio::test]
 async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
-    for missing in [false, true] {
+    for missing in [
+        None,
+        Some("complete upstream absence"),
+        Some(
+            r#" {"meta":{"rc":"error","msg":"api.err.InvalidObject"},"data":[],"unknown":"original-404-envelope"} "#,
+        ),
+    ] {
         let server = MockServer::start().await;
         login(&server).await;
         let accepted = "{\"meta\":{\"rc\":\"ok\",\"extra\":\"upstream\"},\"data\":[]}";
@@ -156,11 +162,10 @@ async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
             .expect(1)
             .mount(&server)
             .await;
-        let template = if missing {
-            ResponseTemplate::new(404).set_body_string("complete upstream absence")
-        } else {
-            ResponseTemplate::new(200).set_body_json(envelope(json!([])))
-        };
+        let template = missing.map_or_else(
+            || ResponseTemplate::new(200).set_body_json(envelope(json!([]))),
+            |body| ResponseTemplate::new(404).set_body_string(body),
+        );
         Mock::given(method("GET"))
             .and(path(format!("{PREFIX}/pf-1")))
             .respond_with(template)
@@ -180,13 +185,10 @@ async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
         let output = result.structured_content.expect("structured");
         assert_eq!(output["responseBody"], accepted);
         assert_eq!(output["verifiedAbsent"], true);
-        if missing {
-            assert!(
-                output["readbackError"]
-                    .as_str()
-                    .expect("error")
-                    .contains("complete upstream absence")
-            );
+        if let Some(body) = missing {
+            let error = output["readbackError"].as_str().expect("error");
+            assert!(error.contains(body));
+            assert!(error.contains("404"));
         } else {
             assert_eq!(output["after"], envelope(json!([])));
         }
@@ -235,6 +237,53 @@ async fn surviving_rule_and_coerced_fields_do_not_claim_verification() {
         );
         assert_eq!(output["after"], after);
     }
+}
+
+#[tokio::test]
+async fn a_large_accepted_identifier_keeps_the_response_when_readback_is_unusable() {
+    let server = MockServer::start().await;
+    login(&server).await;
+    let id = "x".repeat(60_000);
+    let accepted = envelope(json!([{"_id":id,"controllerExtension":"accepted"}])).to_string();
+    Mock::given(method("POST"))
+        .and(path(PREFIX))
+        .respond_with(ResponseTemplate::new(200).set_body_string(&accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler(&server)
+        .call(
+            &call(
+                "port_forwards.configure",
+                json!({"operation":"create","configuration":{"name":"test"},"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted response");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["id"], id);
+    assert_eq!(output["submitted"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert!(output["verified"].is_null());
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.starts_with("readbackError: ")
+                && text.text.contains("at most 256 bytes"))
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.strip_prefix("responseBody: ") == Some(accepted.as_str()))
+    );
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    server.verify().await;
 }
 
 #[tokio::test]
