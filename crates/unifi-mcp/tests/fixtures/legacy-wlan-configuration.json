@@ -1,0 +1,133 @@
+{
+  "_id": "wlan-1",
+  "ap_group_ids": [
+    "ap-1"
+  ],
+  "ap_group_mode": "fixture-ap_group_mode",
+  "attr_hidden": true,
+  "attr_hidden_id": "fixture-attr_hidden_id",
+  "attr_no_delete": true,
+  "attr_no_edit": true,
+  "auth_cache": true,
+  "b_supported": true,
+  "bc_filter_enabled": true,
+  "bc_filter_list": [
+    "aa:bb:cc:dd:ee:ff"
+  ],
+  "bss_transition": true,
+  "country_beacon": true,
+  "dpi_enabled": true,
+  "dpigroup_id": "fixture-dpigroup_id",
+  "dtim_6e": 3,
+  "dtim_mode": "fixture-dtim_mode",
+  "dtim_na": 3,
+  "dtim_ng": 3,
+  "element_adopt": true,
+  "enabled": true,
+  "fast_roaming_enabled": true,
+  "group_rekey": 3,
+  "hide_ssid": true,
+  "hotspot2conf_enabled": true,
+  "hotspot2conf_id": "fixture-hotspot2conf_id",
+  "iapp_enabled": true,
+  "is_guest": true,
+  "l2_isolation": true,
+  "log_level": "fixture-log_level",
+  "mac_filter_enabled": true,
+  "mac_filter_list": [
+    "aa:bb:cc:dd:ee:ff"
+  ],
+  "mac_filter_policy": "fixture-mac_filter_policy",
+  "mcastenhance_enabled": true,
+  "minrate_na_advertising_rates": true,
+  "minrate_na_data_rate_kbps": 3,
+  "minrate_na_enabled": true,
+  "minrate_ng_advertising_rates": true,
+  "minrate_ng_data_rate_kbps": 3,
+  "minrate_ng_enabled": true,
+  "minrate_setting_preference": "fixture-minrate_setting_preference",
+  "name": "Lab",
+  "name_combine_enabled": true,
+  "name_combine_suffix": "fixture-name_combine_suffix",
+  "networkconf_id": "network-1",
+  "no2ghz_oui": true,
+  "optimize_iot_wifi_connectivity": true,
+  "p2p": true,
+  "p2p_cross_connect": true,
+  "pmf_cipher": "fixture-pmf_cipher",
+  "pmf_mode": "fixture-pmf_mode",
+  "priority": "fixture-priority",
+  "private_preshared_keys": [
+    {
+      "networkconf_id": "fixture-networkconf_id",
+      "password": "fixture-password"
+    }
+  ],
+  "private_preshared_keys_enabled": true,
+  "proxy_arp": true,
+  "radius_das_enabled": true,
+  "radius_mac_auth_enabled": true,
+  "radius_macacl_empty_password": true,
+  "radius_macacl_format": "fixture-radius_macacl_format",
+  "radiusprofile_id": "radius-1",
+  "roam_cluster_id": 3,
+  "rrm_enabled": true,
+  "sae_anti_clogging": 3,
+  "sae_groups": [
+    19,
+    20
+  ],
+  "sae_psk": [
+    {
+      "id": "fixture-id",
+      "mac": "fixture-mac",
+      "psk": "fixture-psk",
+      "vlan": 3
+    }
+  ],
+  "sae_psk_vlan_required": true,
+  "sae_sync": 3,
+  "schedule": [
+    "fixture-value"
+  ],
+  "schedule_enabled": true,
+  "schedule_reversed": true,
+  "schedule_with_duration": [
+    {
+      "duration_minutes": 3,
+      "name": "fixture-name",
+      "start_days_of_week": [
+        "fixture-value"
+      ],
+      "start_hour": 3,
+      "start_minute": 3
+    }
+  ],
+  "security": "wpapsk",
+  "setting_preference": "fixture-setting_preference",
+  "site_id": "fixture-site_id",
+  "tdls_prohibit": true,
+  "uapsd_enabled": true,
+  "uid_workspace_url": "fixture-uid_workspace_url",
+  "usergroup_id": "users-1",
+  "vlan": 42,
+  "vlan_enabled": true,
+  "wep_idx": 3,
+  "wlan_band": "fixture-wlan_band",
+  "wlan_bands": [
+    "2g",
+    "5g",
+    "6g"
+  ],
+  "wlangroup_id": "wlans-1",
+  "wpa_enc": "ccmp",
+  "wpa_mode": "wpa3",
+  "wpa_psk_radius": "fixture-wpa_psk_radius",
+  "wpa3_enhanced_192": true,
+  "wpa3_fast_roaming": true,
+  "wpa3_support": true,
+  "wpa3_transition": true,
+  "x_iapp_key": "fixture-x_iapp_key",
+  "x_passphrase": "fixture-passphrase",
+  "x_wep": "fixture-x_wep"
+}

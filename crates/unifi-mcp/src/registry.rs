@@ -94,6 +94,10 @@ pub enum ToolKind {
     EventsSearch,
     StatsQuery,
     WlansUpdate,
+    WlansList,
+    WlansStatus,
+    WlansConfigure,
+    WlanGroupsList,
     ClientsControl,
     DevicesControl,
     GuestsStatus,
@@ -118,6 +122,7 @@ impl ToolKind {
     pub const fn requires_write_access(self) -> bool {
         match self {
             Self::WlansUpdate
+            | Self::WlansConfigure
             | Self::NetworksConfigure
             | Self::WifiBroadcastsConfigure
             | Self::ClientsControl
@@ -165,6 +170,9 @@ impl ToolKind {
             | Self::NetworksList
             | Self::NetworksStatus
             | Self::PortForwardsList
+            | Self::WlansList
+            | Self::WlansStatus
+            | Self::WlanGroupsList
             | Self::PortForwardsStatus
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
@@ -269,6 +277,10 @@ impl ToolKind {
             | Self::EventsSearch
             | Self::StatsQuery
             | Self::WlansUpdate
+            | Self::WlansList
+            | Self::WlansStatus
+            | Self::WlansConfigure
+            | Self::WlanGroupsList
             | Self::ClientsControl
             | Self::DevicesControl
             | Self::GuestsStatus
@@ -841,6 +853,29 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "wifi.broadcasts.status",
         "Read one Wi-Fi broadcast by its official id, returning the complete controller record including security and network configuration fields.",
     ),
+    sensitive_read_spec(
+        ToolKind::WlansList,
+        "wlans.list",
+        "Page complete legacy WLAN records and controller envelope metadata. Secret configuration fields remain available. Oversized collection reads fail explicitly at the transport bound.",
+    ),
+    sensitive_read_spec(
+        ToolKind::WlansStatus,
+        "wlans.status",
+        "Read a complete legacy WLAN detail envelope by id, including controller fields outside the compact network view. Large records move to labeled MCP content with explicit markers.",
+    ),
+    sensitive_read_spec(
+        ToolKind::WlanGroupsList,
+        "wlans.groups.list",
+        "Page user groups, WLAN groups, or AP groups for legacy WLAN configuration references. Returns full controller fields and envelope metadata where present.",
+    ),
+    write_spec(
+        ToolKind::WlansConfigure,
+        "wlans.configure",
+        "Preview or create, update, or delete a legacy WLAN with typed controller settings. Supports security and WPA3, per-device and private keys, RADIUS, radio behavior, MAC filtering, schedules, and group references. Confirmation submits once and retains full acceptance and bounded observation. The controller decides valid combinations and mutability.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     write_spec(
         ToolKind::WlansUpdate,
         "wlans.update",
@@ -1073,6 +1108,10 @@ mod tests {
         ToolKind::EventsSearch,
         ToolKind::StatsQuery,
         ToolKind::WlansUpdate,
+        ToolKind::WlansList,
+        ToolKind::WlansStatus,
+        ToolKind::WlansConfigure,
+        ToolKind::WlanGroupsList,
         ToolKind::ClientsControl,
         ToolKind::DevicesControl,
         ToolKind::GuestsStatus,
@@ -1143,6 +1182,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive kind list verifies the complete registered catalog"
+    )]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
             // Exhaustiveness anchor: a new variant must be added here or the
@@ -1213,6 +1256,10 @@ mod tests {
                 | ToolKind::EventsSearch
                 | ToolKind::StatsQuery
                 | ToolKind::WlansUpdate
+                | ToolKind::WlansList
+                | ToolKind::WlansStatus
+                | ToolKind::WlansConfigure
+                | ToolKind::WlanGroupsList
                 | ToolKind::ClientsControl
                 | ToolKind::DevicesControl
                 | ToolKind::GuestsStatus

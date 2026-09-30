@@ -50,11 +50,13 @@ use crate::{
 
 mod activity;
 mod firewall_policy_request;
+mod legacy_configuration;
+mod legacy_wlan_request;
 mod network_configuration;
 mod network_request;
-mod port_forward_configuration;
-use port_forward_configuration::{
-    PortForwardConfigureInput, PortForwardListInput, PortForwardResult, PortForwardStatusInput,
+use legacy_configuration::{
+    LegacyConfigurationListInput, LegacyConfigurationResult, LegacyConfigurationStatusInput,
+    PortForwardConfigureInput, WlanGroupsListInput, WlansConfigureInput,
 };
 mod wifi_request;
 use network_configuration::{
@@ -4602,6 +4604,18 @@ impl ToolSpec {
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
+            ToolKind::WlansList | ToolKind::PortForwardsList => {
+                tool::<LegacyConfigurationListInput, LegacyConfigurationResult>(self)
+            }
+            ToolKind::WlansStatus | ToolKind::PortForwardsStatus => {
+                tool::<LegacyConfigurationStatusInput, LegacyConfigurationResult>(self)
+            }
+            ToolKind::WlanGroupsList => {
+                tool::<WlanGroupsListInput, LegacyConfigurationResult>(self)
+            }
+            ToolKind::WlansConfigure => {
+                tool::<WlansConfigureInput, LegacyConfigurationResult>(self)
+            }
             ToolKind::WlansUpdate => tool::<WlansUpdateInput, WlansUpdateOutput>(self),
             ToolKind::ClientsControl => tool::<ClientsControlInput, ClientsControlOutput>(self),
             ToolKind::DevicesControl => tool::<DevicesControlInput, DevicesControlOutput>(self),
@@ -4610,10 +4624,8 @@ impl ToolSpec {
             ToolKind::GuestsUnauthorize => {
                 tool::<GuestsUnauthorizeInput, GuestsAuthorizeOutput>(self)
             }
-            ToolKind::PortForwardsList => tool::<PortForwardListInput, PortForwardResult>(self),
-            ToolKind::PortForwardsStatus => tool::<PortForwardStatusInput, PortForwardResult>(self),
             ToolKind::PortForwardsConfigure => {
-                tool::<PortForwardConfigureInput, PortForwardResult>(self)
+                tool::<PortForwardConfigureInput, LegacyConfigurationResult>(self)
             }
             ToolKind::PortForwardsUpdate => {
                 tool::<PortForwardsUpdateInput, PortForwardsUpdateOutput>(self)
@@ -4914,6 +4926,10 @@ impl UnifiMcp {
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
+            ToolKind::WlansList => self.wlans_list(params).await,
+            ToolKind::WlansStatus => self.wlans_status(params).await,
+            ToolKind::WlanGroupsList => self.wlan_groups_list(params).await,
+            ToolKind::WlansConfigure => self.wlans_configure(params).await,
             ToolKind::WlansUpdate => self.wlans_update(params).await,
             ToolKind::ClientsControl => self.clients_control(params).await,
             ToolKind::DevicesControl => self.devices_control(params).await,
@@ -14776,6 +14792,7 @@ mod tests {
         // Applying the same settings twice leaves the same state; the input
         // carries a passphrase and the result reports configuration.
         ("wlans.update", true, true, true),
+        ("wlans.configure", false, true, true),
         ("networks.configure", false, true, true),
         ("wifi.broadcasts.configure", false, true, true),
         // Disconnecting twice disconnects twice; no secret is involved.

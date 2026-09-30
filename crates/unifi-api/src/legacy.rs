@@ -589,6 +589,155 @@ impl LegacyClient {
         Ok((status, bytes))
     }
 
+    /// Complete legacy WLAN collection with controller envelope metadata.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn wlan_records(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        self.read_record_envelope(site, &["rest", "wlanconf"]).await
+    }
+
+    /// Complete legacy WLAN detail with controller envelope metadata.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn wlan_record(&self, site: &str, id: &str) -> Result<serde_json::Value, ApiError> {
+        self.read_record_envelope(site, &["rest", "wlanconf", id])
+            .await
+    }
+
+    /// Complete legacy WLAN group inventory for configuration references.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn wlan_groups(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        self.read_record_envelope(site, &["rest", "wlangroup"])
+            .await
+    }
+
+    /// Complete legacy user group inventory for configuration references.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn user_groups(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        self.read_record_envelope(site, &["rest", "usergroup"])
+            .await
+    }
+
+    async fn read_record_envelope(
+        &self,
+        site: &str,
+        tail: &[&str],
+    ) -> Result<serde_json::Value, ApiError> {
+        let (_, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
+                RequestClass::IdempotentRead,
+                Method::GET,
+                site,
+                tail,
+                None,
+            )
+            .await?;
+        legacy_record_envelope(&bytes)
+    }
+
+    /// Create a legacy WLAN once and retain its complete acceptance envelope.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn create_wlan(
+        &self,
+        site: &str,
+        configuration: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::POST,
+                site,
+                &["rest", "wlanconf"],
+                Some(configuration.clone()),
+            )
+            .await?;
+        Ok((status, bytes))
+    }
+
+    /// Update legacy WLAN fields once and retain its complete acceptance.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn configure_wlan(
+        &self,
+        site: &str,
+        id: &str,
+        configuration: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::PUT,
+                site,
+                &["rest", "wlanconf", id],
+                Some(configuration.clone()),
+            )
+            .await?;
+        Ok((status, bytes))
+    }
+
+    /// Delete a legacy WLAN once and retain its complete acceptance envelope.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn delete_wlan(&self, site: &str, id: &str) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::DELETE,
+                site,
+                &["rest", "wlanconf", id],
+                None,
+            )
+            .await?;
+        Ok((status, bytes))
+    }
+
+    /// Complete AP group inventory from the controller's fixed v2 route.
+    /// # Errors
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn ap_groups(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        let generation = self.ensure_session().await?;
+        match self.execute_ap_groups(site).await {
+            Err(error) if is_login_required(&error) => {
+                self.refresh_session(generation).await?;
+                self.execute_ap_groups(site).await
+            }
+            Err(ApiError::RateLimited {
+                retry_after: Some(delay),
+                ..
+            }) if delay <= MAXIMUM_RETRY_AFTER => {
+                tokio::time::sleep(delay).await;
+                self.execute_ap_groups(site).await
+            }
+            other => other,
+        }
+    }
+
+    async fn execute_ap_groups(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        let kind =
+            self.session.lock().await.kind.ok_or_else(|| {
+                ApiError::Config("session used before console detection".to_owned())
+            })?;
+        let segments: &[&str] = match kind {
+            ConsoleKind::UnifiOs => &["proxy", "network", "v2", "api", "site", site, "apgroups"],
+            ConsoleKind::Standalone => &["v2", "api", "site", site, "apgroups"],
+        };
+        let url = http::build_url(&self.base, segments, &[])?;
+        let (_, bytes) = self
+            .execute_request_bytes(
+                RequestClass::IdempotentRead,
+                self.http
+                    .get(url)
+                    .header(reqwest::header::ACCEPT, "application/json"),
+            )
+            .await?;
+        let groups: Vec<serde_json::Value> = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok(serde_json::Value::Array(groups))
+    }
+
     /// Disconnect one wireless client; it may reconnect immediately. Returns
     /// the accepted HTTP status and complete controller envelope. Never
     /// retried after an ambiguous transport result.
@@ -1368,6 +1517,14 @@ impl LegacyClient {
         if let Some(payload) = body {
             request = request.json(payload);
         }
+        self.execute_request_bytes(class, request).await
+    }
+
+    async fn execute_request_bytes(
+        &self,
+        class: RequestClass,
+        request: reqwest::RequestBuilder,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         let response = request.send().await.map_err(|error| {
             ApiError::Transport(BoundedMessage::new(&error.without_url().to_string()))
         })?;
