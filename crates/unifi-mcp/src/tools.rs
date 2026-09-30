@@ -1456,7 +1456,7 @@ struct ProtectLiveviewsConfigureOutput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
     /// Top-level fields from the local bootstrap response to include.
-    /// Large fields may exceed the response budget; request one field at a time.
+    /// Requested fields remain complete, including large values.
     detail_fields: Option<Vec<String>>,
 }
 
@@ -2423,8 +2423,7 @@ enum FirewallSection {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FirewallReadInput {
     /// Restrict the response to one section. Required to use
-    /// `sectionOffset`, and the recovery knob when the composite view
-    /// exceeds the response budget or reports a truncated section.
+    /// `sectionOffset`, to continue a truncated section scan.
     section: Option<FirewallSection>,
     /// Continuation offset into a paginated section scan (`zones` or
     /// `policies` only), taken from `nextSectionOffset`.
@@ -2434,8 +2433,7 @@ struct FirewallReadInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct NetworksReadInput {
-    /// Restrict the response to one section when the whole configuration
-    /// would exceed the response budget.
+    /// Restrict the response to one configuration section.
     section: Option<NetworksSection>,
 }
 
@@ -11156,9 +11154,7 @@ fn page_at(offset: u64) -> PageRequest {
     PageRequest { offset, limit: 200 }
 }
 
-/// Per-section rows gathered per call, sized so a ceiling-limited section
-/// still fits the response budget and can actually return with its
-/// truncation flag. A truncated section continues from its
+/// Per-section rows gathered per call. A truncated section continues from its
 /// `nextSectionOffset`, so the ceiling bounds one response, not the
 /// reachable data.
 const ZONE_SCAN_CEILING: u64 = 400;
@@ -11711,10 +11707,6 @@ fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> 
             None,
         ));
     }
-    // Bounded like every other caller-supplied string here, and for a sharper
-    // reason: this result is exempt from the response budget so a minted code
-    // can never be refused, and an unbounded label would turn that exemption
-    // into an amplifier for text the caller chose.
     let name = input.name.trim();
     if name.is_empty() || name.len() > MAXIMUM_QUERY_LENGTH {
         return Err(McpError::invalid_params(
