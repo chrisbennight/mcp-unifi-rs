@@ -48,6 +48,7 @@ pub enum ToolKind {
     AclRulesOrderingRead,
     AclRulesOrderingConfigure,
     DnsPoliciesConfigure,
+    FirewallZonesConfigure,
     TrafficListsConfigure,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
@@ -113,6 +114,7 @@ impl ToolKind {
             | Self::AclRulesConfigure
             | Self::AclRulesOrderingConfigure
             | Self::DnsPoliciesConfigure
+            | Self::FirewallZonesConfigure
             | Self::TrafficListsConfigure
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
@@ -230,6 +232,7 @@ impl ToolKind {
             | Self::AclRulesOrderingRead
             | Self::AclRulesOrderingConfigure
             | Self::DnsPoliciesConfigure
+            | Self::FirewallZonesConfigure
             | Self::TrafficListsConfigure
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
@@ -696,12 +699,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkPolicyList,
         "network.policy.list",
-        "Page through complete ACL rule, DNS policy, or traffic matching list records using a typed family selector and the documented filter query.",
+        "Page through complete ACL rule, firewall zone, DNS policy, or traffic matching list records using a typed family selector and the documented filter query.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkPolicyDetail,
         "network.policy.detail",
-        "Read one complete ACL rule, DNS policy, or traffic matching list by its official id and typed family selector.",
+        "Read one complete ACL rule, firewall zone, DNS policy, or traffic matching list by its official id and typed family selector.",
     ),
     write_spec(
         ToolKind::AclRulesConfigure,
@@ -720,6 +723,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::AclRulesOrderingConfigure,
         "acl.rules.ordering.configure",
         "Preview or replace the selected site's complete ACL rule priority ordering. Returns the accepted controller record and bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::FirewallZonesConfigure,
+        "firewall.zones.configure",
+        "Preview or create, replace, or delete a custom firewall zone with its name and network membership. Returns complete accepted controller data and bounded readback. Read zones through network.policy.list/detail with kind firewallZones.",
         ToolBehavior::write(false)
             .input_sensitive()
             .result_sensitive(),
@@ -911,6 +922,7 @@ mod tests {
         ToolKind::AclRulesOrderingRead,
         ToolKind::AclRulesOrderingConfigure,
         ToolKind::DnsPoliciesConfigure,
+        ToolKind::FirewallZonesConfigure,
         ToolKind::TrafficListsConfigure,
         ToolKind::WifiBroadcastsList,
         ToolKind::WifiBroadcastsStatus,
@@ -1039,6 +1051,7 @@ mod tests {
                 | ToolKind::AclRulesOrderingRead
                 | ToolKind::AclRulesOrderingConfigure
                 | ToolKind::DnsPoliciesConfigure
+                | ToolKind::FirewallZonesConfigure
                 | ToolKind::TrafficListsConfigure
                 | ToolKind::WifiBroadcastsList
                 | ToolKind::WifiBroadcastsStatus

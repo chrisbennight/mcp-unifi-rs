@@ -64,6 +64,7 @@ async fn policy_collections_page_complete_rows_and_support_filtering() {
     mount_site(&server).await;
     for (route, record_type) in [
         ("acl-rules", "IPV4"),
+        ("firewall/zones", "CUSTOM"),
         ("dns/policies", "A_RECORD"),
         ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
@@ -81,7 +82,12 @@ async fn policy_collections_page_complete_rows_and_support_filtering() {
             .await;
     }
     let handler = handler_for(&server);
-    for kind in ["aclRules", "dnsPolicies", "trafficMatchingLists"] {
+    for kind in [
+        "aclRules",
+        "firewallZones",
+        "dnsPolicies",
+        "trafficMatchingLists",
+    ] {
         let result = handler
             .call(
                 &call(
@@ -109,6 +115,7 @@ async fn policy_detail_routes_preserve_fields_and_upstream_errors() {
     mount_site(&server).await;
     for (route, record_type) in [
         ("acl-rules", "IPV4"),
+        ("firewall/zones", "CUSTOM"),
         ("dns/policies", "A_RECORD"),
         ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
@@ -132,7 +139,12 @@ async fn policy_detail_routes_preserve_fields_and_upstream_errors() {
         .mount(&server)
         .await;
     let handler = handler_for(&server);
-    for kind in ["aclRules", "dnsPolicies", "trafficMatchingLists"] {
+    for kind in [
+        "aclRules",
+        "firewallZones",
+        "dnsPolicies",
+        "trafficMatchingLists",
+    ] {
         let result = handler
             .call(
                 &call(

@@ -593,3 +593,193 @@ async fn acl_ordering_does_not_verify_when_acceptance_disagrees_with_request() {
     assert_eq!(output["after"]["orderedAclRuleIds"], json!([POLICY_ID]));
     assert_eq!(output["verified"], false);
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one controller fixture exercises create, replacement, detail, and deletion"
+)]
+async fn firewall_zone_lifecycle_preserves_membership_and_controller_records() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let zone = json!({"name":"Lab","networkIds":[SITE_ID]});
+    let preview = handler
+        .call(
+            &call(
+                "firewall.zones.configure",
+                json!({
+                    "operation":"create","zone":zone
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["submitted"], false);
+    assert_eq!(preview["requested"], zone);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/firewall/zones");
+    let accepted = json!({"id":POLICY_ID,"name":"Lab","networkIds":[SITE_ID],"controllerExtension":"retained"});
+    for (verb, endpoint, status) in [
+        ("POST", route.clone(), 201),
+        ("PUT", format!("{route}/{POLICY_ID}"), 200),
+    ] {
+        Mock::given(method(verb))
+            .and(path(endpoint))
+            .and(body_json(zone.clone()))
+            .respond_with(ResponseTemplate::new(status).set_body_json(accepted.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted.clone()))
+        .up_to_n_times(3)
+        .expect(3)
+        .mount(&server)
+        .await;
+    for (operation, id, status) in [("create", None, 201), ("update", Some(POLICY_ID), 200)] {
+        let mut args = json!({"operation":operation,"zone":zone,"confirm":true});
+        if let Some(id) = id {
+            args["id"] = json!(id);
+        }
+        let result = handler
+            .call(&call("firewall.zones.configure", args), None)
+            .await
+            .expect("accepted")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["kind"], "firewallZones");
+        assert_eq!(result["responseStatus"], status);
+        assert_eq!(result["accepted"], accepted);
+        assert_eq!(result["after"], accepted);
+        assert_eq!(result["verified"], true);
+    }
+    let detail = handler
+        .call(
+            &call(
+                "network.policy.detail",
+                json!({"kind":"firewallZones","id":POLICY_ID}),
+            ),
+            None,
+        )
+        .await
+        .expect("detail")
+        .structured_content
+        .expect("structured");
+    assert_eq!(detail["record"], accepted);
+    Mock::given(method("DELETE"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string("custom zone deletion accepted"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(404).set_body_string("custom zone absent"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let deleted = handler
+        .call(
+            &call(
+                "firewall.zones.configure",
+                json!({"operation":"delete","id":POLICY_ID,"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("delete")
+        .structured_content
+        .expect("structured");
+    assert_eq!(deleted["responseBody"], "custom zone deletion accepted");
+    assert_eq!(deleted["verifiedAbsent"], true);
+    assert!(
+        deleted["readbackError"]
+            .as_str()
+            .expect("upstream text")
+            .contains("custom zone absent")
+    );
+}
+
+#[tokio::test]
+async fn firewall_zone_keeps_accepted_record_when_readback_fails() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/firewall/zones");
+    let accepted = json!({"id":POLICY_ID,"name":"Empty zone","networkIds":[],
+        "controllerExtension":format!("{}zone-accepted-tail", "x".repeat(50_000))});
+    Mock::given(method("POST"))
+        .and(path(&route))
+        .and(body_json(json!({"name":"Empty zone","networkIds":[]})))
+        .respond_with(ResponseTemplate::new(201).set_body_json(accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{route}/{POLICY_ID}")))
+        .respond_with(ResponseTemplate::new(503).set_body_string("zone readback unavailable"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "firewall.zones.configure",
+                json!({
+                    "operation":"create","zone":{"name":"Empty zone","networkIds":[]},"confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted");
+    let content = serde_json::to_value(&result.content)
+        .expect("content")
+        .to_string();
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["submitted"], true);
+    assert_eq!(output["acceptedInContent"], true);
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("error")
+            .contains("zone readback unavailable")
+    );
+    assert!(content.contains("zone-accepted-tail"));
+    assert!(output.get("verified").is_none());
+}
+
+#[tokio::test]
+async fn firewall_zone_rejection_remains_the_controllers_decision() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("PUT"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/firewall/zones/{POLICY_ID}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(422).set_body_string("cannot replace a system-defined zone"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server).call(&call("firewall.zones.configure", json!({
+        "operation":"update","id":POLICY_ID,"zone":{"name":"Zone","networkIds":[]},"confirm":true
+    })), None).await.expect_err("upstream rejection");
+    assert!(
+        error
+            .message
+            .contains("cannot replace a system-defined zone")
+    );
+}

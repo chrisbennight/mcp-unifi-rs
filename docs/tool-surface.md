@@ -141,9 +141,9 @@ record. A large record is carried in MCP content and marked by
 
 ### `network.policy.list` and `network.policy.detail`
 
-These tools read [ACL rules, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
+These tools read [ACL rules, firewall zones, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
 from the official Network Integration API. Choose `kind` as `aclRules`,
-`dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
+`firewallZones`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
 (1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
 `recordsInContent`. Invalid page metadata returns the complete controller
@@ -165,6 +165,15 @@ create or update, or the complete response body and status for delete. It also
 reports the subsequent detail read and whether the requested values or
 deletion were observed. A failed readback does not erase an accepted write.
 Large values move to MCP content with a corresponding `InContent` marker.
+
+`firewall.zones.configure` previews or creates, replaces, or deletes a custom
+firewall zone. Create requires `zone: {name, networkIds}`; update also requires
+`id`; delete requires `id` without a zone body. Empty network membership is
+supported. Set `confirm: true` to submit. The complete accepted status and
+record or deletion body remain available even when bounded readback fails.
+Read complete zone records through `network.policy.list` and
+`network.policy.detail` with `kind: "firewallZones"`. The controller decides
+which zones and memberships can be changed; its rejection text is returned.
 
 `acl.rules.ordering.read` returns the complete priority ordering from the
 official ACL ordering endpoint. `acl.rules.ordering.configure` previews a full
@@ -622,6 +631,7 @@ it.
 | `acl.rules.configure` | no | yes | yes |
 | `acl.rules.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
+| `firewall.zones.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |
 | `guests.unauthorize` | **no** | no | yes |

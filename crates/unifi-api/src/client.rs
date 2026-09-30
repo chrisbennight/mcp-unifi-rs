@@ -47,6 +47,7 @@ pub enum SwitchingDetailKind {
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicyCollection {
     AclRules,
+    FirewallZones,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -321,7 +322,7 @@ impl IntegrationClient {
         Ok((status, body))
     }
 
-    /// Read one page of ACL rules, DNS policies, or traffic matching lists, retaining
+    /// Read one page of ACL rules, firewall zones, DNS policies, or traffic matching lists, retaining
     /// every field in each controller record.
     ///
     /// # Errors
@@ -338,6 +339,7 @@ impl IntegrationClient {
         match collection {
             NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+            NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones"]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.push("traffic-matching-lists");
             }
@@ -351,7 +353,7 @@ impl IntegrationClient {
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
-    /// Read one complete ACL rule, DNS policy, or traffic matching list by id.
+    /// Read one complete ACL rule, firewall zone, DNS policy, or traffic matching list by id.
     ///
     /// # Errors
     ///
@@ -366,6 +368,7 @@ impl IntegrationClient {
         match collection {
             NetworkPolicyCollection::AclRules => segments.extend(["acl-rules", id]),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies", id]),
+            NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones", id]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.extend(["traffic-matching-lists", id]);
             }
@@ -373,7 +376,7 @@ impl IntegrationClient {
         self.get_json(&segments, &[]).await
     }
 
-    /// Create an ACL rule, DNS policy, or traffic matching list. The complete accepted
+    /// Create an ACL rule, firewall zone, DNS policy, or traffic matching list. The complete accepted
     /// record and HTTP status are retained; an ambiguous transport result is
     /// never retried.
     ///
@@ -390,7 +393,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Replace one ACL rule, DNS policy, or traffic matching list by id. The complete
+    /// Replace one ACL rule, firewall zone, DNS policy, or traffic matching list by id. The complete
     /// accepted record and HTTP status are retained; an ambiguous transport
     /// result is never retried.
     ///
@@ -408,7 +411,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Delete one ACL rule, DNS policy, or traffic matching list by id. The accepted
+    /// Delete one ACL rule, firewall zone, DNS policy, or traffic matching list by id. The accepted
     /// status and body are retained even though the API documents no success
     /// body. An ambiguous transport result is never retried.
     ///
@@ -1130,6 +1133,7 @@ fn policy_segments<'a>(
     match collection {
         NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
         NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+        NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones"]),
         NetworkPolicyCollection::TrafficMatchingLists => {
             segments.push("traffic-matching-lists");
         }
