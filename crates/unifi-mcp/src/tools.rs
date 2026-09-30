@@ -2549,6 +2549,7 @@ struct NetworkSwitchingDetailOutput {
 #[serde(rename_all = "camelCase")]
 enum NetworkPolicyKind {
     AclRules,
+    FirewallZones,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -2557,6 +2558,7 @@ impl NetworkPolicyKind {
     const fn collection(self) -> NetworkPolicyCollection {
         match self {
             Self::AclRules => NetworkPolicyCollection::AclRules,
+            Self::FirewallZones => NetworkPolicyCollection::FirewallZones,
             Self::DnsPolicies => NetworkPolicyCollection::DnsPolicies,
             Self::TrafficMatchingLists => NetworkPolicyCollection::TrafficMatchingLists,
         }
@@ -2604,6 +2606,23 @@ struct NetworkPolicyDetailOutput {
     record: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     record_in_content: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallZoneRequest {
+    name: String,
+    network_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallZonesConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    zone: Option<FirewallZoneRequest>,
+    #[serde(default)]
+    confirm: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -4376,6 +4395,9 @@ impl ToolSpec {
             ToolKind::AclRulesOrderingConfigure => {
                 tool::<AclRulesOrderingConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::FirewallZonesConfigure => {
+                tool::<FirewallZonesConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
             ToolKind::DnsPoliciesConfigure => {
                 tool::<DnsPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
@@ -4723,6 +4745,7 @@ impl UnifiMcp {
             }
             ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
             ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
+            ToolKind::FirewallZonesConfigure => self.firewall_zones_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
             ToolKind::TrafficListsConfigure => self.traffic_lists_configure(params).await,
             ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
@@ -7746,6 +7769,26 @@ impl UnifiMcp {
         })
     }
 
+    async fn firewall_zones_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<FirewallZonesConfigureInput>(params)?;
+        let requested = input
+            .zone
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let plan = policy_write_plan(
+            NetworkPolicyKind::FirewallZones,
+            input.operation,
+            input.id,
+            requested,
+            input.confirm,
+        )?;
+        self.network_policy_write(plan).await
+    }
+
     async fn dns_policies_configure(
         &self,
         params: &CallToolRequestParams,
@@ -8034,10 +8077,10 @@ impl UnifiMcp {
             kind: plan.kind,
             operation: plan.operation,
             consequence: match plan.operation {
-                NetworkPolicyWriteOperation::Create => "create another policy or list",
-                NetworkPolicyWriteOperation::Update => "replace the named policy or list",
+                NetworkPolicyWriteOperation::Create => "create another policy, zone, or list",
+                NetworkPolicyWriteOperation::Update => "replace the named policy, zone, or list",
                 NetworkPolicyWriteOperation::Delete => {
-                    "delete the named policy or list and change rules that depend on it"
+                    "delete the named policy, zone, or list and change rules that depend on it"
                 }
             },
             id: plan.id,
@@ -14300,6 +14343,7 @@ mod tests {
         ("acl.rules.ordering.configure", false, true, true),
         ("firewall.policies.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
+        ("firewall.zones.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.
         ("guests.authorize", false, false, true),
