@@ -574,6 +574,8 @@ async fn traffic_source_errors_preserve_original_bodies_and_unsupported_status()
         (429, "graph", GRAPH),
         (503, "wan", WAN),
         (404, "activity", TRAFFIC),
+        (404, "wan", WAN),
+        (405, "wan", WAN),
     ] {
         let server = MockServer::start().await;
         login_mock(&server).await;
@@ -596,23 +598,22 @@ async fn traffic_source_errors_preserve_original_bodies_and_unsupported_status()
                 None,
             )
             .await;
-        if status == 404 {
-            let result = result.expect("unsupported source");
-            let output = result.structured_content.expect("structured");
-            assert_eq!(output["status"], "unsupported");
-            assert_eq!(output["errorInContent"], true);
-            assert!(
-                result
-                    .content
-                    .iter()
-                    .filter_map(|block| block.as_text())
-                    .any(|text| text.text.contains(&body))
-            );
-        } else {
-            let error = result.expect_err("original upstream failure");
-            assert!(error.message.contains(&body), "{}", error.message);
-            assert!(error.message.contains(&status.to_string()));
-        }
+        let result = result.expect("source result with original error");
+        let output = result.structured_content.expect("structured");
+        let unsupported = matches!(status, 404 | 405);
+        assert_eq!(
+            output["status"],
+            if unsupported { "unsupported" } else { "failed" }
+        );
+        assert_eq!(result.is_error, Some(!unsupported));
+        assert_eq!(output["errorInContent"], true);
+        assert!(
+            result
+                .content
+                .iter()
+                .filter_map(|block| block.as_text())
+                .any(|text| text.text.contains(&body) && text.text.contains(&status.to_string()))
+        );
         assert_eq!(server.received_requests().await.expect("requests").len(), 2);
     }
 }

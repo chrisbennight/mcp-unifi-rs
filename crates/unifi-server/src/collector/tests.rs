@@ -114,6 +114,38 @@ fn archive_preserves_unknown_fields_names_and_numeric_spelling() {
     assert!(body.contains("unmatched_tx_bytes=-10"));
     assert!(body.contains("collected=true"));
     assert!(body.contains("client_rx_bytes=700u"));
+    let long_name = "name ".repeat(14_000);
+    let original = report
+        .activity
+        .data
+        .as_ref()
+        .unwrap()
+        .get()
+        .replace(&"name ".repeat(700), &long_name);
+    report.activity.data = Some(serde_json::value::RawValue::from_string(original).unwrap());
+    let publication = Publication::build(&report, "test").unwrap();
+    let body = publication.batches.concat();
+    assert!(body.contains("name_in_archive=true"));
+    assert!(body.contains("collected=true"));
+    assert!(body.contains("client_rx_bytes=700u"));
+    let restored: Vec<u8> = body
+        .lines()
+        .filter(|line| line.starts_with("unifi_archive,"))
+        .flat_map(|line| {
+            STANDARD
+                .decode(
+                    line.split(" data=\"")
+                        .nth(1)
+                        .unwrap()
+                        .split('"')
+                        .next()
+                        .unwrap(),
+                )
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(restored, serde_json::to_vec(&report).unwrap());
+    assert!(String::from_utf8(restored).unwrap().contains(&long_name));
 }
 
 #[test]

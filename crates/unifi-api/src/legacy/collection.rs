@@ -111,10 +111,26 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         let body = serde_json::json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"], "start":window.start,"end":window.end});
         let read = self.collect_wan_bytes(site, &body).await;
-        let bytes = match read {
+        let read = match read {
             Err(error) if is_login_required(&error) => {
                 self.refresh_session(generation).await?;
-                self.collect_wan_bytes(site, &body).await?
+                self.collect_wan_bytes(site, &body).await
+            }
+            other => other,
+        };
+        let bytes = match read {
+            Err(
+                error @ (ApiError::Status {
+                    status: 404 | 405, ..
+                }
+                | ApiError::Rejected {
+                    status: Some(404 | 405),
+                    ..
+                }),
+            ) => {
+                return Ok(ActivityRead::Unsupported {
+                    response: Some(error),
+                });
             }
             other => other?,
         };
