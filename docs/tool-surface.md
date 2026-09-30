@@ -347,9 +347,10 @@ metadata, so an agent can inspect a frame without receiving a base64 string
 as text. The `channel` input chooses `main` (default) or `package`; the latter
 is for cameras with a package camera. `highQuality` requests 1080p or higher
 when available. A response above 4 MiB fails explicitly.
-A nonempty invalid JPEG returns the accepted controller response with the
-decoder diagnostic. Non-UTF-8 bytes use base64; valid UTF-8 stays as text.
-The same behavior applies to event thumbnails.
+JPEG-typed bodies are returned byte for byte without pixel decoding or local
+image dimension limits. A response with another media type retains the complete
+controller body in its error; non-UTF-8 bytes use base64. The same behavior
+applies to event thumbnails.
 
 ### `protect.devices.list` and `protect.devices.status`
 
@@ -601,8 +602,8 @@ available. Use
 `detailFields` to select named controller fields when only part of an event's
 detail is needed; it can be used without `includeDetails`. Use
 `protect.event.thumbnail` with an event id from the result to fetch its image
-as MCP image content. The thumbnail read uses the same local session, checks
-the JPEG format, and fails explicitly when the controller has no image for
+as MCP image content. The thumbnail read uses the same local session, accepts
+the JPEG media type, and fails explicitly when the controller has no image for
 that event.
 
 The first call accepts `lastHours` (default 24), or an explicit `start` and
