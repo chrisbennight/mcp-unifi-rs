@@ -555,6 +555,34 @@ after that window. The server never retries a POST after an ambiguous transport
 result. An upstream 409 in-progress conflict retains its status and complete
 body. Input and result sensitivity metadata tells the gateway what to govern.
 
+### `protect.updates`
+
+Observe the official Protect device or event WebSocket subscription with
+`source: "devices"` or `"events"`. The observation window includes connection
+setup. `durationMs` accepts 1-20000, default 1000, and must leave one second
+within the server request deadline. `maxMessages` accepts 1-200, default 50;
+`maxBytes` accepts 1-4194304, default 65536.
+
+Each message retains its entire original payload, including unknown fields.
+Text uses `encoding: "utf8"`; binary data uses `encoding: "base64"`. Large
+results put the complete message array in MCP content and set
+`messagesInContent`. Complete upstream HTTP errors similarly move to content
+with `errorInContent` when needed. The gateway controls disclosure.
+
+`end` distinguishes `windowComplete`, `messageLimit`, `byteLimit`, `closed`,
+`failed`, and `unsupported`. A quiet connected stream returns an empty array
+and `windowComplete`. A close includes the upstream code and reason when
+present. Failures and byte limits retain previously collected messages and
+report their diagnostic; `omittedMessageBytes` identifies a complete message
+that exceeded the remaining batch budget. Oversized protocol messages report
+the library's size-limit error. Limits never claim that the live stream ended.
+
+This tool uses the configured console origin, API key, and TLS policy. It does
+not reconnect or promise replay: each call starts a new live observation,
+and changes between calls may be missed. Use `protect.events` for historical
+records when its local API is configured. The fixed subscription routes follow
+the [Protect API contract](https://developer.ui.com/protect/v7.3.70/openapi.json).
+
 ### `protect.viewers.list/status` and `protect.liveviews.list/status`
 
 These tools read viewer devices and live-view configurations from the Protect

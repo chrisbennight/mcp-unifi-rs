@@ -22,6 +22,12 @@ use zeroize::Zeroizing;
 
 use crate::{ApiError, BoundedMessage, ControllerConfig, TlsMode, http};
 
+mod subscription;
+pub use subscription::{
+    ProtectSubscriptionBatch, ProtectSubscriptionEnd, ProtectSubscriptionMessage,
+    ProtectSubscriptionSource,
+};
+
 /// Path prefix every request lives under on the console origin.
 const PREFIX: [&str; 4] = ["proxy", "protect", "integration", "v1"];
 const MAXIMUM_DEVICE_IDENTIFIER_BYTES: usize = 256;

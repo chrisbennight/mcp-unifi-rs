@@ -26,6 +26,10 @@ tools, gateway server name `unifi-protect`); each surface is a separate
 deployment of the same image with its own credentials, identity JWT audience,
 and gateway manifest, and neither process reads the other's configuration.
 The local account is required for Network and optional for Protect enrichment.
+Protect live updates use the official device and event subscriptions through
+the same HTTP client's upgraded connection. This preserves its API key and
+configured TLS roots or pins. Each call observes a finite window and reports
+quiet windows, closure, failure, and count or byte limits separately.
 
 ## Crates
 

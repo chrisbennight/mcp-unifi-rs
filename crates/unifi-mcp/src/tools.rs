@@ -54,10 +54,12 @@ mod legacy_configuration;
 mod legacy_wlan_request;
 mod network_configuration;
 mod network_request;
+mod protect_updates;
 use legacy_configuration::{
     LegacyConfigurationListInput, LegacyConfigurationResult, LegacyConfigurationStatusInput,
     PortForwardConfigureInput, WlanGroupsListInput, WlansConfigureInput,
 };
+use protect_updates::{ProtectUpdatesInput, ProtectUpdatesOutput};
 mod wifi_request;
 use network_configuration::{
     ConfigurationResult, NetworksConfigureInput, NetworksListInput, NetworksStatusInput,
@@ -4598,6 +4600,7 @@ impl ToolSpec {
             }
             ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewOutput>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
+            ToolKind::ProtectUpdates => tool::<ProtectUpdatesInput, ProtectUpdatesOutput>(self),
             ToolKind::ProtectEventThumbnail => {
                 tool::<ProtectEventThumbnailInput, ProtectEventThumbnailOutput>(self)
             }
@@ -4922,6 +4925,7 @@ impl UnifiMcp {
             ToolKind::CamerasTalkbackStart => self.cameras_talkback_start(params).await,
             ToolKind::ProtectOverview => self.protect_overview(params).await,
             ToolKind::ProtectEvents => self.protect_events_search(params).await,
+            ToolKind::ProtectUpdates => self.protect_updates(params).await,
             ToolKind::ProtectEventThumbnail => self.protect_event_thumbnail(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
@@ -14746,9 +14750,16 @@ mod tests {
             "code": "controller-code",
             "large":"x".repeat(60000),
         });
-        let result = structured(supplied.clone()).expect("built result");
+        let mut result = structured(supplied.clone()).expect("built result");
+        result.is_error = Some(true);
+        result
+            .content
+            .push(rmcp::model::ContentBlock::text("complete upstream detail"));
+        let original_content = result.content.clone();
         let returned = trust_annotated(result, ToolBehavior::read());
         assert_eq!(returned.structured_content, Some(supplied));
+        assert_eq!(returned.is_error, Some(true));
+        assert_eq!(returned.content, original_content);
     }
 
     #[test]
