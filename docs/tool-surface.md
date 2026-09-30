@@ -733,6 +733,7 @@ it.
 | `guests.authorize` | **no** | no | yes |
 | `guests.unauthorize` | **no** | no | yes |
 | `port_forwards.update` | yes | no | yes |
+| `port_forwards.configure` | no | yes | yes |
 | `firewall.policies.update` | yes | no | yes |
 | `firewall.policies.delete` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
@@ -821,6 +822,37 @@ results.
 the source, target, ports, and protocol. Its preview shows the requested
 values and warns when the match or target changes; confirmed changes read the
 rule back and report any field the controller dropped or changed.
+
+### Port-forward lifecycle and complete reads
+
+`port_forwards.list` pages complete legacy records with `offset` and `limit`
+(1–200, default 50). The legacy collection is fetched once within the transport
+body bound, then the selected records are returned under `response.data`.
+`totalCount` and `nextOffset` describe that collection; controller envelope
+metadata is preserved. An oversized collection fails explicitly rather than
+silently losing records. `port_forwards.status` takes `id` and returns the
+complete detail envelope, including fields outside the compact firewall view.
+
+`port_forwards.configure` takes `operation` (`create`, `update`, `delete`),
+optional `id`, optional typed `configuration`, and `confirm` (default false).
+Creation requires configuration without a path id; update requires both; delete
+requires an id without configuration. A preview makes no controller request.
+Configuration uses the controller's field names: `_id`, `name`, `enabled`,
+`src`, `fwd`, `fwd_port`, `dst_port`, `proto`, `destination_ip`, `log`,
+`pfwd_interface`, `site_id`, `attr_hidden`, `attr_hidden_id`, `attr_no_delete`,
+and `attr_no_edit`. Missing fields are omitted from the submitted body. The
+controller decides accepted values, attribute mutability, and configuration
+validity. Requests are bounded to 1 MiB before submission.
+
+Confirmation submits once and retains the accepted `responseStatus` and exact
+`responseBody`. Bounded readback returns the complete envelope in `after`.
+`verified` means a single observed record has the expected id and requested
+fields. Deletion reports `verifiedAbsent` only for an empty detail envelope or
+an upstream HTTP 404; the latter response remains in `readbackError`. Failed
+observation does not discard acceptance. Large `response`, `requested`,
+`responseBody`, `after`, and `readbackError` values move to labeled MCP content
+with corresponding `...InContent` markers. Upstream errors are returned in full
+within the transport body bound. The gateway owns authorization and disclosure.
 
 ### Voucher creation and lifecycle
 

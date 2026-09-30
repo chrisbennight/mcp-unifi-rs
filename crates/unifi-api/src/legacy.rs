@@ -144,9 +144,8 @@ struct ProtectCameraBootstrap {
 
 /// Every property one controller record stores, held for comparison only.
 ///
-/// The values are private: a consumer can ask which property names differ
-/// between two readings and nothing else, so the unmodeled parts of a
-/// controller record never cross this crate's boundary. Comparison is on the
+/// Fingerprint consumers ask which property names differ between two readings.
+/// Complete record readers expose the controller values separately. Comparison is on the
 /// values themselves rather than a hash of them, so it cannot report two
 /// different records as identical.
 pub struct RecordFingerprint(serde_json::Map<String, serde_json::Value>);
@@ -481,6 +480,113 @@ impl LegacyClient {
             )
             .await?;
         Ok((status, response))
+    }
+
+    /// Complete port-forward collection envelope, including controller metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn port_forward_records(&self, site: &str) -> Result<serde_json::Value, ApiError> {
+        let (_, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
+                RequestClass::IdempotentRead,
+                Method::GET,
+                site,
+                &["rest", "portforward"],
+                None,
+            )
+            .await?;
+        legacy_record_envelope(&bytes)
+    }
+
+    /// Complete port-forward detail envelope, including controller metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn port_forward_record(
+        &self,
+        site: &str,
+        id: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        let (_, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
+                RequestClass::IdempotentRead,
+                Method::GET,
+                site,
+                &["rest", "portforward", id],
+                None,
+            )
+            .await?;
+        legacy_record_envelope(&bytes)
+    }
+
+    /// Create a port forward once and retain its complete acceptance envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn create_port_forward(
+        &self,
+        site: &str,
+        configuration: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::POST,
+                site,
+                &["rest", "portforward"],
+                Some(configuration.clone()),
+            )
+            .await?;
+        Ok((status, bytes))
+    }
+
+    /// Replace specified port-forward fields once and retain its full acceptance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn configure_port_forward(
+        &self,
+        site: &str,
+        id: &str,
+        configuration: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::PUT,
+                site,
+                &["rest", "portforward", id],
+                Some(configuration.clone()),
+            )
+            .await?;
+        Ok((status, bytes))
+    }
+
+    /// Delete a port forward once and retain its complete acceptance envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for session, transport, or controller failures.
+    pub async fn delete_port_forward(
+        &self,
+        site: &str,
+        id: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let (_, status, bytes) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::DELETE,
+                site,
+                &["rest", "portforward", id],
+                None,
+            )
+            .await?;
+        Ok((status, bytes))
     }
 
     /// Disconnect one wireless client; it may reconnect immediately. Returns
@@ -1156,17 +1262,16 @@ impl LegacyClient {
             .execute_with_status_bytes(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
-            // Only a read is reissued. The session is refreshed either way so
-            // the next call starts clean, but a write is never sent twice on
-            // the strength of an expiry report: whatever the client concludes
-            // from a failed write, it cannot know the controller did not
-            // apply it, and one surfaced failure the caller can retry is
-            // cheaper than a configuration change applied twice.
+            // Only a read is reissued. Session refresh records its failure for
+            // subsequent calls, but must never replace the controller's
+            // original mutation response. A rejected write is not replayed:
+            // an expiry report does not prove the write had no effect.
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                let refresh = self.refresh_session(generation).await;
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
+                refresh?;
                 self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }
@@ -1410,6 +1515,22 @@ impl LegacyClient {
             session.csrf = Some(token);
         }
     }
+}
+
+fn legacy_record_envelope(bytes: &[u8]) -> Result<serde_json::Value, ApiError> {
+    let envelope: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|error| crate::error::decode_failure(&error, bytes))?;
+    if envelope
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .is_none()
+    {
+        return Err(crate::error::decode_failure(
+            &"record envelope contains no data array",
+            bytes,
+        ));
+    }
+    Ok(envelope)
 }
 
 fn legacy_detail_row<T>(rows: Vec<T>, bytes: &[u8], kind: &str) -> Result<T, ApiError> {

@@ -61,6 +61,10 @@ network configurations, including the controller's force deletion option.
 including standard and IoT settings, enterprise RADIUS, multiple keys, and
 the controller's force deletion option.
 
+`port_forwards.list/status` expose full legacy records and envelope metadata.
+`port_forwards.configure` provides typed creation, field updates, and deletion,
+with complete accepted responses and bounded observation.
+
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
