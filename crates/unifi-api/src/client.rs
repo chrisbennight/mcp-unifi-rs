@@ -47,6 +47,7 @@ pub enum SwitchingDetailKind {
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicyCollection {
     AclRules,
+    FirewallZones,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -321,7 +322,7 @@ impl IntegrationClient {
         Ok((status, body))
     }
 
-    /// Read one page of ACL rules, DNS policies, or traffic matching lists, retaining
+    /// Read one page of ACL rules, firewall zones, DNS policies, or traffic matching lists, retaining
     /// every field in each controller record.
     ///
     /// # Errors
@@ -338,6 +339,7 @@ impl IntegrationClient {
         match collection {
             NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+            NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones"]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.push("traffic-matching-lists");
             }
@@ -351,7 +353,7 @@ impl IntegrationClient {
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
-    /// Read one complete ACL rule, DNS policy, or traffic matching list by id.
+    /// Read one complete ACL rule, firewall zone, DNS policy, or traffic matching list by id.
     ///
     /// # Errors
     ///
@@ -366,6 +368,7 @@ impl IntegrationClient {
         match collection {
             NetworkPolicyCollection::AclRules => segments.extend(["acl-rules", id]),
             NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies", id]),
+            NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones", id]),
             NetworkPolicyCollection::TrafficMatchingLists => {
                 segments.extend(["traffic-matching-lists", id]);
             }
@@ -373,7 +376,7 @@ impl IntegrationClient {
         self.get_json(&segments, &[]).await
     }
 
-    /// Create an ACL rule, DNS policy, or traffic matching list. The complete accepted
+    /// Create an ACL rule, firewall zone, DNS policy, or traffic matching list. The complete accepted
     /// record and HTTP status are retained; an ambiguous transport result is
     /// never retried.
     ///
@@ -390,7 +393,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Replace one ACL rule, DNS policy, or traffic matching list by id. The complete
+    /// Replace one ACL rule, firewall zone, DNS policy, or traffic matching list by id. The complete
     /// accepted record and HTTP status are retained; an ambiguous transport
     /// result is never retried.
     ///
@@ -408,7 +411,7 @@ impl IntegrationClient {
             .await
     }
 
-    /// Delete one ACL rule, DNS policy, or traffic matching list by id. The accepted
+    /// Delete one ACL rule, firewall zone, DNS policy, or traffic matching list by id. The accepted
     /// status and body are retained even though the API documents no success
     /// body. An ambiguous transport result is never retried.
     ///
@@ -454,6 +457,48 @@ impl IntegrationClient {
             .send(
                 self.request(Method::PUT, &["sites", site_id, "acl-rules", "ordering"])?
                     .json(&serde_json::json!({"orderedAclRuleIds": ordered_acl_rule_ids})),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let record = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((status, record))
+    }
+
+    /// Read the complete user-defined firewall policy ordering, including its
+    /// positions before and after system-defined policies.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn firewall_policy_ordering(&self, site_id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "firewall", "policies", "ordering"], &[])
+            .await
+    }
+
+    /// Replace the user-defined firewall policy ordering. Returns the complete
+    /// accepted record and status without retrying ambiguous writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn replace_firewall_policy_ordering(
+        &self,
+        site_id: &str,
+        before_system_defined: &[String],
+        after_system_defined: &[String],
+    ) -> Result<(u16, Value), ApiError> {
+        let response = self
+            .send(
+                self.request(
+                    Method::PUT,
+                    &["sites", site_id, "firewall", "policies", "ordering"],
+                )?
+                .json(&serde_json::json!({"orderedFirewallPolicyIds": {
+                    "beforeSystemDefined": before_system_defined,
+                    "afterSystemDefined": after_system_defined,
+                }})),
             )
             .await?;
         let status = response.status().as_u16();
@@ -1178,6 +1223,7 @@ fn policy_segments<'a>(
     match collection {
         NetworkPolicyCollection::AclRules => segments.push("acl-rules"),
         NetworkPolicyCollection::DnsPolicies => segments.extend(["dns", "policies"]),
+        NetworkPolicyCollection::FirewallZones => segments.extend(["firewall", "zones"]),
         NetworkPolicyCollection::TrafficMatchingLists => {
             segments.push("traffic-matching-lists");
         }
