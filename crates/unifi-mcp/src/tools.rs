@@ -8201,7 +8201,14 @@ impl UnifiMcp {
                                 output.verified = Some(
                                     after.get("id").and_then(Value::as_str) == Some(id.as_str())
                                         && accepted_id.as_deref() == Some(id.as_str())
-                                        && requested_json_matches(requested, &after),
+                                        && if matches!(
+                                            output.kind,
+                                            NetworkPolicyKind::FirewallPolicies
+                                        ) {
+                                            firewall_policy_request::matches(requested, &after)
+                                        } else {
+                                            requested_json_matches(requested, &after)
+                                        },
                                 );
                                 output.after = Some(after);
                             }
