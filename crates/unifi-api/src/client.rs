@@ -711,7 +711,24 @@ impl IntegrationClient {
         site_id: &str,
         page: PageRequest,
     ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
-        self.get_json_with_response(&["sites", site_id, "radius", "profiles"], &page_query(page))
+        self.radius_profile_records(site_id, page, None).await
+    }
+
+    /// Page complete RADIUS profiles with the documented filter expression.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn radius_profile_records(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites", site_id, "radius", "profiles"], &query)
             .await
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
