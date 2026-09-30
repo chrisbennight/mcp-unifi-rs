@@ -888,7 +888,13 @@ async fn firewall_policies_decode_the_allowlisted_projection() {
         .expect("policies");
     assert_eq!(page.data[0].id, "p1");
     assert_eq!(page.data[0].enabled, Some(true));
-    assert_eq!(page.data[0].action.as_deref(), Some("ALLOW"));
+    assert_eq!(
+        page.data[0]
+            .action
+            .as_ref()
+            .and_then(serde_json::Value::as_str),
+        Some("ALLOW")
+    );
 }
 
 #[tokio::test]

@@ -1097,6 +1097,53 @@ async fn every_enable_write_says_the_whole_policy_is_resent() {
 }
 
 #[tokio::test]
+async fn current_policy_shapes_preview_and_round_trip_without_losing_nested_fields() {
+    let server = MockServer::start().await;
+    let mut before = stored(true, "ALLOW");
+    before["action"] = serde_json::json!({"type":"ALLOW","allowReturnTraffic":true});
+    before["ipProtocolScope"] = serde_json::json!({"ipVersion":"IPV4_AND_IPV6","protocolFilter":{
+        "type":"NAMED_PROTOCOL","matchOpposite":false,"protocol":{"name":"tcp"}
+    }});
+    before["index"] = serde_json::json!(-10);
+    let mut after = before.clone();
+    after["enabled"] = serde_json::json!(false);
+    reads(&server, &before, &after).await;
+    accepts_the_write(&server, &after).await;
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"enabled":false},"confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("replacement")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["policy"]["action"], "ALLOW");
+    assert_eq!(output["policy"]["ipProtocolScope"], "IPV4_AND_IPV6");
+    assert_eq!(output["policy"]["index"], -10);
+    assert_eq!(output["verified"], true);
+    assert!(
+        output["warnings"]
+            .to_string()
+            .contains("withdraws this policy")
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            output["beforeResponse"].as_str().expect("before")
+        )
+        .expect("JSON"),
+        before
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(output["afterResponse"].as_str().expect("after"))
+            .expect("JSON"),
+        after
+    );
+}
+
+#[tokio::test]
 async fn logging_preview_reports_the_flag_without_sending_a_patch() {
     let server = MockServer::start().await;
     let before = stored(true, "ALLOW");

@@ -266,12 +266,14 @@ pub struct FirewallPolicy {
     pub name: Option<String>,
     pub enabled: Option<bool>,
     pub logging_enabled: Option<bool>,
-    pub action: Option<String>,
+    /// Earlier controllers report a string; current controllers report an
+    /// object with a `type` discriminator and action settings.
+    pub action: Option<serde_json::Value>,
     /// Evaluation order.
-    pub index: Option<u32>,
+    pub index: Option<i32>,
     /// Which IP protocols the policy matches. The policy record names this
     /// `ipProtocolScope`.
-    pub ip_protocol_scope: Option<String>,
+    pub ip_protocol_scope: Option<serde_json::Value>,
     pub source: Option<PolicyEndpoint>,
     pub destination: Option<PolicyEndpoint>,
 }

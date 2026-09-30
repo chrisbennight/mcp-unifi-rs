@@ -3232,7 +3232,7 @@ struct PolicyView {
     action: Option<String>,
     /// Evaluation order.
     #[serde(skip_serializing_if = "Option::is_none")]
-    index: Option<u32>,
+    index: Option<i32>,
     /// Which IP protocols the policy matches.
     #[serde(skip_serializing_if = "Option::is_none")]
     ip_protocol_scope: Option<String>,
@@ -7412,9 +7412,17 @@ impl UnifiMcp {
                     name: policy.name,
                     enabled: policy.enabled,
                     logging_enabled: policy.logging_enabled,
-                    action: policy.action,
+                    action: policy
+                        .action
+                        .as_ref()
+                        .and_then(|value| firewall_attribute_name(value, "type"))
+                        .map(str::to_owned),
                     index: policy.index,
-                    ip_protocol_scope: policy.ip_protocol_scope,
+                    ip_protocol_scope: policy
+                        .ip_protocol_scope
+                        .as_ref()
+                        .and_then(|value| firewall_attribute_name(value, "ipVersion"))
+                        .map(str::to_owned),
                     source_zone_id: policy.source.as_ref().and_then(|side| side.zone_id.clone()),
                     source_port: policy.source.as_ref().and_then(|side| side.port.clone()),
                     destination_zone_id: policy
@@ -11431,8 +11439,14 @@ fn parsed_record(raw: &BTreeMap<String, Box<serde_json::value::RawValue>>) -> Ma
         .collect()
 }
 
-/// The policy as `firewall.read` reports it, built from the same record the
-/// write round-trips so both surfaces describe one reading.
+/// Read an earlier scalar attribute or the current object's discriminator.
+fn firewall_attribute_name<'a>(value: &'a Value, discriminator: &str) -> Option<&'a str> {
+    value
+        .as_str()
+        .or_else(|| value.get(discriminator).and_then(Value::as_str))
+}
+
+/// Build the compact policy summary from the record retained by the workflow.
 fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView {
     let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
     let endpoint = |side: &str, key: &str| {
@@ -11448,12 +11462,18 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
         name: text("name"),
         enabled: record.get("enabled").and_then(Value::as_bool),
         logging_enabled: record.get("loggingEnabled").and_then(Value::as_bool),
-        action: text("action"),
+        action: record
+            .get("action")
+            .and_then(|value| firewall_attribute_name(value, "type"))
+            .map(str::to_owned),
         index: record
             .get("index")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok()),
-        ip_protocol_scope: text("ipProtocolScope"),
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok()),
+        ip_protocol_scope: record
+            .get("ipProtocolScope")
+            .and_then(|value| firewall_attribute_name(value, "ipVersion"))
+            .map(str::to_owned),
         source_zone_id: endpoint("source", "zoneId"),
         source_port: endpoint("source", "port"),
         destination_zone_id: endpoint("destination", "zoneId"),
@@ -11563,7 +11583,7 @@ fn firewall_policy_warnings(wanted: bool, record: &Map<String, Value>) -> Vec<St
     }
     let action = record
         .get("action")
-        .and_then(Value::as_str)
+        .and_then(|value| firewall_attribute_name(value, "type"))
         .map(str::to_ascii_lowercase);
     let warning = match (action.as_deref(), wanted) {
         (Some("block" | "reject" | "drop"), false) => {
