@@ -286,7 +286,7 @@ impl IntegrationClient {
             }),
         )
         .await
-        .map(|(record, _)| record)
+        .map(|(record, _, _)| record)
     }
 
     /// Read the full adopted device record for mutation readback.
@@ -462,6 +462,48 @@ impl IntegrationClient {
             .send(
                 self.request(Method::PUT, &["sites", site_id, "acl-rules", "ordering"])?
                     .json(&serde_json::json!({"orderedAclRuleIds": ordered_acl_rule_ids})),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let record = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((status, record))
+    }
+
+    /// Read the complete user-defined firewall policy ordering, including its
+    /// positions before and after system-defined policies.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn firewall_policy_ordering(&self, site_id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "firewall", "policies", "ordering"], &[])
+            .await
+    }
+
+    /// Replace the user-defined firewall policy ordering. Returns the complete
+    /// accepted record and status without retrying ambiguous writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn replace_firewall_policy_ordering(
+        &self,
+        site_id: &str,
+        before_system_defined: &[String],
+        after_system_defined: &[String],
+    ) -> Result<(u16, Value), ApiError> {
+        let response = self
+            .send(
+                self.request(
+                    Method::PUT,
+                    &["sites", site_id, "firewall", "policies", "ordering"],
+                )?
+                .json(&serde_json::json!({"orderedFirewallPolicyIds": {
+                    "beforeSystemDefined": before_system_defined,
+                    "afterSystemDefined": after_system_defined,
+                }})),
             )
             .await?;
         let status = response.status().as_u16();
@@ -716,9 +758,9 @@ impl IntegrationClient {
         site_id: &str,
         client_id: &str,
         limits: GuestAuthorizationLimits,
-    ) -> Result<GuestActionResponse, ApiError> {
+    ) -> Result<(GuestActionResponse, u16, Vec<u8>), ApiError> {
         validate_guest_limits(&limits)?;
-        let (result, bytes): (GuestActionResponse, Vec<u8>) = self
+        let (result, status, bytes): (GuestActionResponse, u16, Vec<u8>) = self
             .post_action_result(
                 &["sites", site_id, "clients", client_id, "actions"],
                 &ClientAction::AuthorizeGuestAccess { limits },
@@ -732,7 +774,7 @@ impl IntegrationClient {
             }
             .with_controller_response(&bytes));
         }
-        Ok(result)
+        Ok((result, status, bytes))
     }
 
     /// Unauthorize and disconnect one guest. Never retried.
@@ -744,8 +786,8 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         client_id: &str,
-    ) -> Result<GuestActionResponse, ApiError> {
-        let (result, bytes): (GuestActionResponse, Vec<u8>) = self
+    ) -> Result<(GuestActionResponse, u16, Vec<u8>), ApiError> {
+        let (result, status, bytes): (GuestActionResponse, u16, Vec<u8>) = self
             .post_action_result(
                 &["sites", site_id, "clients", client_id, "actions"],
                 &ClientAction::UnauthorizeGuestAccess,
@@ -759,7 +801,7 @@ impl IntegrationClient {
             }
             .with_controller_response(&bytes));
         }
-        Ok(result)
+        Ok((result, status, bytes))
     }
 
     /// # Errors
@@ -834,14 +876,18 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         request: &VoucherCreate,
-    ) -> Result<VoucherCreateResponse, ApiError> {
+    ) -> Result<(VoucherCreateResponse, u16, Vec<u8>), ApiError> {
         let response = self
             .send(
                 self.request(Method::POST, &["sites", site_id, "hotspot", "vouchers"])?
                     .json(request),
             )
             .await?;
-        decode(response).await
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let result = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((result, status, bytes))
     }
 
     /// Delete one voucher. Returns the accepted status and complete bounded
@@ -951,14 +997,15 @@ impl IntegrationClient {
         &self,
         segments: &[&str],
         action: &A,
-    ) -> Result<(T, Vec<u8>), ApiError> {
+    ) -> Result<(T, u16, Vec<u8>), ApiError> {
         let response = self
             .send(self.request(Method::POST, segments)?.json(action))
             .await?;
+        let status = response.status().as_u16();
         let bytes = http::read_bounded_body(response).await?;
         let result = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
-        Ok((result, bytes))
+        Ok((result, status, bytes))
     }
 
     /// One zone-based policy exactly as the controller stores it, plus a
@@ -1176,11 +1223,6 @@ fn validate_guest_limits(limits: &GuestAuthorizationLimits) -> Result<(), ApiErr
         ));
     }
     Ok(())
-}
-
-async fn decode<T: DeserializeOwned>(response: Response) -> Result<T, ApiError> {
-    let bytes = http::read_bounded_body(response).await?;
-    serde_json::from_slice(&bytes).map_err(|error| crate::error::decode_failure(&error, &bytes))
 }
 
 /// Keep the controller's full error body within the transport body budget.

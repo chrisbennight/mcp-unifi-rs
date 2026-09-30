@@ -336,9 +336,7 @@ async fn a_voucher_id_and_code_are_returned_exactly() {
 }
 
 #[tokio::test]
-async fn a_batch_far_larger_than_the_response_budget_fails_loudly() {
-    // The controller can return pathological codes. The result budget applies
-    // because the voucher list and detail endpoints can recover the codes.
+async fn a_large_accepted_batch_keeps_every_code_in_content() {
     let server = MockServer::start().await;
     mount_site(&server).await;
     let long_code = "c".repeat(20_000);
@@ -358,7 +356,7 @@ async fn a_batch_far_larger_than_the_response_budget_fails_loudly() {
         .mount(&server)
         .await;
 
-    let error = handler_for(&server)
+    let result = handler_for(&server)
         .call(
             &create(&serde_json::json!({
                 "name": "guests",
@@ -369,12 +367,18 @@ async fn a_batch_far_larger_than_the_response_budget_fails_loudly() {
             None,
         )
         .await
-        .expect_err("over budget");
-    assert!(
-        error.message.contains("response budget"),
-        "{}",
-        error.message
-    );
+        .expect("accepted codes remain available");
+    let content = serde_json::to_value(&result.content)
+        .expect("content")
+        .to_string();
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert_eq!(output["vouchersInContent"], true);
+    for code in minted {
+        assert!(content.contains(&code));
+    }
 }
 
 #[tokio::test]
@@ -529,7 +533,10 @@ async fn multiple_readback_failures_identify_the_vouchers_that_failed() {
 #[tokio::test]
 async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_rows() {
     let server = MockServer::start().await;
-    mints(&server, &batch(&["1234567890", "2345678901"])).await;
+    let mut accepted = batch(&["1234567890", "2345678901"]);
+    accepted["controllerExtension"] =
+        serde_json::json!(format!("{}accepted-voucher-tail", "y".repeat(50_000)));
+    mints(&server, &accepted).await;
     let failure = format!("detail failed: {}voucher-error-tail", "x".repeat(50_000));
     Mock::given(method("GET"))
         .and(path(format!(
@@ -564,6 +571,9 @@ async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_ro
     assert_eq!(output["readbackComplete"], false);
     assert_eq!(output["readbackStopReason"], "responseBudget");
     assert_eq!(output["readbackErrorsInContent"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert!(content.to_string().contains("accepted-voucher-tail"));
     assert!(content.to_string().contains("voucher-0"));
     assert!(content.to_string().contains(&failure));
 }
