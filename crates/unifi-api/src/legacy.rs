@@ -1411,17 +1411,16 @@ impl LegacyClient {
             .execute_with_status_bytes(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
-            // Only a read is reissued. The session is refreshed either way so
-            // the next call starts clean, but a write is never sent twice on
-            // the strength of an expiry report: whatever the client concludes
-            // from a failed write, it cannot know the controller did not
-            // apply it, and one surfaced failure the caller can retry is
-            // cheaper than a configuration change applied twice.
+            // Only a read is reissued. Session refresh records its failure for
+            // subsequent calls, but must never replace the controller's
+            // original mutation response. A rejected write is not replayed:
+            // an expiry report does not prove the write had no effect.
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                let refresh = self.refresh_session(generation).await;
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
+                refresh?;
                 self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }
