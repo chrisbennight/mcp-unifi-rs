@@ -86,7 +86,6 @@ const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 /// Search pagination bounds shared by the list tools.
 const MAXIMUM_SEARCH_LIMIT: u16 = 200;
 const DEFAULT_SEARCH_LIMIT: u16 = 50;
-const MAXIMUM_SEARCH_OFFSET: u16 = 10_000;
 /// Ceiling on client rows scanned to resolve one hardware address to the
 /// controller's own client id.
 const CLIENT_SCAN_CEILING: u64 = 1000;
@@ -207,7 +206,7 @@ struct ClientsSearchInput {
     connection: Option<ConnectionKind>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -236,7 +235,7 @@ struct DevicesSearchInput {
     state: Option<String>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -382,7 +381,7 @@ struct ClientsSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the access-point name join was built from a truncated
     /// device scan: an absent `apName` may exist beyond the scan.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -461,7 +460,7 @@ struct DevicesSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the bounded inventory scan cut the catalog short; the
     /// result covers only the scanned prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -541,7 +540,7 @@ struct CamerasSearchInput {
     state: Option<String>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -2136,7 +2135,7 @@ struct CamerasSearchOutput {
     total: usize,
     /// Continuation offset when more rows match than were returned.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     capabilities: ProtectCapabilitiesView,
 }
 
@@ -4323,7 +4322,7 @@ struct EventsSearchInput {
     client: Option<String>,
     /// Zero-based offset into the time-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -4354,7 +4353,7 @@ struct EventsSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the controller reports rows beyond the bounded scan.
     #[serde(skip_serializing_if = "Option::is_none")]
     fetch_window_truncated: Option<bool>,
@@ -4386,7 +4385,7 @@ struct StatsQueryInput {
     /// Client-history page size, 1-200; defaults to 50.
     limit: Option<u16>,
     /// Client-history row offset. Reuse fixed timestamps across pages.
-    offset: Option<u16>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
@@ -5023,7 +5022,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ClientsSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let query = validate_filter(input.query.as_deref())?;
         let ssid = validate_filter(input.ssid.as_deref())?;
 
@@ -5039,7 +5038,7 @@ impl UnifiMcp {
         sort_clients(&mut clients);
 
         let total = clients.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let page: Vec<ActiveClient> = clients
             .into_iter()
             .skip(offset)
@@ -5183,7 +5182,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<DevicesSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let query = validate_filter(input.query.as_deref())?;
         let state = validate_filter(input.state.as_deref())?;
 
@@ -5196,7 +5195,7 @@ impl UnifiMcp {
         });
 
         let total = devices.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let rows: Vec<DeviceRow> = devices
             .into_iter()
             .skip(offset)
@@ -5670,7 +5669,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<CamerasSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let (offset, limit) = (input.offset, input.limit);
         let query = validate_filter(input.query.as_deref())?;
         let model = validate_filter(input.model.as_deref())?;
@@ -5731,10 +5730,10 @@ impl UnifiMcp {
         let total = matched.len();
         let rows: Vec<CameraView> = matched
             .into_iter()
-            .skip(usize::from(offset))
+            .skip(offset)
             .take(usize::from(limit))
             .collect();
-        let next_offset = next_offset(usize::from(offset), rows.len(), total);
+        let next_offset = next_offset(offset, rows.len(), total);
         structured_with_upstream_error(
             CamerasSearchOutput {
                 cameras: rows,
@@ -7268,7 +7267,7 @@ impl UnifiMcp {
         let input = parse::<ProtectEventsInput>(params)?;
         let (include_details, detail_fields) = event_detail_selection(&input)?;
         let limit = input.limit;
-        validate_page(0, limit)?;
+        validate_page(limit)?;
 
         let selector = input.camera.as_deref().map(camera_selector).transpose()?;
         let mut inventory = self
@@ -7481,17 +7480,7 @@ impl UnifiMcp {
                 cut.push(section_word(this));
                 return;
             }
-            // Never advertise a continuation the validator would refuse;
-            // say why instead, so the contract holds in both directions.
-            let next = start + returned as u64;
-            if next <= MAXIMUM_SECTION_OFFSET {
-                scan.next_offset = Some(next);
-            } else {
-                scan.note = Some(format!(
-                    "continuation stops at the sectionOffset bound of \
-                     {MAXIMUM_SECTION_OFFSET}; narrow the query instead"
-                ));
-            }
+            scan.next_offset = Some(start.saturating_add(returned as u64));
         };
         let scan_start = |this: FirewallSection| if section == Some(this) { start } else { 0 };
 
@@ -10282,7 +10271,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<EventsSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let category = validate_filter(input.category.as_deref())?;
         let client = validate_filter(input.client.as_deref())?;
         let window_hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
@@ -10329,7 +10318,7 @@ impl UnifiMcp {
         rows.sort_by_key(|row| std::cmp::Reverse(row.time));
 
         let total = rows.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let page: Vec<EventRow> = rows
             .into_iter()
             .skip(offset)
@@ -10523,7 +10512,7 @@ impl UnifiMcp {
                 .map_err(api_error)?;
             let fetched = page.data.len() as u64;
             devices.extend(page.data);
-            offset += fetched;
+            offset = offset.saturating_add(fetched);
             if fetched == 0 || offset >= page.total_count {
                 break;
             }
@@ -10599,16 +10588,10 @@ fn wireless_load(
     (clients_by_ap, weak_clients)
 }
 
-fn validate_page(offset: u16, limit: u16) -> Result<(), McpError> {
+fn validate_page(limit: u16) -> Result<(), McpError> {
     if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&limit) {
         return Err(McpError::invalid_params(
             format!("limit must be between 1 and {MAXIMUM_SEARCH_LIMIT}"),
-            None,
-        ));
-    }
-    if offset > MAXIMUM_SEARCH_OFFSET {
-        return Err(McpError::invalid_params(
-            format!("offset must not exceed {MAXIMUM_SEARCH_OFFSET}"),
             None,
         ));
     }
@@ -11357,17 +11340,10 @@ fn validate_filter(value: Option<&str>) -> Result<Option<String>, McpError> {
     }
 }
 
-/// The next page's offset, emitted only when that page is actually
-/// requestable within the accepted offset bound; otherwise the caller sees
-/// no continuation and narrows the query instead of chasing an unreachable
-/// page.
-fn next_offset(offset: usize, returned: usize, total: usize) -> Option<u16> {
+/// The next page's offset whenever unread matching rows remain.
+fn next_offset(offset: usize, returned: usize, total: usize) -> Option<usize> {
     let consumed = offset.saturating_add(returned);
-    if consumed < total && consumed <= usize::from(MAXIMUM_SEARCH_OFFSET) {
-        u16::try_from(consumed).ok()
-    } else {
-        None
-    }
+    (consumed < total).then_some(consumed)
 }
 
 /// Bound one line of controller-reported text for display, appending a
@@ -11623,8 +11599,6 @@ fn page_at(offset: u64) -> PageRequest {
 /// reachable data.
 const ZONE_SCAN_CEILING: u64 = 400;
 const POLICY_SCAN_CEILING: u64 = 200;
-/// Ceiling on a caller-supplied section continuation offset.
-const MAXIMUM_SECTION_OFFSET: u64 = 100_000;
 
 /// Follow one paginated Integration collection from `start` to its end or
 /// `ceiling` more rows. The boolean reports whether the ceiling cut the
@@ -11646,7 +11620,7 @@ where
         let page = fetch(offset).await.map_err(api_error)?;
         let fetched = page.data.len() as u64;
         items.extend(page.data);
-        offset += fetched;
+        offset = offset.saturating_add(fetched);
         if fetched == 0 || offset >= page.total_count {
             break;
         }
@@ -11669,8 +11643,7 @@ struct ZoneScan {
     note: Option<String>,
 }
 
-/// A continuation offset applies only to the paginated sections and is
-/// bounded; anything else is a caller error rather than a silent no-op.
+/// A continuation offset applies only to the paginated sections.
 fn validate_section_offset(input: &FirewallReadInput) -> Result<u64, McpError> {
     let start = input.section_offset.unwrap_or(0);
     if input.section_offset.is_some()
@@ -11681,12 +11654,6 @@ fn validate_section_offset(input: &FirewallReadInput) -> Result<u64, McpError> {
     {
         return Err(McpError::invalid_params(
             "sectionOffset requires section zones or policies",
-            None,
-        ));
-    }
-    if start > MAXIMUM_SECTION_OFFSET {
-        return Err(McpError::invalid_params(
-            format!("sectionOffset must not exceed {MAXIMUM_SECTION_OFFSET}"),
             None,
         ));
     }
@@ -14728,12 +14695,11 @@ mod tests {
     }
 
     #[test]
-    fn pagination_never_advertises_an_unreachable_page() {
+    fn pagination_continues_while_matching_rows_remain() {
         assert_eq!(super::next_offset(0, 50, 100), Some(50));
         assert_eq!(super::next_offset(0, 100, 100), None);
-        // More rows match, but the continuation would exceed the accepted
-        // offset bound, so no next page is advertised.
-        assert_eq!(super::next_offset(10_000, 50, 20_000), None);
+        assert_eq!(super::next_offset(10_000, 50, 20_000), Some(10_050));
+        assert_eq!(super::next_offset(100_000, 50, 200_000), Some(100_050));
     }
 
     #[test]
