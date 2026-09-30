@@ -104,7 +104,9 @@ async fn accepts_the_write(server: &MockServer, expected_body: &serde_json::Valu
     Mock::given(method("PUT"))
         .and(path(format!("{LEGACY}/rest/portforward/{FORWARD}")))
         .and(body_json(expected_body))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],"controllerExtension":"forward accepted"
+        })))
         .expect(1)
         .mount(server)
         .await;
@@ -170,6 +172,13 @@ async fn a_confirmed_change_sends_only_the_named_fields_and_reads_the_result_bac
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 202);
+    assert!(
+        output["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("forward accepted")
+    );
     assert_eq!(output["verified"], true);
     assert_eq!(
         output["fields"],
@@ -182,6 +191,64 @@ async fn a_confirmed_change_sends_only_the_named_fields_and_reads_the_result_bac
         }])
     );
     assert_eq!(output["forward"]["enabled"], true);
+}
+
+#[tokio::test]
+async fn accepted_port_forward_update_returns_before_a_stalled_readback() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let route = format!("{LEGACY}/rest/portforward/{FORWARD}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([stored(
+                false,
+                "Home Assistant"
+            )]))),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(6)))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],"controllerExtension":"forward accepted"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server).with_request_limits(1, Duration::from_secs(2));
+    let output = tokio::time::timeout(
+        Duration::from_secs(2),
+        handler.call(
+            &update(&serde_json::json!({
+                "portForward": FORWARD,
+                "changes": {"enabled": true},
+                "confirm": true
+            })),
+            None,
+        ),
+    )
+    .await
+    .expect("returned before the tool deadline")
+    .expect("accepted forward update remains available")
+    .structured_content
+    .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert!(
+        output["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("forward accepted")
+    );
+    assert_eq!(output["readbackError"], "port-forward readback timed out");
+    assert!(output.get("verified").is_none());
 }
 
 #[tokio::test]

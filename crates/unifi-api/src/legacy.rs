@@ -377,7 +377,8 @@ impl LegacyClient {
     }
 
     /// Apply a partial update to one wireless network. Only the fields the
-    /// patch sets are sent.
+    /// patch sets are sent. Returns the accepted HTTP status and complete
+    /// controller envelope.
     ///
     /// This is a mutation: it is never retried after an ambiguous transport
     /// result, because a resend could apply the change twice. The controller
@@ -393,7 +394,7 @@ impl LegacyClient {
         site: &str,
         id: &str,
         patch: &WlanPatch,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         if patch.is_empty() {
             return Err(ApiError::Config(
                 "wireless network update carries no fields".to_owned(),
@@ -402,15 +403,16 @@ impl LegacyClient {
         let body = serde_json::to_value(patch).map_err(|_| {
             ApiError::Config("wireless network patch is not serializable".to_owned())
         })?;
-        self.request_with_reauth::<serde_json::Value>(
-            RequestClass::Mutation,
-            Method::PUT,
-            site,
-            &["rest", "wlanconf", id],
-            Some(body),
-        )
-        .await?;
-        Ok(())
+        let (_, status, response) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::PUT,
+                site,
+                &["rest", "wlanconf", id],
+                Some(body),
+            )
+            .await?;
+        Ok((status, response))
     }
 
     /// One port forward read once, as both the modeled record and a
@@ -444,7 +446,8 @@ impl LegacyClient {
     }
 
     /// Apply a partial update to one port forward. Only the fields the patch
-    /// sets are sent.
+    /// sets are sent. Returns the accepted HTTP status and complete controller
+    /// envelope.
     ///
     /// This is a mutation: it is never retried after an ambiguous transport
     /// result. The controller acknowledges writes whose individual fields it
@@ -460,7 +463,7 @@ impl LegacyClient {
         site: &str,
         id: &str,
         patch: &PortForwardPatch,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(u16, Vec<u8>), ApiError> {
         if patch.is_empty() {
             return Err(ApiError::Config(
                 "port forward update carries no fields".to_owned(),
@@ -468,15 +471,16 @@ impl LegacyClient {
         }
         let body = serde_json::to_value(patch)
             .map_err(|_| ApiError::Config("port forward patch is not serializable".to_owned()))?;
-        self.request_with_reauth::<serde_json::Value>(
-            RequestClass::Mutation,
-            Method::PUT,
-            site,
-            &["rest", "portforward", id],
-            Some(body),
-        )
-        .await?;
-        Ok(())
+        let (_, status, response) = self
+            .request_with_reauth_with_status_bytes::<serde_json::Value>(
+                RequestClass::Mutation,
+                Method::PUT,
+                site,
+                &["rest", "portforward", id],
+                Some(body),
+            )
+            .await?;
+        Ok((status, response))
     }
 
     /// Disconnect one wireless client; it may reconnect immediately. Returns

@@ -1930,6 +1930,12 @@ struct CameraTalkbackOutput {
     camera_id: String,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<CameraTalkbackSessionView>,
 }
 
@@ -2849,10 +2855,25 @@ struct AclRulesOrderingConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrdering {
+    before_system_defined: Vec<String>,
+    after_system_defined: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrderingConfigureInput {
+    ordered_firewall_policy_ids: FirewallPolicyOrdering,
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkPolicyWriteOutput {
-    kind: NetworkPolicyKind,
+struct NetworkPolicyWriteOutput<K = NetworkPolicyKind> {
+    kind: K,
     operation: NetworkPolicyWriteOperation,
     consequence: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3369,6 +3390,12 @@ struct WlansUpdateOutput {
     ssid: Option<String>,
     /// Whether the controller was written to.
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// What would change. Preview only.
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<PlannedChange>>,
@@ -3381,6 +3408,10 @@ struct WlansUpdateOutput {
     /// True when every requested field persisted and nothing else moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     /// Consequences worth knowing before confirming.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -3424,6 +3455,12 @@ struct PortForwardsUpdateOutput {
     forward: PortForwardView,
     /// Whether the controller was written to.
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// What would change. Preview only.
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<PlannedChange>>,
@@ -3436,6 +3473,10 @@ struct PortForwardsUpdateOutput {
     /// True when every requested field persisted and nothing else moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
     /// Consequences worth knowing before confirming.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -4334,6 +4375,13 @@ impl ToolSpec {
             ToolKind::AclRulesConfigure => {
                 tool::<AclRulesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::FirewallPoliciesOrderingRead => {
+                tool::<EmptyInput, NetworkPolicyDetailOutput>(self)
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => tool::<
+                FirewallPolicyOrderingConfigureInput,
+                NetworkPolicyWriteOutput<&'static str>,
+            >(self),
             ToolKind::AclRulesOrderingRead => {
                 tool::<AclRulesOrderingReadInput, NetworkPolicyDetailOutput>(self)
             }
@@ -4678,6 +4726,12 @@ impl UnifiMcp {
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
             ToolKind::AclRulesConfigure => self.acl_rules_configure(params).await,
+            ToolKind::FirewallPoliciesOrderingRead => {
+                self.firewall_policies_ordering_read(params).await
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => {
+                self.firewall_policies_ordering_configure(params).await
+            }
             ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
             ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
@@ -6856,12 +6910,15 @@ impl UnifiMcp {
             .collect();
         match input.action {
             CameraStreamsAction::Create => {
-                let created = self
+                let (created, status, body) = self
                     .protect()
                     .camera_streams_create(&camera_id, &qualities)
                     .await
                     .map_err(api_error)?;
                 output.applied = true;
+                output.response_status = Some(status);
+                output.response_body =
+                    Some(BoundedMessage::from_controller_bytes(&body).to_string());
                 output.streams = stream_handles(created)
                     .into_iter()
                     .filter(|handle| input.qualities.contains(&handle.quality))
@@ -6938,21 +6995,26 @@ impl UnifiMcp {
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
         let camera_id = camera_by_selector(&inventory, selector)?.id;
-        let session = if input.confirm {
-            Some(
-                self.protect()
-                    .camera_talkback_session(&camera_id)
-                    .await
-                    .map_err(api_error)?,
-            )
-        } else {
-            None
-        };
-        structured(CameraTalkbackOutput {
+        let mut output = CameraTalkbackOutput {
             camera_id,
-            applied: session.is_some(),
-            session: session.map(talkback_session_view),
-        })
+            applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            session: None,
+        };
+        if input.confirm {
+            let (session, status, body) = self
+                .protect()
+                .camera_talkback_session(&output.camera_id)
+                .await
+                .map_err(api_error)?;
+            output.applied = true;
+            output.response_status = Some(status);
+            output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+            output.session = Some(talkback_session_view(session));
+        }
+        structured_with_accepted_response(output)
     }
 
     /// One console snapshot: version, cameras grouped by their reported
@@ -7739,6 +7801,115 @@ impl UnifiMcp {
             input.confirm,
         )?;
         self.network_policy_write(plan).await
+    }
+
+    async fn firewall_policies_ordering_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let _: EmptyInput = parse(params)?;
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .firewall_policy_ordering(&site_id)
+            .await
+            .map_err(api_error)?;
+        network_policy_detail_result(NetworkPolicyDetailOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn firewall_policies_ordering_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<FirewallPolicyOrderingConfigureInput>(params)?;
+        let requested = serde_json::json!({"orderedFirewallPolicyIds": {
+            "beforeSystemDefined": input.ordered_firewall_policy_ids.before_system_defined,
+            "afterSystemDefined": input.ordered_firewall_policy_ids.after_system_defined,
+        }});
+        if requested.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES {
+            return Err(McpError::invalid_params(
+                "firewall policy ordering request exceeds the 1 MiB request bound",
+                None,
+            ));
+        }
+        let mut output = NetworkPolicyWriteOutput {
+            kind: "firewallPolicies",
+            operation: NetworkPolicyWriteOperation::Update,
+            consequence: "replace the priority order of the site's user-defined firewall policies",
+            id: None,
+            requested: Some(requested),
+            requested_in_content: None,
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return network_policy_write_result(output);
+        }
+        let site_id = self.site_id().await?;
+        let (status, accepted) = self
+            .integration()
+            .replace_firewall_policy_ordering(
+                &site_id,
+                &input.ordered_firewall_policy_ids.before_system_defined,
+                &input.ordered_firewall_policy_ids.after_system_defined,
+            )
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.response_status = Some(status);
+        output.accepted = Some(accepted);
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+            .min(NETWORK_POLICY_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("firewall policy ordering readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().firewall_policy_ordering(&site_id),
+            )
+            .await
+            {
+                Ok(Ok(after)) => {
+                    let requested_ids = output
+                        .requested
+                        .as_ref()
+                        .and_then(|body| body.get("orderedFirewallPolicyIds"));
+                    output.verified = Some(
+                        after.get("orderedFirewallPolicyIds") == requested_ids
+                            && output
+                                .accepted
+                                .as_ref()
+                                .and_then(|body| body.get("orderedFirewallPolicyIds"))
+                                == requested_ids,
+                    );
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error =
+                        Some("firewall policy ordering readback timed out".to_owned());
+                }
+            }
+        }
+        network_policy_write_result(output)
     }
 
     async fn acl_rules_ordering_read(
@@ -8643,6 +8814,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         reject_unknown_change_fields(params, WLAN_CHANGE_FIELDS)?;
         let input = parse::<WlansUpdateInput>(params)?;
         let requested = requested_fields(&input.changes);
@@ -8665,10 +8837,15 @@ impl UnifiMcp {
                 wlan: input.wlan,
                 ssid: current.name,
                 applied: false,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
                 changes: Some(mutation::plan(&requested, &before)),
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
+                readback_error: None,
+                readback_error_in_content: None,
                 warnings,
             });
         }
@@ -8676,31 +8853,61 @@ impl UnifiMcp {
         // The digest covers every property the controller stores, including
         // those this server does not model, so a write that clears one is
         // seen rather than certified clean.
-        self.legacy()
+        let (status, body) = self
+            .legacy()
             .update_wlan(self.legacy_site(), &input.wlan, &patch)
             .await
             .map_err(api_error)?;
-        // One read per side, so the field statuses and the collateral report
-        // describe the same moment rather than two moments a round trip apart.
-        let (after_record, after_digest) = self.wlan_snapshot(&input.wlan).await?;
-        let after = wlan_projection(&after_record);
-        let fields = mutation::verify(&requested, &before, &after);
-        let unexpected =
-            unrequested_changes(&before_digest, &after_digest, &requested, WLAN_WIRE_NAMES);
-        let verified = unexpected.is_empty()
-            && fields
-                .iter()
-                .all(|outcome| outcome.status == mutation::FieldStatus::Persisted);
-        structured(WlansUpdateOutput {
+        let mut output = WlansUpdateOutput {
             wlan: input.wlan,
-            ssid: after_record.name,
+            ssid: current.name,
             applied: true,
+            response_status: Some(status),
+            response_body: Some(BoundedMessage::from_controller_bytes(&body).to_string()),
+            response_body_in_content: None,
             changes: None,
-            fields: Some(fields),
-            unexpected_changes: Some(unexpected),
-            verified: Some(verified),
+            fields: None,
+            unexpected_changes: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings,
-        })
+        };
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_ACTION_RESPONSE_RESERVE)
+            .min(NETWORK_ACTION_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("wireless readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.wlan_snapshot(&output.wlan)).await {
+                Ok(Ok((after_record, after_digest))) => {
+                    // Both readback reports describe this same controller response.
+                    let after = wlan_projection(&after_record);
+                    let fields = mutation::verify(&requested, &before, &after);
+                    let unexpected = unrequested_changes(
+                        &before_digest,
+                        &after_digest,
+                        &requested,
+                        WLAN_WIRE_NAMES,
+                    );
+                    output.verified = Some(
+                        unexpected.is_empty()
+                            && fields
+                                .iter()
+                                .all(|outcome| outcome.status == mutation::FieldStatus::Persisted),
+                    );
+                    output.ssid = after_record.name;
+                    output.fields = Some(fields);
+                    output.unexpected_changes = Some(unexpected);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => output.readback_error = Some("wireless readback timed out".to_owned()),
+            }
+        }
+        structured_with_accepted_response(output)
     }
 
     /// Change one port forward, previewing unless the caller confirms.
@@ -8708,6 +8915,7 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
         reject_unknown_change_fields(params, PORT_FORWARD_CHANGE_FIELDS)?;
         let input = parse::<PortForwardsUpdateInput>(params)?;
         let requested = requested_port_forward_fields(&input.changes);
@@ -8734,42 +8942,77 @@ impl UnifiMcp {
             return structured(PortForwardsUpdateOutput {
                 forward: port_forward_view(current),
                 applied: false,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
                 changes: Some(mutation::plan(&requested, &before)),
                 fields: None,
                 unexpected_changes: None,
                 verified: None,
+                readback_error: None,
+                readback_error_in_content: None,
                 warnings,
             });
         }
 
-        self.legacy()
+        let (status, body) = self
+            .legacy()
             .update_port_forward(self.legacy_site(), &input.port_forward, &patch)
             .await
             .map_err(api_error)?;
-        // One read per side, so the field statuses and the collateral report
-        // describe the same moment rather than two moments a round trip apart.
-        let (after_record, after_digest) = self.port_forward_snapshot(&input.port_forward).await?;
-        let after = port_forward_projection(&after_record);
-        let fields = mutation::verify(&requested, &before, &after);
-        let unexpected = unrequested_changes(
-            &before_digest,
-            &after_digest,
-            &requested,
-            PORT_FORWARD_WIRE_NAMES,
-        );
-        let verified = unexpected.is_empty()
-            && fields
-                .iter()
-                .all(|outcome| outcome.status == mutation::FieldStatus::Persisted);
-        structured(PortForwardsUpdateOutput {
-            forward: port_forward_view(after_record),
+        let mut output = PortForwardsUpdateOutput {
+            forward: port_forward_view(current),
             applied: true,
+            response_status: Some(status),
+            response_body: Some(BoundedMessage::from_controller_bytes(&body).to_string()),
+            response_body_in_content: None,
             changes: None,
-            fields: Some(fields),
-            unexpected_changes: Some(unexpected),
-            verified: Some(verified),
+            fields: None,
+            unexpected_changes: None,
+            verified: None,
+            readback_error: None,
+            readback_error_in_content: None,
             warnings,
-        })
+        };
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_ACTION_RESPONSE_RESERVE)
+            .min(NETWORK_ACTION_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("port-forward readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(budget, self.port_forward_snapshot(&input.port_forward))
+                .await
+            {
+                Ok(Ok((after_record, after_digest))) => {
+                    // Both readback reports describe this same controller response.
+                    let after = port_forward_projection(&after_record);
+                    let fields = mutation::verify(&requested, &before, &after);
+                    let unexpected = unrequested_changes(
+                        &before_digest,
+                        &after_digest,
+                        &requested,
+                        PORT_FORWARD_WIRE_NAMES,
+                    );
+                    output.verified = Some(
+                        unexpected.is_empty()
+                            && fields
+                                .iter()
+                                .all(|outcome| outcome.status == mutation::FieldStatus::Persisted),
+                    );
+                    output.forward = port_forward_view(after_record);
+                    output.fields = Some(fields);
+                    output.unexpected_changes = Some(unexpected);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error = Some("port-forward readback timed out".to_owned());
+                }
+            }
+        }
+        structured_with_accepted_response(output)
     }
 
     /// Refuse the policy surface on a console that runs the classic firewall,
@@ -13147,10 +13390,10 @@ fn network_policy_list_result(
     Ok(full)
 }
 
-fn network_policy_write_result(
-    mut output: NetworkPolicyWriteOutput,
+fn network_policy_write_result<K: Serialize>(
+    mut output: NetworkPolicyWriteOutput<K>,
 ) -> Result<CallToolResult, McpError> {
-    let exceeds = |output: &NetworkPolicyWriteOutput| -> Result<bool, McpError> {
+    let exceeds = |output: &NetworkPolicyWriteOutput<K>| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
             .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
@@ -14067,6 +14310,7 @@ mod tests {
         ("devices.remove", false, false, true),
         ("acl.rules.configure", false, true, true),
         ("acl.rules.ordering.configure", false, true, true),
+        ("firewall.policies.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.

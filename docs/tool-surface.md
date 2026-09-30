@@ -166,6 +166,17 @@ reports the subsequent detail read and whether the requested values or
 deletion were observed. A failed readback does not erase an accepted write.
 Large values move to MCP content with a corresponding `InContent` marker.
 
+`firewall.policies.ordering.read` returns the complete user-defined policy
+ordering. `firewall.policies.ordering.configure` accepts
+`orderedFirewallPolicyIds: {beforeSystemDefined, afterSystemDefined}` to place
+user-defined policies before or after the system-defined policies. It previews
+by default, and sends the replacement ordering with `confirm: true`. The
+confirmed result retains the accepted status and complete controller record,
+then performs bounded readback. `verified` requires both acceptance and
+readback to match the requested groups. Large records and readback errors move
+to labeled MCP content with explicit markers. The upstream controller decides
+whether policy ids and placements are valid.
+
 `acl.rules.ordering.read` returns the complete priority ordering from the
 official ACL ordering endpoint. `acl.rules.ordering.configure` previews a full
 replacement `orderedAclRuleIds` list and sends it only with `confirm: true`. It
@@ -547,8 +558,8 @@ risk and sensitive. The gateway decides caller access in gateway mode.
 `cameras.streams.update` previews by default;
 with `confirm`, it creates or removes one or more distinct qualities: `high`,
 `medium`, `low`, or `package`. A created URL is returned even if the follow-up
-readback fails or times out. Removal returns its accepted HTTP status and
-complete controller body. The result says whether the requested qualities
+readback fails or times out. Creation and removal return their accepted HTTP
+status and complete controller body. The result says whether the requested qualities
 were observed afterward, and `readbackError` carries any controller failure.
 For these camera mutations, a large accepted body or readback error moves to
 a labeled text content block with a corresponding `InContent` marker, so an
@@ -556,7 +567,9 @@ accepted action result remains available.
 `package` requires a camera with a package camera.
 
 `cameras.talkback.start` previews or creates a talkback session. A confirmed
-call returns its RTP URL, codec, sampling rate, and bit depth. The API does not
+call returns its RTP URL, codec, sampling rate, bit depth, and accepted HTTP
+status and complete controller body. Large bodies move to labeled MCP content
+with an explicit marker. The API does not
 provide a session readback, so the tool reports creation and the returned
 session data without claiming that the caller has sent audio.
 
@@ -619,6 +632,7 @@ it.
 | `devices.remove` | no | no | yes |
 | `acl.rules.configure` | no | yes | yes |
 | `acl.rules.ordering.configure` | no | yes | yes |
+| `firewall.policies.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |
@@ -674,7 +688,10 @@ fields it discards. Each requested field is reported `persisted`, `dropped`, or
 `coerced`; properties that moved without being requested are named separately,
 compared over the controller's whole record rather than the modeled subset;
 and `verified` is true only when every requested field persisted and nothing
-else moved.
+else moved. The confirmed result also returns the accepted HTTP status and
+complete legacy controller envelope. A failed or stalled readback is reported
+alongside that accepted response. Large controller bodies and readback errors
+move to labeled MCP content with explicit markers.
 
 If a wireless network or port forward snapshot cannot be decoded into its
 typed record, the error includes the controller's complete accepted response

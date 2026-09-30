@@ -593,3 +593,166 @@ async fn acl_ordering_does_not_verify_when_acceptance_disagrees_with_request() {
     assert_eq!(output["after"]["orderedAclRuleIds"], json!([POLICY_ID]));
     assert_eq!(output["verified"], false);
 }
+
+#[tokio::test]
+async fn firewall_ordering_reads_previews_and_replaces_both_priority_groups() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    let ids = json!({"beforeSystemDefined":[POLICY_ID],"afterSystemDefined":[]});
+    let preview = handler
+        .call(
+            &call(
+                "firewall.policies.ordering.configure",
+                json!({
+                    "orderedFirewallPolicyIds":ids
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(preview["submitted"], false);
+    assert_eq!(
+        preview["requested"],
+        json!({"orderedFirewallPolicyIds":ids})
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/firewall/policies/ordering");
+    let record =
+        json!({"orderedFirewallPolicyIds":ids,"controllerExtension":{"priority":"retained"}});
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(record.clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .and(body_json(json!({"orderedFirewallPolicyIds":ids})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(record.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let read = handler
+        .call(&call("firewall.policies.ordering.read", json!({})), None)
+        .await
+        .expect("read")
+        .structured_content
+        .expect("structured");
+    assert_eq!(read["record"], record);
+    let updated = handler
+        .call(
+            &call(
+                "firewall.policies.ordering.configure",
+                json!({
+                    "orderedFirewallPolicyIds":ids,"confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("update")
+        .structured_content
+        .expect("structured");
+    assert_eq!(updated["kind"], "firewallPolicies");
+    assert_eq!(updated["submitted"], true);
+    assert_eq!(updated["responseStatus"], 200);
+    assert_eq!(updated["accepted"], record);
+    assert_eq!(updated["after"], record);
+    assert_eq!(updated["verified"], true);
+}
+
+#[tokio::test]
+async fn firewall_ordering_keeps_large_acceptance_when_readback_fails() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{PREFIX}/sites/{SITE_ID}/firewall/policies/ordering");
+    let ids = json!({"beforeSystemDefined":[],"afterSystemDefined":[POLICY_ID]});
+    let accepted = json!({"orderedFirewallPolicyIds":ids,
+        "controllerExtension":format!("{}ordering-accepted-tail", "x".repeat(50_000))});
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .and(body_json(json!({"orderedFirewallPolicyIds":ids})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let failure = format!("{}ordering-readback-tail", "y".repeat(50_000));
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "firewall.policies.ordering.configure",
+                json!({
+                    "orderedFirewallPolicyIds":ids,"confirm":true
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted remains available");
+    let content = serde_json::to_value(&result.content)
+        .expect("content")
+        .to_string();
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["submitted"], true);
+    assert_eq!(output["acceptedInContent"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(output.get("verified").is_none());
+    assert!(content.contains("ordering-accepted-tail"));
+    assert!(content.contains(&failure));
+}
+
+#[tokio::test]
+async fn firewall_ordering_rejections_preserve_upstream_explanations() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("PUT"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/firewall/policies/ordering"
+        )))
+        .respond_with(
+            ResponseTemplate::new(422).set_body_string("policy order crosses system boundary"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server).call(&call("firewall.policies.ordering.configure", json!({
+        "orderedFirewallPolicyIds":{"beforeSystemDefined":[POLICY_ID],"afterSystemDefined":[]},"confirm":true
+    })), None).await.expect_err("upstream rejection");
+    assert!(
+        error
+            .message
+            .contains("policy order crosses system boundary")
+    );
+}
+
+#[tokio::test]
+async fn firewall_ordering_unknown_fields_are_rejected_before_upstream_calls() {
+    let server = MockServer::start().await;
+    let error = handler_for(&server).call(&call("firewall.policies.ordering.configure", json!({
+        "orderedFirewallPolicyIds":{"beforeSystemDefined":[],"afterSystemDefined":[],"unsupportedField":true},"confirm":true
+    })), None).await.expect_err("typed request");
+    assert!(error.message.contains("unsupportedField"));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}

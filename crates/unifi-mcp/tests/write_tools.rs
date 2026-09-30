@@ -97,7 +97,9 @@ async fn mount_reads(server: &MockServer, before: &serde_json::Value, after: &se
 async fn mount_write(server: &MockServer) {
     Mock::given(method("PUT"))
         .and(path(format!("{LEGACY}/rest/wlanconf/{WLAN_ID}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],"controllerExtension":"wireless accepted"
+        })))
         .expect(1)
         .mount(server)
         .await;
@@ -199,9 +201,65 @@ async fn a_confirmed_change_is_applied_and_verified_by_reading_it_back() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 202);
+    assert!(
+        output["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("wireless accepted")
+    );
     assert_eq!(output["verified"], true);
     assert_eq!(output["fields"][0]["field"], "hidden");
     assert_eq!(output["fields"][0]["status"], "persisted");
+}
+
+#[tokio::test]
+async fn accepted_wireless_update_keeps_its_body_and_failed_readback() {
+    let server = MockServer::start().await;
+    logged_in(&server).await;
+    let route = format!("{LEGACY}/rest/wlanconf/{WLAN_ID}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([wlan_row(
+                "Home", true, false
+            )]))),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let failure = format!("{}wireless-readback-tail", "x".repeat(50_000));
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(503).set_body_string(failure.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "meta":{"rc":"ok"},"data":[],
+            "controllerExtension":format!("{}wireless-accepted-tail", "y".repeat(50_000))
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({"wlan":WLAN_ID,"changes":{"hidden":true},"confirm":true})),
+            None,
+        )
+        .await
+        .expect("accepted wireless update remains available");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(output.get("verified").is_none());
+    assert!(content.to_string().contains("wireless-accepted-tail"));
+    assert!(content.to_string().contains(&failure));
 }
 
 #[tokio::test]
