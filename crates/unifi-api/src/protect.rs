@@ -656,6 +656,20 @@ impl ProtectClient {
         Ok(info)
     }
 
+    /// Complete application information from the official API.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn info_record(&self) -> Result<serde_json::Value, ApiError> {
+        self.get_json(&["meta", "info"]).await
+    }
+
+    /// Complete recorder information from the official API, which returns one object.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn nvr_record(&self) -> Result<serde_json::Value, ApiError> {
+        self.get_json(&["nvrs"]).await
+    }
+
     /// Every camera the console knows about.
     ///
     /// # Errors
