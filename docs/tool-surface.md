@@ -189,6 +189,13 @@ contract. Read full records with `network.policy.list/detail` and
 shortcut for changing `enabled` and/or `loggingEnabled` while preserving other
 fields. Logging-only changes use the documented PATCH route.
 
+The compact `firewall.read` policy summary supports earlier string action and
+protocol fields and the current structured fields. It reports the original
+`action.type` as `action` and `ipProtocolScope.ipVersion` as `ipProtocolScope`,
+along with the controller's signed ordering index. Full action settings and
+protocol filters remain available in `network.policy.detail` records and the
+flag update workflow's complete `beforeResponse` and `afterResponse`.
+
 `firewall.policies.ordering.read` returns the complete user-defined policy
 ordering. `firewall.policies.ordering.configure` accepts
 `orderedFirewallPolicyIds: {beforeSystemDefined, afterSystemDefined}` to place

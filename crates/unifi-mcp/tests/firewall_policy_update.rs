@@ -499,6 +499,7 @@ async fn accepted_policy_update_survives_a_stalled_readback() {
 async fn policy_delete_previews_scope_without_sending_delete() {
     let server = MockServer::start().await;
     let mut record = stored(true, "BLOCK");
+    record["index"] = serde_json::json!(-10);
     record["ipProtocolScope"] = serde_json::json!({
         "ipVersion": "IPV4", "protocolFilter": {"type": "PRESET", "name": "TCP_UDP"}
     });
@@ -514,6 +515,13 @@ async fn policy_delete_previews_scope_without_sending_delete() {
         .expect("structured");
     assert_eq!(output["applied"], false);
     assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
+    assert_eq!(output["policy"]["index"], -10);
+    assert!(
+        !output["preview"]["omittedFields"]
+            .as_array()
+            .expect("omitted fields")
+            .contains(&serde_json::json!("index"))
+    );
     assert_eq!(output["preview"]["details"]["schedule"], record["schedule"]);
     assert_eq!(
         output["preview"]["details"]["ipsecFilter"],
@@ -1094,6 +1102,53 @@ async fn every_enable_write_says_the_whole_policy_is_resent() {
             "{action}/{enabled}: {output}"
         );
     }
+}
+
+#[tokio::test]
+async fn current_policy_shapes_preview_and_round_trip_without_losing_nested_fields() {
+    let server = MockServer::start().await;
+    let mut before = stored(true, "ALLOW");
+    before["action"] = serde_json::json!({"type":"ALLOW","allowReturnTraffic":true});
+    before["ipProtocolScope"] = serde_json::json!({"ipVersion":"IPV4_AND_IPV6","protocolFilter":{
+        "type":"NAMED_PROTOCOL","matchOpposite":false,"protocol":{"name":"tcp"}
+    }});
+    before["index"] = serde_json::json!(-10);
+    let mut after = before.clone();
+    after["enabled"] = serde_json::json!(false);
+    reads(&server, &before, &after).await;
+    accepts_the_write(&server, &after).await;
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"enabled":false},"confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("replacement")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["policy"]["action"], "ALLOW");
+    assert_eq!(output["policy"]["ipProtocolScope"], "IPV4_AND_IPV6");
+    assert_eq!(output["policy"]["index"], -10);
+    assert_eq!(output["verified"], true);
+    assert!(
+        output["warnings"]
+            .to_string()
+            .contains("withdraws this policy")
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            output["beforeResponse"].as_str().expect("before")
+        )
+        .expect("JSON"),
+        before
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(output["afterResponse"].as_str().expect("after"))
+            .expect("JSON"),
+        after
+    );
 }
 
 #[tokio::test]

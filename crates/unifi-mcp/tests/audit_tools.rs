@@ -396,6 +396,44 @@ async fn firewall_read_labels_a_zone_based_console() {
 }
 
 #[tokio::test]
+async fn firewall_read_accepts_structured_action_protocol_scope_and_signed_ordering() {
+    let server = MockServer::start().await;
+    common_mocks(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{INTEGRATION}/sites/{SITE_ID}/firewall/zones"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset":0,"limit":1,"count":0,"totalCount":0,"data":[]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "offset":0,"limit":200,"count":1,"totalCount":1,"data":[{
+                "id":"current-policy","name":"Current API policy","enabled":true,"loggingEnabled":true,
+                "action":{"type":"ALLOW","allowReturnTraffic":true},"index":-10,
+                "ipProtocolScope":{"ipVersion":"IPV4_AND_IPV6","protocolFilter":{"type":"PRESET","preset":{"name":"TCP_UDP"}}},
+                "source":{"zoneId":"zone-internal"},"destination":{"zoneId":"zone-external"}
+            }]
+        }))).expect(1).mount(&server).await;
+    let result = handler_for(&server)
+        .call(
+            &call("firewall.read", &serde_json::json!({"section":"policies"})),
+            None,
+        )
+        .await
+        .expect("current API read")
+        .structured_content
+        .expect("structured");
+    assert_eq!(result["policies"][0]["action"], "ALLOW");
+    assert_eq!(result["policies"][0]["ipProtocolScope"], "IPV4_AND_IPV6");
+    assert_eq!(result["policies"][0]["loggingEnabled"], true);
+    assert_eq!(result["policies"][0]["index"], -10);
+}
+
+#[tokio::test]
 async fn an_over_ceiling_policy_inventory_returns_bounded_and_truncated() {
     let server = MockServer::start().await;
     common_mocks(&server).await;
