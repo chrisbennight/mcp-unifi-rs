@@ -12,7 +12,6 @@
 //! bounded local bootstrap also retains its original response so callers can
 //! request details that those views do not yet model.
 
-use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header, multipart};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -1614,25 +1613,7 @@ pub(crate) async fn read_jpeg(response: Response) -> Result<Vec<u8>, ApiError> {
             })
         };
     }
-    if bytes.is_empty() {
-        return Err(ApiError::Decode(BoundedMessage::new(
-            "image response was not a decodable JPEG",
-        )));
-    }
-    tokio::task::spawn_blocking(move || {
-        let mut reader = ImageReader::with_format(std::io::Cursor::new(&bytes), ImageFormat::Jpeg);
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(8192);
-        limits.max_image_height = Some(8192);
-        limits.max_alloc = Some(128 * 1024 * 1024);
-        reader.limits(limits);
-        reader
-            .decode()
-            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
-        Ok(bytes)
-    })
-    .await
-    .map_err(|_| ApiError::Decode(BoundedMessage::new("image validation failed")))?
+    Ok(bytes)
 }
 
 fn endpoint_name(segments: &[&str]) -> &'static str {
