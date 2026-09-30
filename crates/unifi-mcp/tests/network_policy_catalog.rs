@@ -65,6 +65,7 @@ async fn policy_collections_page_complete_rows_and_support_filtering() {
     for (route, record_type) in [
         ("acl-rules", "IPV4"),
         ("firewall/zones", "CUSTOM"),
+        ("firewall/policies", "USER_DEFINED"),
         ("dns/policies", "A_RECORD"),
         ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
@@ -85,6 +86,7 @@ async fn policy_collections_page_complete_rows_and_support_filtering() {
     for kind in [
         "aclRules",
         "firewallZones",
+        "firewallPolicies",
         "dnsPolicies",
         "trafficMatchingLists",
     ] {
@@ -116,6 +118,7 @@ async fn policy_detail_routes_preserve_fields_and_upstream_errors() {
     for (route, record_type) in [
         ("acl-rules", "IPV4"),
         ("firewall/zones", "CUSTOM"),
+        ("firewall/policies", "USER_DEFINED"),
         ("dns/policies", "A_RECORD"),
         ("traffic-matching-lists", "IPV4_ADDRESSES"),
     ] {
@@ -142,6 +145,7 @@ async fn policy_detail_routes_preserve_fields_and_upstream_errors() {
     for kind in [
         "aclRules",
         "firewallZones",
+        "firewallPolicies",
         "dnsPolicies",
         "trafficMatchingLists",
     ] {

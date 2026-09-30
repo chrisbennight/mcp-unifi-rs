@@ -49,8 +49,10 @@ use crate::{
 };
 
 mod activity;
+mod firewall_policy_request;
 mod system_log;
 mod traffic;
+use firewall_policy_request::FirewallPolicyRequest;
 use system_log::{event_row, log_window};
 use traffic::{
     ClientCounterCoverage, CounterSemantics, CoverageStatus, TrafficCoverage, client_counters,
@@ -2550,6 +2552,7 @@ struct NetworkSwitchingDetailOutput {
 enum NetworkPolicyKind {
     AclRules,
     FirewallZones,
+    FirewallPolicies,
     DnsPolicies,
     TrafficMatchingLists,
 }
@@ -2559,6 +2562,7 @@ impl NetworkPolicyKind {
         match self {
             Self::AclRules => NetworkPolicyCollection::AclRules,
             Self::FirewallZones => NetworkPolicyCollection::FirewallZones,
+            Self::FirewallPolicies => NetworkPolicyCollection::FirewallPolicies,
             Self::DnsPolicies => NetworkPolicyCollection::DnsPolicies,
             Self::TrafficMatchingLists => NetworkPolicyCollection::TrafficMatchingLists,
         }
@@ -2621,6 +2625,16 @@ struct FirewallZonesConfigureInput {
     operation: NetworkPolicyWriteOperation,
     id: Option<String>,
     zone: Option<FirewallZoneRequest>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPoliciesConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    policy: Option<FirewallPolicyRequest>,
     #[serde(default)]
     confirm: bool,
 }
@@ -3614,9 +3628,8 @@ struct GuestStatusOutput {
 }
 
 /// What `firewall.policies.update` can change on one zone-based policy.
-/// Only the switch is settable: what a policy matches is a nested structure
-/// whose parts validate together, and rewriting one is authoring a policy
-/// rather than operating one.
+/// This shortcut preserves all other fields in the existing policy.
+/// Full creation and replacement use `firewall.policies.configure`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FirewallPolicyChanges {
@@ -4376,6 +4389,9 @@ impl ToolSpec {
             ToolKind::FirewallZonesConfigure => {
                 tool::<FirewallZonesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::FirewallPoliciesConfigure => {
+                tool::<FirewallPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
+            }
             ToolKind::DnsPoliciesConfigure => {
                 tool::<DnsPoliciesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
@@ -4718,6 +4734,7 @@ impl UnifiMcp {
             ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
             ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
             ToolKind::FirewallZonesConfigure => self.firewall_zones_configure(params).await,
+            ToolKind::FirewallPoliciesConfigure => self.firewall_policies_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
             ToolKind::TrafficListsConfigure => self.traffic_lists_configure(params).await,
             ToolKind::WifiBroadcastsList => self.wifi_broadcasts_list(params).await,
@@ -7753,6 +7770,26 @@ impl UnifiMcp {
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let plan = policy_write_plan(
             NetworkPolicyKind::FirewallZones,
+            input.operation,
+            input.id,
+            requested,
+            input.confirm,
+        )?;
+        self.network_policy_write(plan).await
+    }
+
+    async fn firewall_policies_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<FirewallPoliciesConfigureInput>(params)?;
+        let requested = input
+            .policy
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let plan = policy_write_plan(
+            NetworkPolicyKind::FirewallPolicies,
             input.operation,
             input.id,
             requested,
@@ -14206,6 +14243,7 @@ mod tests {
         ("acl.rules.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("firewall.zones.configure", false, true, true),
+        ("firewall.policies.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.
         ("guests.authorize", false, false, true),
