@@ -1282,13 +1282,14 @@ impl ProtectClient {
         &self,
         camera_id: &str,
         qualities: &[ProtectStreamQuality],
-    ) -> Result<ProtectStreamUrls, ApiError> {
+    ) -> Result<(ProtectStreamUrls, u16, Vec<u8>), ApiError> {
         validate_identifier("cameras.streams.create", camera_id)?;
         validate_stream_qualities(qualities)?;
         let request = self
             .request(Method::POST, &["cameras", camera_id, "rtsps-stream"])?
             .json(&serde_json::json!({"qualities": qualities}));
-        self.send_json_once(request, "cameras.streams.create").await
+        self.send_json_once_with_status_response(request, "cameras.streams.create")
+            .await
     }
 
     /// Remove RTSPS stream handles for selected camera qualities. The accepted
@@ -1329,10 +1330,11 @@ impl ProtectClient {
     pub async fn camera_talkback_session(
         &self,
         camera_id: &str,
-    ) -> Result<ProtectTalkbackSession, ApiError> {
+    ) -> Result<(ProtectTalkbackSession, u16, Vec<u8>), ApiError> {
         validate_identifier("cameras.talkback", camera_id)?;
         let request = self.request(Method::POST, &["cameras", camera_id, "talkback-session"])?;
-        self.send_json_once(request, "cameras.talkback").await
+        self.send_json_once_with_status_response(request, "cameras.talkback")
+            .await
     }
 
     /// A bounded JPEG snapshot from the official camera endpoint.
@@ -1500,6 +1502,16 @@ impl ProtectClient {
         request: RequestBuilder,
         endpoint: &'static str,
     ) -> Result<(T, Vec<u8>), ApiError> {
+        self.send_json_once_with_status_response(request, endpoint)
+            .await
+            .map(|(value, _, bytes)| (value, bytes))
+    }
+
+    async fn send_json_once_with_status_response<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        endpoint: &'static str,
+    ) -> Result<(T, u16, Vec<u8>), ApiError> {
         let response = self.send(request, endpoint).await?;
         let status = response.status().as_u16();
         let bytes = http::read_bounded_body(response)
@@ -1514,7 +1526,7 @@ impl ProtectClient {
         let value = decode_json(endpoint, &bytes).inspect_err(|error| {
             log_decode_failure(endpoint, status, bytes.len(), error);
         })?;
-        Ok((value, bytes))
+        Ok((value, status, bytes))
     }
 
     fn request(&self, method: Method, segments: &[&str]) -> Result<RequestBuilder, ApiError> {

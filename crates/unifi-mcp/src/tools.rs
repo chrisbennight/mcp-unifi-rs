@@ -1932,6 +1932,12 @@ struct CameraTalkbackOutput {
     camera_id: String,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<CameraTalkbackSessionView>,
 }
 
@@ -6865,12 +6871,15 @@ impl UnifiMcp {
             .collect();
         match input.action {
             CameraStreamsAction::Create => {
-                let created = self
+                let (created, status, body) = self
                     .protect()
                     .camera_streams_create(&camera_id, &qualities)
                     .await
                     .map_err(api_error)?;
                 output.applied = true;
+                output.response_status = Some(status);
+                output.response_body =
+                    Some(BoundedMessage::from_controller_bytes(&body).to_string());
                 output.streams = stream_handles(created)
                     .into_iter()
                     .filter(|handle| input.qualities.contains(&handle.quality))
@@ -6947,21 +6956,26 @@ impl UnifiMcp {
             .camera_inventory(CameraInventoryScope::CameraNames)
             .await?;
         let camera_id = camera_by_selector(&inventory, selector)?.id;
-        let session = if input.confirm {
-            Some(
-                self.protect()
-                    .camera_talkback_session(&camera_id)
-                    .await
-                    .map_err(api_error)?,
-            )
-        } else {
-            None
-        };
-        structured(CameraTalkbackOutput {
+        let mut output = CameraTalkbackOutput {
             camera_id,
-            applied: session.is_some(),
-            session: session.map(talkback_session_view),
-        })
+            applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            session: None,
+        };
+        if input.confirm {
+            let (session, status, body) = self
+                .protect()
+                .camera_talkback_session(&output.camera_id)
+                .await
+                .map_err(api_error)?;
+            output.applied = true;
+            output.response_status = Some(status);
+            output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+            output.session = Some(talkback_session_view(session));
+        }
+        structured_with_accepted_response(output)
     }
 
     /// One console snapshot: version, cameras grouped by their reported

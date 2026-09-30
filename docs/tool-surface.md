@@ -547,8 +547,8 @@ risk and sensitive. The gateway decides caller access in gateway mode.
 `cameras.streams.update` previews by default;
 with `confirm`, it creates or removes one or more distinct qualities: `high`,
 `medium`, `low`, or `package`. A created URL is returned even if the follow-up
-readback fails or times out. Removal returns its accepted HTTP status and
-complete controller body. The result says whether the requested qualities
+readback fails or times out. Creation and removal return their accepted HTTP
+status and complete controller body. The result says whether the requested qualities
 were observed afterward, and `readbackError` carries any controller failure.
 For these camera mutations, a large accepted body or readback error moves to
 a labeled text content block with a corresponding `InContent` marker, so an
@@ -556,7 +556,9 @@ accepted action result remains available.
 `package` requires a camera with a package camera.
 
 `cameras.talkback.start` previews or creates a talkback session. A confirmed
-call returns its RTP URL, codec, sampling rate, and bit depth. The API does not
+call returns its RTP URL, codec, sampling rate, bit depth, and accepted HTTP
+status and complete controller body. Large bodies move to labeled MCP content
+with an explicit marker. The API does not
 provide a session readback, so the tool reports creation and the returned
 session data without claiming that the caller has sent audio.
 
