@@ -139,9 +139,10 @@ reports `verified` for a matching configuration or `verifiedAbsent` after a
 confirmed 404. A surviving record or the full upstream readback error remains
 available. Ambiguous writes are never retried.
 
-When structured output exceeds 48 KiB, complete requested records, bodies,
-and errors move to labeled MCP text content with explicit `...InContent`
-markers. Each upstream response remains bounded by the transport's 4 MiB limit;
+Formatters can move complete large records, bodies and errors to labeled MCP
+text content with explicit `...InContent` markers, using 48 KiB as a
+structured content target. Results may exceed that target; no accepted
+controller values are discarded to meet it. Each upstream response remains bounded by the transport's 4 MiB limit;
 an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
@@ -151,8 +152,7 @@ API's [RADIUS profiles](https://developer.ui.com/network/v10.4.57/getradiusprofi
 for the selected site. Each profile preserves the fields
 the controller returned, including the id needed for enterprise Wi-Fi setup.
 The result includes the controller's page metadata and `nextOffset` until the
-list is complete. An over-budget result fails explicitly; lower `limit` to
-continue with smaller pages. Contradictory page metadata returns the complete
+list is complete. Complete large results remain available. Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
 
 ### `network.inventory.list` and `network.switching.detail`
@@ -352,7 +352,7 @@ Display text uses visible truncation markers.
 Activity, graph, legacy DPI, and catalog lookup failures. HTTP failures also
 include the controller's status. A console-family
 decision with no request has no controller response. If the error text exceeds
-the structured result budget, `sourceErrorsInContent` points to the complete
+the structured content formatting target, `sourceErrorsInContent` points to the complete
 errors in an additional content block while the available report remains in
 the structured result. When the requested Activity page itself exceeds that
 budget, `activityInContent` points to its complete data in another content
@@ -396,8 +396,9 @@ recorder list.
 `includeDetails: true`, or selected top-level fields with `detailFields`.
 `protect.overview` accepts `detailFields` to return selected top-level fields
 from the original local bootstrap, including recorder, account, and user
-records. These fields are returned as the console reports them. A result over
-the 48 KiB response budget fails explicitly; request fewer fields when needed.
+records. These fields are returned completely as the console reports them,
+including when the selected fields exceed the structured content formatting
+target.
 If the optional local inventory read fails, `cameras.search` and
 `protect.overview` include the controller error in
 `capabilities.localUnavailableReason`, and `cameras.status` includes it in
@@ -434,8 +435,8 @@ Controller-specific fields remain present, including fields unknown to this
 server. A wrong-id detail or malformed inventory returns the accepted response
 with a validation diagnostic. An absent API route remains an error, while an
 empty inventory has `totalCount: 0`. The upstream endpoints return complete
-arrays; this server pages the bounded response locally. If a page exceeds the
-MCP result budget, lower `limit`.
+arrays; this server pages the bounded response locally. Large pages and
+complete detail records remain available.
 
 ### `protect.devices.action`
 
@@ -478,7 +479,7 @@ move to labeled content. The gateway decides caller access.
 The list tool pages the complete arm-profile records from Protect's documented
 `arm-profiles` endpoint. It accepts `offset` and `limit` (1-200, default 50)
 and returns `totalCount` and `nextOffset` with each page. If the selected page
-exceeds the structured-result budget, `profilesInContent` points to the
+exceeds the structured content formatting target, `profilesInContent` points to the
 complete page in labeled content, including when one record alone is large.
 
 The configuration tool previews or creates, updates, deletes, or selects an arm
@@ -513,8 +514,8 @@ set. Controller fields remain present, including fields unknown to this
 server. A wrong-id detail or malformed inventory returns the accepted response
 with a validation diagnostic. An absent API route remains an upstream error,
 while an empty inventory has `totalCount: 0`. The upstream endpoints return
-complete arrays; this server pages the bounded response locally. If a page
-exceeds the MCP result budget, lower `limit`.
+complete arrays; this server pages the bounded response locally. Large pages
+and complete detail records remain available.
 
 ### `cameras.pos.transaction`
 
@@ -579,8 +580,7 @@ the complete controller records, including future fields. Lists accept
 `nextOffset` until complete. Detail reads use the exact `viewerId` or
 `liveviewId`. An empty inventory is distinct from an absent route. Invalid
 records or a wrong detail id return the accepted controller body with a local
-diagnostic. A result that exceeds the MCP budget fails explicitly so the
-caller can lower the page limit.
+diagnostic. Complete large pages and detail records remain available.
 
 `protect.viewers.settings.update` previews the viewer's current record and a
 typed change to its `name` or assigned `liveview`. An explicit `null` clears
@@ -696,8 +696,8 @@ event families explicitly because Protect otherwise ignores time bounds on
 this route. The paged response carries compact event facts by default.
 Set `includeDetails: true` to include each returned event's complete
 controller record, including detection metadata and thumbnail references. This
-choice also works with a continuation cursor; lower `limit` if the expanded
-page exceeds the response budget. Use
+choice also works with a continuation cursor. Complete expanded pages remain
+available. Use
 `detailFields` to select named controller fields when only part of an event's
 detail is needed; it can be used without `includeDetails`. Use
 `protect.event.thumbnail` with an event id from the result to fetch its image
@@ -915,8 +915,8 @@ already exist. It also reads each identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
 and complete controller response or error. `readbackComplete` says whether verification
-reached the end of the returned batch. A deadline or accumulated error
-response budget that stops later reads is named in `readbackStopReason`; those
+reached the end of the returned batch. A deadline that stops later reads is
+named in `readbackStopReason`; those
 vouchers remain reachable through `vouchers.status` or `vouchers.search`
 without minting the batch again.
 Large errors move to a separate text content block, signaled by
@@ -940,9 +940,8 @@ full batch of real vouchers and is what keeps a hostile upstream from
 exhausting this process; trading that away would not make delivery certain, it
 would only move the failure.
 
-The standard response budget applies to creation too. If a controller returns
-an unusually large batch that exceeds it, the call fails loudly and the codes
-can be retrieved through the bounded voucher reads.
+Complete accepted creation responses remain available, including unusually
+large batches. Voucher list and detail reads can also retrieve their codes.
 
 For the same reason, everything that can refuse a batch refuses it before
 minting: the count and validity bounds and the label's length are decided from

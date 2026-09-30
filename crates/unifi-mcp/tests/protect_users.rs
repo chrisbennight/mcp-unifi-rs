@@ -201,3 +201,61 @@ async fn an_empty_user_inventory_is_distinct_from_a_missing_api_route() {
         .expect_err("missing API route");
     assert!(error.message.contains("HTTP 404: user route absent"));
 }
+
+#[tokio::test]
+async fn large_user_lists_and_details_preserve_complete_records_on_the_mcp_wire() {
+    for (kind, route) in [("user", "users"), ("identityUser", "ulp-users")] {
+        let server = MockServer::start().await;
+        let record = serde_json::json!({"id":"user-large", "fixtureCredential":"x".repeat(60000),"unknown":{"tail":"original-controller-tail"}});
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{route}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([record.clone()])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{route}/user-large")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let handler = handler_for(&server);
+        for (tool, arguments, field, expected) in [
+            (
+                "protect.users.list",
+                serde_json::json!({"kind":kind,"limit":1}),
+                "users",
+                serde_json::json!([record.clone()]),
+            ),
+            (
+                "protect.users.status",
+                serde_json::json!({"kind":kind,"userId":"user-large"}),
+                "user",
+                record.clone(),
+            ),
+        ] {
+            let result = handler
+                .call(&call(tool, &arguments), None)
+                .await
+                .expect("complete large result");
+            let wire: serde_json::Value =
+                serde_json::from_slice(&serde_json::to_vec(&result).expect("MCP serialize"))
+                    .expect("MCP JSON");
+            assert_eq!(wire["structuredContent"][field], expected);
+            assert_ne!(wire["isError"], true);
+            assert_eq!(
+                wire["_meta"]["io.modelcontextprotocol/trust-annotations"]["sensitive"],
+                true
+            );
+            let content = wire["content"][0]["text"].as_str().expect("result content");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(content).expect("complete content JSON")
+                    [field],
+                expected
+            );
+        }
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
+}

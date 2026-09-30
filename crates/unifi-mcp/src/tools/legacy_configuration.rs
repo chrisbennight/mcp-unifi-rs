@@ -2,10 +2,10 @@
 
 use super::{
     ApiError, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
-    MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_RESULT_BYTES, McpError, NETWORK_POLICY_READBACK_BUDGET,
-    NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation, Serialize, UnifiMcp, Value,
-    api_error, legacy_wlan_request::LegacyWlanConfiguration, parse, requested_json_matches,
-    structured,
+    MAXIMUM_POLICY_REQUEST_BYTES, McpError, NETWORK_POLICY_READBACK_BUDGET,
+    NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation, STRUCTURED_CONTENT_TARGET_BYTES,
+    Serialize, UnifiMcp, Value, api_error, legacy_wlan_request::LegacyWlanConfiguration, parse,
+    requested_json_matches, structured,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -521,7 +521,7 @@ fn result(mut output: Value) -> Result<CallToolResult, McpError> {
         "after",
         "readbackError",
     ] {
-        if output.to_string().len() <= MAXIMUM_RESULT_BYTES {
+        if output.to_string().len() <= STRUCTURED_CONTENT_TARGET_BYTES {
             break;
         }
         if let Some(part) = output.as_object_mut().expect("result object").remove(field) {

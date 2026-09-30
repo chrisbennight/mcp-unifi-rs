@@ -2,7 +2,7 @@
 
 use super::{
     ApiError, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
-    MAXIMUM_RESULT_BYTES, McpError, Serialize, UnifiMcp, parse, structured,
+    McpError, STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp, parse, structured,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::time::Duration;
@@ -174,7 +174,7 @@ fn subscription_result(mut output: ProtectUpdatesOutput) -> Result<CallToolResul
     if serde_json::to_vec(&output)
         .expect("subscription serialization")
         .len()
-        > MAXIMUM_RESULT_BYTES
+        > STRUCTURED_CONTENT_TARGET_BYTES
     {
         if let Some(messages) = output.messages.take() {
             content.push(ContentBlock::text(format!(
@@ -186,7 +186,7 @@ fn subscription_result(mut output: ProtectUpdatesOutput) -> Result<CallToolResul
         if serde_json::to_vec(&output)
             .expect("subscription serialization")
             .len()
-            > MAXIMUM_RESULT_BYTES
+            > STRUCTURED_CONTENT_TARGET_BYTES
             && let Some(error) = output.error.take()
         {
             content.push(ContentBlock::text(format!(

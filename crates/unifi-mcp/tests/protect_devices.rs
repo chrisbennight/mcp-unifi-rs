@@ -219,3 +219,46 @@ async fn an_empty_inventory_is_distinct_from_a_missing_api_route() {
         .expect_err("missing API route");
     assert!(error.message.contains("HTTP 404: sensor route absent"));
 }
+
+#[tokio::test]
+async fn large_device_lists_and_status_keep_all_controller_fields() {
+    let server = MockServer::start().await;
+    let record = serde_json::json!({"id":"device-large","unknown":{"fixtureCredential":"x".repeat(60000),"tail":"original-tail"}});
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/lights")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([record.clone()])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/lights/device-large")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let handler = handler_for(&server);
+    for (tool, arguments, field, expected) in [
+        (
+            "protect.devices.list",
+            serde_json::json!({"kind":"light","limit":1}),
+            "devices",
+            serde_json::json!([record.clone()]),
+        ),
+        (
+            "protect.devices.status",
+            serde_json::json!({"kind":"light","deviceId":"device-large"}),
+            "device",
+            record.clone(),
+        ),
+    ] {
+        let result = handler
+            .call(&call(tool, &arguments), None)
+            .await
+            .expect("large complete device result");
+        assert_eq!(
+            result.structured_content.expect("structured")[field],
+            expected
+        );
+    }
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+}
