@@ -60,10 +60,8 @@ use unifi_api::system_log::{SystemLogQuery, SystemLogSeverity};
 const ACTION_METADATA_KEY: &str = "io.modelcontextprotocol/action-metadata";
 const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 
-/// Hard ceiling on one structured result's serialized size. A result over
-/// budget is a caller-recoverable error, never a truncated or unbounded dump.
-/// A tool whose result carries credentials this call created is exempt, since
-/// there is nothing for the caller to recover by narrowing.
+/// Formatting threshold for moving complete large fields to labeled MCP content.
+/// Structured values may exceed this threshold without losing the result.
 pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
 const MAXIMUM_POLICY_REQUEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
@@ -1458,7 +1456,7 @@ struct ProtectLiveviewsConfigureOutput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
     /// Top-level fields from the local bootstrap response to include.
-    /// Large fields may exceed the response budget; request one field at a time.
+    /// Requested fields remain complete, including large values.
     detail_fields: Option<Vec<String>>,
 }
 
@@ -2425,8 +2423,7 @@ enum FirewallSection {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FirewallReadInput {
     /// Restrict the response to one section. Required to use
-    /// `sectionOffset`, and the recovery knob when the composite view
-    /// exceeds the response budget or reports a truncated section.
+    /// `sectionOffset`, to continue a truncated section scan.
     section: Option<FirewallSection>,
     /// Continuation offset into a paginated section scan (`zones` or
     /// `policies` only), taken from `nextSectionOffset`.
@@ -2436,8 +2433,7 @@ struct FirewallReadInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct NetworksReadInput {
-    /// Restrict the response to one section when the whole configuration
-    /// would exceed the response budget.
+    /// Restrict the response to one configuration section.
     section: Option<NetworksSection>,
 }
 
@@ -3598,6 +3594,12 @@ struct GuestsAuthorizeOutput {
     action: &'static str,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     requested_limits: Option<GuestLimitsView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     authorized_before: Option<bool>,
@@ -3955,6 +3957,12 @@ struct VoucherVerification {
 struct VouchersCreateOutput {
     /// Whether the controller was asked to mint. False for a preview.
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// What the call mints: how many vouchers, for how long, and under which
     /// limits. Two batches differing only in validity or access limits are
     /// different batches, and a preview that showed only a count could not
@@ -3966,6 +3974,8 @@ struct VouchersCreateOutput {
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
     vouchers: Option<Vec<VoucherView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vouchers_in_content: Option<bool>,
     /// What could be established about the batch. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     checks: Option<VoucherChecks>,
@@ -4704,9 +4714,8 @@ impl UnifiMcp {
     ///
     /// # Errors
     ///
-    /// Returns a caller error for unknown names, schema-violating arguments,
-    /// or over-budget results, and a bounded internal error for upstream
-    /// faults.
+    /// Returns a caller error for unknown names or schema-violating arguments.
+    /// Upstream faults preserve the complete accepted controller error body.
     pub async fn call(
         &self,
         params: &CallToolRequestParams,
@@ -4804,7 +4813,7 @@ impl UnifiMcp {
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
-        result.and_then(|result| finalize(result, spec.behavior))
+        result.map(|result| trust_annotated(result, spec.behavior))
     }
 
     async fn network_overview(
@@ -8386,6 +8395,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "authorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: Some(GuestLimitsView {
                 time_limit_minutes: input.time_limit_minutes,
                 data_usage_limit_m_bytes: input.data_usage_limit_m_bytes,
@@ -8409,12 +8421,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .authorize_guest(&site_id, &client_id, limits)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         let grant = response
             .granted_authorization
             .expect("validated action response");
@@ -8444,6 +8458,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "unauthorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: None,
             authorized_before: None,
             authorized_after: None,
@@ -8462,12 +8479,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .unauthorize_guest(&site_id, &client_id)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         output.revoked_authorization = response.revoked_authorization.map(Into::into);
         let upstream_error = self
             .guest_readback(&site_id, &client_id, &client, started, &mut output, None)
@@ -9342,17 +9361,6 @@ impl UnifiMcp {
         if !input.confirm {
             return firewall_delete_result(output);
         }
-        // Check the confirmed result shape before the irreversible call.
-        let mut final_shape = output.clone();
-        final_shape.applied = true;
-        final_shape.verified_absent = Some(false);
-        final_shape.warnings.push(
-            "the delete request was accepted, but policy absence was not verified".to_owned(),
-        );
-        finalize(
-            firewall_delete_result(final_shape)?,
-            ToolBehavior::write(false),
-        )?;
         let (status, body) = self
             .integration()
             .delete_firewall_policy(&site_id, &input.policy)
@@ -9706,9 +9714,13 @@ impl UnifiMcp {
         if !input.confirm.unwrap_or(false) {
             return structured(VouchersCreateOutput {
                 applied: false,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
                 batch,
                 requested: input.count,
                 vouchers: None,
+                vouchers_in_content: None,
                 checks: None,
                 well_formed: None,
                 verified: None,
@@ -9721,7 +9733,7 @@ impl UnifiMcp {
         }
 
         let site_id = self.site_id().await?;
-        let created = self
+        let (created, status, body) = self
             .integration()
             .create_vouchers(
                 &site_id,
@@ -9767,9 +9779,13 @@ impl UnifiMcp {
             && checks.all_well_formed;
         structured_with_mutation_readback_errors(VouchersCreateOutput {
             applied: true,
+            response_status: Some(status),
+            response_body: Some(BoundedMessage::from_controller_bytes(&body).to_string()),
+            response_body_in_content: None,
             batch,
             requested: input.count,
             vouchers: Some(vouchers),
+            vouchers_in_content: None,
             checks: Some(checks),
             well_formed: Some(well_formed),
             verified: Some(verification.verified),
@@ -11181,9 +11197,7 @@ fn page_at(offset: u64) -> PageRequest {
     PageRequest { offset, limit: 200 }
 }
 
-/// Per-section rows gathered per call, sized so a ceiling-limited section
-/// still fits the response budget and can actually return with its
-/// truncation flag. A truncated section continues from its
+/// Per-section rows gathered per call. A truncated section continues from its
 /// `nextSectionOffset`, so the ceiling bounds one response, not the
 /// reachable data.
 const ZONE_SCAN_CEILING: u64 = 400;
@@ -11736,10 +11750,6 @@ fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> 
             None,
         ));
     }
-    // Bounded like every other caller-supplied string here, and for a sharper
-    // reason: this result is exempt from the response budget so a minted code
-    // can never be refused, and an unbounded label would turn that exemption
-    // into an amplifier for text the caller chose.
     let name = input.name.trim();
     if name.is_empty() || name.len() > MAXIMUM_QUERY_LENGTH {
         return Err(McpError::invalid_params(
@@ -12705,6 +12715,14 @@ fn structured_with_mutation_readback_error<T: Serialize>(
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > MAXIMUM_RESULT_BYTES
         && let Some(error) = upstream_error
         && let Value::Object(fields) = &mut value
@@ -12712,12 +12730,15 @@ fn structured_with_mutation_readback_error<T: Serialize>(
     {
         fields.insert("readbackErrorInContent".to_owned(), Value::Bool(true));
         let mut result = CallToolResult::structured(value);
+        result.content.extend(extra_content);
         result
             .content
             .push(ContentBlock::text(format!("readbackError: {error}")));
         return Ok(result);
     }
-    Ok(CallToolResult::structured(value))
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Keep a confirmed action's accepted response and any later controller
@@ -12743,45 +12764,38 @@ fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallTool
     Ok(result)
 }
 
-/// Keep issued voucher codes in the structured result when several
-/// verification failures do not fit alongside them.
+/// Preserve issued codes, accepted bodies, and verification failures through
+/// labeled content when their combined values exceed the structured bound.
 fn structured_with_mutation_readback_errors<T: Serialize>(
     output: T,
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > MAXIMUM_RESULT_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("readbackErrors")
     {
         fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
-        let mut result = CallToolResult::structured(value);
-        result
-            .content
-            .push(ContentBlock::text(format!("readbackErrors: {errors}")));
-        return Ok(result);
+        extra_content.push(ContentBlock::text(format!("readbackErrors: {errors}")));
     }
-    Ok(CallToolResult::structured(value))
-}
-
-/// Enforce the response budget on the values returned by the tool, then
-/// attach the gateway's sensitivity and trust labels.
-fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolResult, McpError> {
-    let Some(value) = result.structured_content else {
-        return Ok(trust_annotated(result, behavior));
-    };
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES {
-        return Err(McpError::invalid_params(
-            "result exceeds the response budget; narrow the query or lower the limit",
-            None,
-        ));
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(vouchers) = fields.remove("vouchers")
+    {
+        fields.insert("vouchersInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("vouchers: {vouchers}")));
     }
-    let mut finalized = CallToolResult::structured(value);
-    // The library supplies the first text block from structuredContent.
-    // Regenerating it above avoids a duplicate while preserving any additional
-    // controller content the tool attached after that block.
-    finalized.content.extend(result.content.into_iter().skip(1));
-    Ok(trust_annotated(finalized, behavior))
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
@@ -13880,7 +13894,7 @@ mod tests {
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
         FirewallPolicyChanges, JSON_SCHEMA_TYPES, MAXIMUM_RESULT_BYTES, POLICY_WIRE_NAMES,
         PORT_FORWARD_CHANGE_FIELDS, PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges,
-        PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView, finalize,
+        PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView,
         normalize_portable_schema, parse, schema_object, structured,
         structured_with_upstream_error, trust_annotated,
     };
@@ -14144,17 +14158,6 @@ mod tests {
     }
 
     #[test]
-    fn over_budget_results_return_the_recovery_error_not_a_dump() {
-        // The budget applies to the values returned by the tool.
-        let oversized = structured(vec!["x".repeat(1024); MAXIMUM_RESULT_BYTES / 1024 + 2])
-            .expect("built result");
-        let error = finalize(oversized, ToolBehavior::read()).expect_err("over budget");
-        assert!(error.message.contains("narrow the query"));
-        let small = structured(vec!["small"]).expect("built result");
-        assert!(finalize(small, ToolBehavior::read()).is_ok());
-    }
-
-    #[test]
     fn secondary_controller_error_survives_the_structured_result_budget() {
         let body = format!("{}controller-error-tail", "x".repeat(MAXIMUM_RESULT_BYTES));
         let error = ApiError::Status {
@@ -14185,13 +14188,14 @@ mod tests {
     }
 
     #[test]
-    fn finalizer_preserves_controller_values_and_property_names() {
+    fn trust_metadata_preserves_complete_large_results() {
         let supplied = serde_json::json!({
             "nested": {"controller-key": "controller-value"},
             "code": "controller-code",
+            "large":"x".repeat(60000),
         });
         let result = structured(supplied.clone()).expect("built result");
-        let returned = finalize(result, ToolBehavior::read()).expect("returned result");
+        let returned = trust_annotated(result, ToolBehavior::read());
         assert_eq!(returned.structured_content, Some(supplied));
     }
 
