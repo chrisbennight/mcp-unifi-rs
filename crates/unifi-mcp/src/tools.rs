@@ -4312,6 +4312,42 @@ struct StatsQueryInput {
     offset: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum TrafficReadSource {
+    Activity,
+    Graph,
+    Wan,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TrafficReadInput {
+    source: TrafficReadSource,
+    /// Whole UTC hours, 1-168; defaults to 24 ending at the latest completed hour.
+    hours: Option<u32>,
+    /// Fixed UTC hour boundaries in epoch milliseconds, instead of hours.
+    start_ms: Option<u64>,
+    end_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TrafficReadOutput {
+    source: TrafficReadSource,
+    status: &'static str,
+    start_ms: u64,
+    end_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_in_content: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct WanSampleRow {
@@ -4522,6 +4558,7 @@ impl ToolSpec {
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
+            ToolKind::TrafficRead => tool::<TrafficReadInput, TrafficReadOutput>(self),
             ToolKind::WlansList | ToolKind::PortForwardsList => {
                 tool::<LegacyConfigurationListInput, LegacyConfigurationResult>(self)
             }
@@ -4836,6 +4873,7 @@ impl UnifiMcp {
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
+            ToolKind::TrafficRead => self.traffic_read(params).await,
             ToolKind::WlansList => self.wlans_list(params).await,
             ToolKind::WlansStatus => self.wlans_status(params).await,
             ToolKind::WlanGroupsList => self.wlan_groups_list(params).await,
@@ -10058,6 +10096,67 @@ impl UnifiMcp {
         })
     }
 
+    async fn traffic_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        use unifi_api::collection::{SourceStatus, TrafficSource};
+        let input = parse::<TrafficReadInput>(params)?;
+        let window = activity::report_window(&StatsQueryInput {
+            report: StatsReport::ClientWanHistory,
+            hours: input.hours,
+            top: None,
+            start_ms: input.start_ms,
+            end_ms: input.end_ms,
+            limit: None,
+            offset: None,
+        })?;
+        let selected = match input.source {
+            TrafficReadSource::Activity => TrafficSource::Activity,
+            TrafficReadSource::Graph => TrafficSource::Graph,
+            TrafficReadSource::Wan => TrafficSource::Wan,
+        };
+        let report = self
+            .legacy()
+            .traffic_source(self.legacy_site(), window, selected)
+            .await
+            .map_err(api_error)?;
+        if report.status == SourceStatus::Failed {
+            return Err(McpError::internal_error(
+                report
+                    .error
+                    .expect("failed source carries its original error"),
+                None,
+            ));
+        }
+        let data = report
+            .data
+            .map(|raw| {
+                serde_json::from_str(raw.get()).map_err(|error| {
+                    api_error(ApiError::DecodeResponse {
+                        response: BoundedMessage::from_controller_bytes(raw.get().as_bytes()),
+                        diagnostic: error.to_string().into(),
+                    })
+                })
+            })
+            .transpose()?;
+        traffic_read_result(TrafficReadOutput {
+            source: input.source,
+            status: match report.status {
+                SourceStatus::Collected => "collected",
+                SourceStatus::Unsupported => "unsupported",
+                SourceStatus::Unrecognized => "unrecognized",
+                SourceStatus::Failed => unreachable!("failed source returned above"),
+            },
+            start_ms: window.start,
+            end_ms: window.end,
+            data,
+            data_in_content: None,
+            error: report.error,
+            error_in_content: None,
+        })
+    }
+
     async fn dpi_stats(
         &self,
         top: u16,
@@ -12691,6 +12790,29 @@ fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError
     }
     let mut result = CallToolResult::structured(value);
     result.content.extend(extra_content);
+    Ok(result)
+}
+
+fn traffic_read_result(mut output: TrafficReadOutput) -> Result<CallToolResult, McpError> {
+    let mut content = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(data) = output.data.take()
+    {
+        output.data_in_content = Some(true);
+        content.push(ContentBlock::text(format!("data: {data}")));
+    }
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(error) = output.error.take()
+    {
+        output.error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("error: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
     Ok(result)
 }
 

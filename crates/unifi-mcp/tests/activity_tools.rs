@@ -315,20 +315,23 @@ async fn activity_validation_error_reaches_the_tool_caller() {
     let mut report = fixture();
     report["client_usage_by_app"][0]["client"]["name"] =
         json!(format!("{}controller-name-tail", "x".repeat(4096)));
+    report["client_usage_by_app"][0]["client"]["mac"] = json!("invalid-client-identity");
     report["controller_extra"] = json!("original-controller-field");
     activity_mock(&server, report.clone()).await;
 
     let error = handler_for(&server)
         .call(&call("stats.query", &args("clientWanHistory")), None)
         .await
-        .expect_err("activity name exceeds typed bound");
+        .expect_err("invalid activity identity");
     assert!(
         error.message.contains(&report.to_string()),
         "{}",
         error.message
     );
     assert!(
-        error.message.contains("activity report exceeds"),
+        error
+            .message
+            .contains("invalid or duplicate client identities"),
         "{}",
         error.message
     );
@@ -357,7 +360,7 @@ async fn invalid_inputs_make_no_controller_requests() {
 }
 
 #[tokio::test]
-async fn bounds_duplicates_and_overflow_fail_loudly() {
+async fn duplicate_counters_and_overflow_fail_loudly() {
     let mut duplicate_client = fixture();
     let first = duplicate_client["client_usage_by_app"][0].clone();
     duplicate_client["client_usage_by_app"]
@@ -396,6 +399,222 @@ async fn bounds_duplicates_and_overflow_fail_loudly() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn activity_summaries_page_large_client_and_application_collections() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let clients: Vec<_> = (0_u32..1201).map(|index| json!({
+        "client":{"mac":format!("02:00:00:{:02x}:{:02x}:01", index / 256, index % 256),
+            "name":"client"},
+            "usage_by_app":(0_u16..18).map(|application| json!({"application":application,"category":2,"bytes_received":1,"bytes_transmitted":0})).collect::<Vec<_>>()
+    })).collect();
+    let applications: Vec<_> = (0_u16..5000)
+        .map(|application| {
+            json!({
+                "application":application,"category":2,"bytes_received":1,"bytes_transmitted":0
+            })
+        })
+        .collect();
+    let body = json!({"client_usage_by_app":clients,"total_usage_by_app":applications});
+    activity_mock(&server, body).await;
+    evidence_mock(&server, wan()).await;
+    let mut input = args("clientWanHistory");
+    input["limit"] = json!(200);
+    input["offset"] = json!(1000);
+    let output = query(&server, input.clone()).await;
+    assert_eq!(output["activity"]["totalClients"], 1201);
+    assert_eq!(
+        output["activity"]["clients"]
+            .as_array()
+            .expect("clients")
+            .len(),
+        200
+    );
+    assert_eq!(output["activity"]["nextOffset"], 1200);
+    assert_eq!(output["activity"]["clientTotals"]["rxBytes"], 21_618);
+    assert_eq!(output["activity"]["applicationTotals"]["rxBytes"], 5000);
+    input["offset"] = output["activity"]["nextOffset"].clone();
+    let last = query(&server, input).await;
+    assert_eq!(
+        last["activity"]["clients"]
+            .as_array()
+            .expect("last client")
+            .len(),
+        1
+    );
+    assert!(last["activity"]["nextOffset"].is_null());
+}
+
+#[tokio::test]
+async fn complete_traffic_sources_preserve_fields_and_read_only_the_selected_source() {
+    for (source, route, request_method, body) in [
+        (
+            "activity",
+            TRAFFIC,
+            "GET",
+            json!({
+                "client_usage_by_app":[{"client":{"mac":"02:00:00:00:00:01","fingerprint":{"fixtureCredential":"controller-fixture"}},"usage_by_app":[]}],
+                "total_usage_by_app":[],"unknownMetadata":{"id":serde_json::from_str::<Value>("184467440737095516170123").expect("precise number")}
+            }),
+        ),
+        (
+            "graph",
+            GRAPH,
+            "POST",
+            json!([{"timestamp":START,"interval_seconds":3600,"unknownGraphRate":123,"fixtureCredential":"controller-fixture"}]),
+        ),
+        (
+            "wan",
+            WAN,
+            "POST",
+            json!({"meta":{"rc":"ok","unknownMeta":true},"data":[{"time":START,"wan-rx_bytes":1.25,"unknownField":"controller-fixture"}]}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        let mut mock = Mock::given(method(request_method)).and(path(route));
+        if source == "wan" {
+            mock = mock.and(body_json(
+                json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"],"start":START,"end":END}),
+            ));
+        } else {
+            mock = mock
+                .and(query_param("start", START.to_string()))
+                .and(query_param("end", END.to_string()));
+        }
+        mock.respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = handler_for(&server)
+            .call(
+                &call(
+                    "traffic.read",
+                    &json!({"source":source,"startMs":START,"endMs":END}),
+                ),
+                None,
+            )
+            .await
+            .expect("complete source");
+        let output = result.structured_content.expect("structured");
+        assert_eq!(output["source"], source);
+        assert_eq!(output["status"], "collected");
+        assert_eq!(output["data"], body);
+        assert_eq!(output["startMs"], START);
+        assert_eq!(output["endMs"], END);
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn large_and_unrecognized_traffic_sources_remain_complete() {
+    for (source, route, body, status) in [
+        (
+            "activity",
+            TRAFFIC,
+            json!({"client_usage_by_app":[],"total_usage_by_app":[],"unknownField":{"fixtureCredential":"x".repeat(60000)}}),
+            "collected",
+        ),
+        (
+            "graph",
+            GRAPH,
+            json!({"newControllerSchema":{"fixtureCredential":"x".repeat(60000)}}),
+            "unrecognized",
+        ),
+        (
+            "graph",
+            GRAPH,
+            json!((0_u64..3000).map(|index| json!({"timestamp":START+index,"interval_seconds":3600,"unknownField":"controller-field"})).collect::<Vec<_>>()),
+            "collected",
+        ),
+        (
+            "wan",
+            WAN,
+            json!({"meta":{"rc":"ok"},"data":vec![json!({"time":START,"wan-rx_bytes":1,"unknownField":"x".repeat(300)});200]}),
+            "collected",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        Mock::given(method(if source == "activity" { "GET" } else { "POST" }))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = handler_for(&server)
+            .call(
+                &call(
+                    "traffic.read",
+                    &json!({"source":source,"startMs":START,"endMs":END}),
+                ),
+                None,
+            )
+            .await
+            .expect("complete large source");
+        let output = result.structured_content.expect("structured");
+        assert_eq!(output["status"], status);
+        assert_eq!(output["dataInContent"], true);
+        let text = result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .find_map(|text| text.text.strip_prefix("data: "))
+            .expect("complete source content");
+        assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), body);
+    }
+}
+
+#[tokio::test]
+async fn traffic_source_errors_preserve_original_bodies_and_unsupported_status() {
+    for (status, source, route) in [
+        (403, "activity", TRAFFIC),
+        (429, "graph", GRAPH),
+        (503, "wan", WAN),
+        (404, "activity", TRAFFIC),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        let body = format!(
+            " {{\"controllerError\":\"exact reason\",\"fixtureCredential\":\"{}error-tail\"}} ",
+            "x".repeat(60000)
+        );
+        Mock::given(method(if source == "activity" { "GET" } else { "POST" }))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(status).set_body_string(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = handler_for(&server)
+            .call(
+                &call(
+                    "traffic.read",
+                    &json!({"source":source,"startMs":START,"endMs":END}),
+                ),
+                None,
+            )
+            .await;
+        if status == 404 {
+            let result = result.expect("unsupported source");
+            let output = result.structured_content.expect("structured");
+            assert_eq!(output["status"], "unsupported");
+            assert_eq!(output["errorInContent"], true);
+            assert!(
+                result
+                    .content
+                    .iter()
+                    .filter_map(|block| block.as_text())
+                    .any(|text| text.text.contains(&body))
+            );
+        } else {
+            let error = result.expect_err("original upstream failure");
+            assert!(error.message.contains(&body), "{}", error.message);
+            assert!(error.message.contains(&status.to_string()));
+        }
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
 }
 
 #[tokio::test]

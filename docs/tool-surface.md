@@ -341,8 +341,8 @@ only, an absent Activity endpoint permits the original legacy DPI fallback
 when no explicit time window was requested;
 its `counterSemantics` explicitly retain the unverified interval, direction,
 and scope. Authentication failures never trigger that fallback. An unrecognized
-Activity response is reported as such. Record/string/body bounds fail loudly;
-there is no silent scan truncation. Activity record, string, graph, identity,
+Activity response is reported as such. Transport body bounds fail loudly;
+there is no silent scan truncation. Activity schema, graph interval, identity,
 counter, and arithmetic validation errors return the complete accepted
 controller body with the local diagnostic.
 A malformed or duplicate WAN comparison hour returns the complete accepted
@@ -360,6 +360,24 @@ block; the structured result keeps coverage and source information.
 
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
+
+### `traffic.read`
+
+Read one complete fixed source with `source` set to `activity`, `graph`, or
+`wan`. Supply `startMs` and `endMs` on whole UTC hour boundaries for a fixed
+interval of one hour to seven days ending in the past. Alternatively,
+`hours` (1-168, default 24) ends at the latest completed UTC hour.
+
+The tool returns all original JSON fields as `data`, including client
+fingerprints, graph rates, unknown metadata and precise numeric values.
+It reads only the selected source and performs no aggregation or follow-up
+catalog reads. `status` distinguishes collected, unsupported and unrecognized
+source shapes; unrecognized JSON is still returned completely. Unsupported
+HTTP responses retain their complete controller error. Authentication,
+transport and other upstream failures are returned as errors with the
+original controller body when available. Large data or unsupported errors
+remain in labeled MCP content with `dataInContent` or `errorInContent`.
+The existing transport bounds apply. Use `stats.query` for compact summaries.
 
 ### Protect cameras, streams, talkback, overview, and events
 

@@ -38,12 +38,6 @@ impl LegacyClient {
     ) -> Result<ActivityRead<(ActivityReport, Vec<u8>)>, ApiError> {
         let (result, bytes) = self.activity_read_with_bytes(site, window, false).await?;
         match result {
-            ActivityRead::Reported(report) if !ActivityReport::validate(&report) => {
-                Err(ApiError::Decode(
-                    "activity report exceeds supported record or string bounds".into(),
-                )
-                .with_controller_response(&bytes))
-            }
             ActivityRead::Reported(report) => Ok(ActivityRead::Reported((report, bytes))),
             ActivityRead::Unsupported { response } => Ok(ActivityRead::Unsupported { response }),
             ActivityRead::Unrecognized => Ok(ActivityRead::Unrecognized),
@@ -62,18 +56,16 @@ impl LegacyClient {
             self.activity_read_with_bytes(site, window, true).await?;
         match result {
             ActivityRead::Reported(rows)
-                if rows.len() > 2017
-                    || rows.iter().any(|row| {
-                        row.interval_seconds == 0
-                            || row.interval_seconds > 86_400
-                            || row
-                                .timestamp
-                                .checked_add(u64::from(row.interval_seconds) * 1000)
-                                .is_none()
-                    }) =>
+                if rows.iter().any(|row| {
+                    row.interval_seconds == 0
+                        || row
+                            .timestamp
+                            .checked_add(u64::from(row.interval_seconds) * 1000)
+                            .is_none()
+                }) =>
             {
                 Err(
-                    ApiError::Decode("activity graph exceeds supported bounds".into())
+                    ApiError::Decode("activity graph has an invalid interval".into())
                         .with_controller_response(&bytes),
                 )
             }

@@ -91,6 +91,7 @@ pub enum ToolKind {
     WifiDiagnose,
     EventsSearch,
     StatsQuery,
+    TrafficRead,
     WlansUpdate,
     WlansList,
     WlansStatus,
@@ -198,6 +199,7 @@ impl ToolKind {
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
+            | Self::TrafficRead
             | Self::VouchersSearch
             | Self::VouchersStatus => false,
         }
@@ -268,6 +270,7 @@ impl ToolKind {
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
+            | Self::TrafficRead
             | Self::WlansUpdate
             | Self::WlansList
             | Self::WlansStatus
@@ -711,6 +714,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          observed site graph timestamps, collection limitations, and signed differences from WAN totals.",
     ),
     sensitive_read_spec(
+        ToolKind::TrafficRead,
+        "traffic.read",
+        "Read one complete Network traffic source: activity counters, activity graph, or hourly WAN report. Use source activity, graph, or wan and fixed startMs/endMs or hours (1-168). Returns every original JSON field, including unknown extensions. Reports unsupported or unrecognized sources explicitly; large data remains in MCP content. Use stats.query for compact attribution and accounting summaries.",
+    ),
+    sensitive_read_spec(
         ToolKind::NetworksRead,
         "networks.read",
         "Configured networks and wireless networks: VLANs, subnets, DHCP \
@@ -1075,6 +1083,7 @@ mod tests {
         ToolKind::WifiDiagnose,
         ToolKind::EventsSearch,
         ToolKind::StatsQuery,
+        ToolKind::TrafficRead,
         ToolKind::WlansUpdate,
         ToolKind::WlansList,
         ToolKind::WlansStatus,
@@ -1216,6 +1225,7 @@ mod tests {
                 | ToolKind::WifiDiagnose
                 | ToolKind::EventsSearch
                 | ToolKind::StatsQuery
+                | ToolKind::TrafficRead
                 | ToolKind::WlansUpdate
                 | ToolKind::WlansList
                 | ToolKind::WlansStatus
