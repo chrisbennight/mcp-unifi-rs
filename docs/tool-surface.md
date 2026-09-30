@@ -300,17 +300,29 @@ points. The place to start on a slow-wifi question.
 `severity`, `lastHours`, `category`, `client`, `offset`, `limit`.
 
 Network system logs, newest first. `severity` accepts `low`, `medium`, `high`,
-or `veryHigh` and filters upstream. `lastHours` defaults to 24 and accepts
-1-168. The tool scans one page of up to 1000 rows, then applies case-insensitive
+or `veryHigh` and filters upstream. `lastHours` defaults to 24 and must be
+positive. The tool scans one page of up to 1000 rows, then applies case-insensitive
 category/key substring and client MAC filters and paginates those matches.
 `totalMatches` counts matches in that scan; `fetchWindowTruncated` signals
-additional upstream rows. Narrow the time window or severity when it is set.
+additional upstream rows. Use `events.read` to page through the original source.
 Rows include `time` in epoch milliseconds, `key`, `message`, `category`,
 `severity`, and `clientMac` when available. Missing timestamps fail decoding.
 If a received page violates its pagination contract, the error includes the
 complete accepted controller response and the validation diagnostic.
 Known entity placeholders in messages are replaced literally; messages are
 limited to 256 characters with a visible ellipsis when shortened.
+
+### `events.read`
+
+Read a complete Network system-log page using `startMs`, `endMs`, `page`
+(zero-based, default zero), `pageSize` (1-1000, default 100), and optional
+`severity`. Time windows must be ordered; the controller decides supported
+ranges. `response` retains every original JSON field, including parameters,
+credentials and unknown page metadata. Follow `nextPage` for additional pages.
+Large pages use labeled `response` content with `responseInContent: true`.
+Empty pages beyond the reported page count are valid. Network application
+routing follows the authenticated console type; upstream unsupported responses
+remain errors with their complete bodies. The gateway owns disclosure.
 
 ### `stats.query`
 

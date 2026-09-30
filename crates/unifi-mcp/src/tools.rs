@@ -4262,7 +4262,7 @@ enum EventSeverity {
 struct EventsSearchInput {
     /// Restrict to one system-log severity before the bounded upstream read.
     severity: Option<EventSeverity>,
-    /// Window in hours ending now, 1-168. Defaults to 24.
+    /// Positive window in hours ending now. Defaults to 24.
     last_hours: Option<u32>,
     /// Case-insensitive substring matched against the event key or
     /// category, such as `wan`, `roam`, or `security`.
@@ -4589,6 +4589,9 @@ impl ToolSpec {
             }
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
+            ToolKind::EventsRead => {
+                tool::<system_log::EventsReadInput, system_log::EventsReadOutput>(self)
+            }
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
             ToolKind::TrafficRead => tool::<TrafficReadInput, TrafficReadOutput>(self),
             ToolKind::WlansList | ToolKind::PortForwardsList => {
@@ -4909,6 +4912,7 @@ impl UnifiMcp {
             ToolKind::ProtectEventThumbnail => self.protect_event_thumbnail(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
+            ToolKind::EventsRead => system_log::read(self, params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
             ToolKind::TrafficRead => self.traffic_read(params).await,
             ToolKind::WlansList => self.wlans_list(params).await,
@@ -10132,11 +10136,8 @@ impl UnifiMcp {
         let category = validate_filter(input.category.as_deref())?;
         let client = validate_filter(input.client.as_deref())?;
         let window_hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
-        if !(1..=MAXIMUM_EVENT_WINDOW_HOURS).contains(&window_hours) {
-            return Err(McpError::invalid_params(
-                format!("lastHours must be between 1 and {MAXIMUM_EVENT_WINDOW_HOURS}"),
-                None,
-            ));
+        if window_hours == 0 {
+            return Err(McpError::invalid_params("lastHours must be positive", None));
         }
         let (window_start_ms, now_ms) = log_window(window_hours)?;
         let mut query =
