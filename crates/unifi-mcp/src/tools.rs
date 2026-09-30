@@ -3238,6 +3238,8 @@ struct PolicyView {
     id: String,
     name: Option<String>,
     enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logging_enabled: Option<bool>,
     action: Option<String>,
     /// Evaluation order.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3645,13 +3647,15 @@ struct GuestStatusOutput {
 }
 
 /// What `firewall.policies.update` can change on one zone-based policy.
-/// This shortcut preserves all other fields in the existing policy.
+/// This shortcut changes flags and preserves all other controller fields.
 /// Full creation and replacement use `firewall.policies.configure`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FirewallPolicyChanges {
     /// Whether the policy is evaluated.
     enabled: Option<bool>,
+    /// Generate syslog entries when the policy matches traffic.
+    logging_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -3695,9 +3699,9 @@ struct FirewallPoliciesUpdateOutput {
     /// What the read-back found per requested field. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     fields: Option<Vec<FieldOutcome>>,
-    /// Controller properties that moved without being requested. On this
-    /// surface the whole policy is resent unchanged, so nothing here was
-    /// dropped by the request. It is either the controller normalizing the
+    /// Controller properties that moved without being requested. Full writes
+    /// preserve unrequested fields and logging patches send only that flag.
+    /// Differences can reflect the controller normalizing the
     /// record or another editor writing the policy between the write and the
     /// read-back — this tool cannot tell those apart, and either way the
     /// change was not asked for.
@@ -7497,6 +7501,7 @@ impl UnifiMcp {
                     id: policy.id,
                     name: policy.name,
                     enabled: policy.enabled,
+                    logging_enabled: policy.logging_enabled,
                     action: policy.action,
                     index: policy.index,
                     ip_protocol_scope: policy.ip_protocol_scope,
@@ -9182,7 +9187,7 @@ impl UnifiMcp {
             .map_err(api_error)
     }
 
-    /// Enable or disable one zone-based firewall policy, previewing unless
+    /// Change evaluation and logging flags on one policy, previewing unless
     /// the caller confirms.
     #[expect(
         clippy::too_many_lines,
@@ -9195,15 +9200,19 @@ impl UnifiMcp {
         let started = tokio::time::Instant::now();
         reject_unknown_change_fields(params, FIREWALL_POLICY_CHANGE_FIELDS)?;
         let input = parse::<FirewallPoliciesUpdateInput>(params)?;
-        let Some(wanted) = input.changes.enabled else {
+        let requested: Map<String, Value> = [
+            ("enabled", input.changes.enabled),
+            ("loggingEnabled", input.changes.logging_enabled),
+        ]
+        .into_iter()
+        .filter_map(|(field, value)| value.map(|value| (field.to_owned(), Value::Bool(value))))
+        .collect();
+        if requested.is_empty() {
             return Err(McpError::invalid_params(
                 "changes names no field to change",
                 None,
             ));
-        };
-        let requested: Map<String, Value> = [("enabled".to_owned(), Value::Bool(wanted))]
-            .into_iter()
-            .collect();
+        }
 
         // A classic console has no policies at all, so reading one there would
         // surface as an unexplained controller failure rather than as the
@@ -9228,7 +9237,10 @@ impl UnifiMcp {
         }
         let before_response_text = before_response.to_string();
         let before = policy_projection(&record);
-        let warnings = firewall_policy_warnings(wanted, &record);
+        let warnings = input
+            .changes
+            .enabled
+            .map_or_else(Vec::new, |wanted| firewall_policy_warnings(wanted, &record));
         if !input.confirm.unwrap_or(false) {
             return firewall_update_result(FirewallPoliciesUpdateOutput {
                 policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
@@ -9250,12 +9262,13 @@ impl UnifiMcp {
             });
         }
 
-        // A resend that cannot change the switch is pure downside here: it
-        // does nothing, and it can overwrite an edit made since the read. The
-        // other writes send a partial patch, where a field already at its
-        // value costs nothing; this one sends the whole policy, so it is
-        // skipped instead.
-        if record.get("enabled").and_then(Value::as_bool) == Some(wanted) {
+        // Nothing is submitted when all requested flags already hold their
+        // values. In particular, an unnecessary full replacement could
+        // overwrite another editor's change.
+        if requested
+            .iter()
+            .all(|(field, value)| record.get(field) == Some(value))
+        {
             return firewall_update_result(FirewallPoliciesUpdateOutput {
                 policy: bounded_policy_view(policy_view_from_record(&input.policy, &record)),
                 before_response: Some(before_response_text),
@@ -9278,23 +9291,38 @@ impl UnifiMcp {
             });
         }
 
-        // The whole policy goes back because the upstream interface offers no
-        // partial update that can flip this switch. Every property arrives
-        // from the read and leaves untouched except the one field named here,
-        // so a property this server does not model cannot be dropped by the
-        // write — which on a firewall policy would silently change what the
-        // network permits.
-        let mut sent = raw;
-        sent.insert(
-            "enabled".to_owned(),
-            serde_json::value::RawValue::from_string(wanted.to_string())
-                .expect("a JSON boolean literal is valid JSON"),
-        );
-        let (response_status, response_body) = self
-            .integration()
-            .replace_firewall_policy(&site_id, &input.policy, &sent)
-            .await
-            .map_err(api_error)?;
+        // A change to enabled requires full replacement. Logging can use the
+        // partial route when enabled needs no change. Full replacement retains
+        // the original bytes of every unrequested controller property.
+        let enabled_changes = input
+            .changes
+            .enabled
+            .is_some_and(|wanted| record.get("enabled").and_then(Value::as_bool) != Some(wanted));
+        let (response_status, response_body) = if enabled_changes {
+            let mut sent = raw;
+            for (field, value) in &requested {
+                sent.insert(
+                    field.clone(),
+                    serde_json::value::RawValue::from_string(value.to_string())
+                        .expect("a JSON boolean literal is valid JSON"),
+                );
+            }
+            self.integration()
+                .replace_firewall_policy(&site_id, &input.policy, &sent)
+                .await
+        } else {
+            self.integration()
+                .patch_firewall_policy_logging(
+                    &site_id,
+                    &input.policy,
+                    input
+                        .changes
+                        .logging_enabled
+                        .expect("validated logging change"),
+                )
+                .await
+        }
+        .map_err(api_error)?;
 
         let budget = self
             .request_timeout()
@@ -11696,17 +11724,17 @@ fn reject_unknown_change_fields(
 }
 
 /// Every field `firewall.policies.update` accepts.
-const FIREWALL_POLICY_CHANGE_FIELDS: &[&str] = &["enabled"];
+const FIREWALL_POLICY_CHANGE_FIELDS: &[&str] = &["enabled", "loggingEnabled"];
 
-/// A policy stores its switch under the name the read surface uses.
-const POLICY_WIRE_NAMES: &[(&str, &str)] = &[("enabled", "enabled")];
+/// Policy flags have the same names in requests and controller records.
+const POLICY_WIRE_NAMES: &[(&str, &str)] =
+    &[("enabled", "enabled"), ("loggingEnabled", "loggingEnabled")];
 
-/// The settable surface of a zone-based policy, read from the record the
-/// controller returned rather than from a model, because the write resends
-/// that record verbatim.
+/// Flags used by the policy update shortcut, read from the controller record.
 fn policy_projection(record: &Map<String, Value>) -> Value {
     serde_json::json!({
         "enabled": record.get("enabled").and_then(Value::as_bool),
+        "loggingEnabled": record.get("loggingEnabled").and_then(Value::as_bool),
     })
 }
 
@@ -11742,6 +11770,7 @@ fn policy_view_from_record(id: &str, record: &Map<String, Value>) -> PolicyView 
         id: text("id").unwrap_or_else(|| id.to_owned()),
         name: text("name"),
         enabled: record.get("enabled").and_then(Value::as_bool),
+        logging_enabled: record.get("loggingEnabled").and_then(Value::as_bool),
         action: text("action"),
         index: record
             .get("index")
