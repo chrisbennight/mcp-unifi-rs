@@ -34,11 +34,10 @@ reqwest = { version = "0.13", default-features = false, features = ["cookies", "
 rmcp = { version = "3", default-features = false, features = ["server", "transport-streamable-http-server"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
-# `raw_value` keeps a property's original JSON text intact across a read and
-# the write that sends it back. Decoding into the value model would round a
-# number through f64, which is the same class of loss as rebuilding a record
-# from a struct.
-serde_json = { version = "1", features = ["raw_value"] }
+# `raw_value` preserves original JSON text for read-modify-write operations.
+# `arbitrary_precision` preserves upstream numbers in complete response values
+# without rounding them through f64 or restricting them to machine integers.
+serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 serde_path_to_error = "0.1"
 subtle = "2.6"
 thiserror = "2"
