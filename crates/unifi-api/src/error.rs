@@ -116,6 +116,13 @@ pub enum ApiError {
     },
     #[error("transport failure: {0}")]
     Transport(BoundedMessage),
+    /// A read could not refresh its session. Both original upstream failures
+    /// remain available, with each body bounded by its own HTTP transport.
+    #[error("original request: {original}; session refresh: {refresh}")]
+    SessionRefresh {
+        original: Box<ApiError>,
+        refresh: Box<ApiError>,
+    },
     /// A successful response exceeded the process-wide response body budget.
     #[error("controller response exceeded the {limit}-byte budget")]
     ResponseTooLarge { limit: usize },
@@ -149,6 +156,13 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    pub(crate) fn with_refresh_failure(self, refresh: Self) -> Self {
+        Self::SessionRefresh {
+            original: Box::new(self),
+            refresh: Box::new(refresh),
+        }
+    }
+
     /// Retain the controller body when a decoded value fails a typed
     /// response invariant after JSON parsing has succeeded.
     pub(crate) fn with_controller_response(self, bytes: &[u8]) -> Self {

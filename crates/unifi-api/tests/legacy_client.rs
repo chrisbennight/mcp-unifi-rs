@@ -855,7 +855,7 @@ async fn activity_validation_errors_keep_the_exact_controller_body() {
     let report = serde_json::json!({
         "client_usage_by_app": [{
             "client": {"mac": "02:00:00:00:00:01", "name": format!("{}report-tail", "x".repeat(4096))},
-            "usage_by_app": [],
+            "usage_by_app": [{"application":1,"category":2,"bytes_received":"not-a-counter","bytes_transmitted":0}],
         }],
         "total_usage_by_app": [],
         "controller_extra": "original-report-field",
@@ -884,9 +884,9 @@ async fn activity_validation_errors_keep_the_exact_controller_body() {
             client_for(&server)
                 .activity("default", window)
                 .await
-                .expect_err("report bound"),
+                .expect_err("invalid counter schema"),
             report_body,
-            "activity report exceeds",
+            "invalid type",
         ),
         (
             client_for(&server)
@@ -894,7 +894,7 @@ async fn activity_validation_errors_keep_the_exact_controller_body() {
                 .await
                 .expect_err("graph bound"),
             graph_body,
-            "activity graph exceeds",
+            "activity graph has an invalid interval",
         ),
     ] {
         let ApiError::DecodeResponse {

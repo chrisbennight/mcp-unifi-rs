@@ -1,7 +1,15 @@
-//! Lossless traffic-report records for operator-owned storage, never MCP output.
+//! Complete records from the fixed Network traffic-report sources.
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+
+/// Fixed report sources over the same requested interval.
+#[derive(Debug, Clone, Copy)]
+pub enum TrafficSource {
+    Activity,
+    Graph,
+    Wan,
+}
 
 /// The collection projection requires an explicit data array. Absence is an
 /// unrecognized response, not a successful empty report.

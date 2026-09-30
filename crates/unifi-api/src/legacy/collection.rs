@@ -4,7 +4,7 @@ use serde_json::value::RawValue;
 use super::{LegacyClient, RequestClass, is_login_required};
 use crate::{
     ApiError,
-    collection::{SourceReport, SourceStatus, TrafficSnapshot, WanReport},
+    collection::{SourceReport, SourceStatus, TrafficSnapshot, TrafficSource, WanReport},
     traffic::{ActivityBucket, ActivityRead, ActivityReport, ActivityWindow},
 };
 
@@ -57,23 +57,49 @@ impl LegacyClient {
         window: ActivityWindow,
     ) -> Result<TrafficSnapshot, ApiError> {
         ActivityWindow::new(window.start, window.end)?;
-        let activity = source::<ActivityReport>(
-            self.activity_read(site, window, false).await,
-            ActivityReport::validate,
-        );
-        let graph =
-            source::<Vec<ActivityBucket>>(self.activity_read(site, window, true).await, |rows| {
-                rows.len() <= 2017
-            });
-        let wan = source::<WanReport>(self.collect_wan(site, window).await, |report| {
-            report.meta.rc == "ok" && report.data.len() <= 169
-        });
+        let activity = self
+            .traffic_source(site, window, TrafficSource::Activity)
+            .await?;
+        let graph = self
+            .traffic_source(site, window, TrafficSource::Graph)
+            .await?;
+        let wan = self
+            .traffic_source(site, window, TrafficSource::Wan)
+            .await?;
         Ok(TrafficSnapshot {
             start_ms: window.start,
             end_ms: window.end,
             activity,
             graph,
             wan,
+        })
+    }
+
+    /// Read one complete fixed source, preserving unknown JSON fields and source errors.
+    /// A failed source does not trigger reads from other sources.
+    /// # Errors
+    /// Rejects invalid interval boundaries before contacting the controller.
+    pub async fn traffic_source(
+        &self,
+        site: &str,
+        window: ActivityWindow,
+        selected: TrafficSource,
+    ) -> Result<SourceReport, ApiError> {
+        ActivityWindow::new(window.start, window.end)?;
+        Ok(match selected {
+            TrafficSource::Activity => {
+                source::<ActivityReport>(self.activity_read(site, window, false).await, |_| true)
+            }
+            TrafficSource::Graph => {
+                source::<Vec<ActivityBucket>>(self.activity_read(site, window, true).await, |_| {
+                    true
+                })
+            }
+            TrafficSource::Wan => {
+                source::<WanReport>(self.collect_wan(site, window).await, |report| {
+                    report.meta.rc == "ok"
+                })
+            }
         })
     }
 
@@ -85,10 +111,28 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         let body = serde_json::json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"], "start":window.start,"end":window.end});
         let read = self.collect_wan_bytes(site, &body).await;
-        let bytes = match read {
+        let read = match read {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
-                self.collect_wan_bytes(site, &body).await?
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
+                self.collect_wan_bytes(site, &body).await
+            }
+            other => other,
+        };
+        let bytes = match read {
+            Err(
+                error @ (ApiError::Status {
+                    status: 404 | 405, ..
+                }
+                | ApiError::Rejected {
+                    status: Some(404 | 405),
+                    ..
+                }),
+            ) => {
+                return Ok(ActivityRead::Unsupported {
+                    response: Some(error),
+                });
             }
             other => other?,
         };
