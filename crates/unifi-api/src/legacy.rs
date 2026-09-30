@@ -700,7 +700,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         match self.execute_ap_groups(site).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_ap_groups(site).await
             }
             Err(ApiError::RateLimited {
@@ -876,7 +878,9 @@ impl LegacyClient {
         let first = self.execute_protect_event_thumbnail(event_id).await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_event_thumbnail(event_id).await
             }
             Err(ApiError::RateLimited {
@@ -969,7 +973,9 @@ impl LegacyClient {
         let first = self.execute_protect_bootstrap::<T>().await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_bootstrap::<T>().await
             }
             Err(ApiError::RateLimited {
@@ -995,7 +1001,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         match self.execute_dpi(site).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_dpi(site).await
             }
             Err(ApiError::RateLimited {
@@ -1182,7 +1190,9 @@ impl LegacyClient {
         let first = self.execute_protect_events(start, end, limit).await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_events(start, end, limit).await
             }
             Err(ApiError::RateLimited {
@@ -1410,17 +1420,16 @@ impl LegacyClient {
             .execute_with_status_bytes(class, method.clone(), site, tail, body.as_ref())
             .await;
         match first {
-            // Only a read is reissued. The session is refreshed either way so
-            // the next call starts clean, but a write is never sent twice on
-            // the strength of an expiry report: whatever the client concludes
-            // from a failed write, it cannot know the controller did not
-            // apply it, and one surfaced failure the caller can retry is
-            // cheaper than a configuration change applied twice.
+            // Only a read is reissued. Session refresh records its failure for
+            // subsequent calls, but must never replace the controller's
+            // original mutation response. A rejected write is not replayed:
+            // an expiry report does not prove the write had no effect.
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                let refresh = self.refresh_session(generation).await;
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
+                refresh.map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }

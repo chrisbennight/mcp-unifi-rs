@@ -63,6 +63,88 @@ fn jpeg_fixture() -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn read_refresh_failures_preserve_both_responses_for_every_transport() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for (read, request_method, route) in [
+        ("clients", "GET", "/proxy/network/api/s/default/stat/sta"),
+        (
+            "groups",
+            "GET",
+            "/proxy/network/v2/api/site/default/apgroups",
+        ),
+        ("dpi", "POST", "/proxy/network/api/s/default/stat/sitedpi"),
+        ("bootstrap", "GET", "/proxy/protect/api/bootstrap"),
+        ("events", "GET", "/proxy/protect/api/events"),
+        (
+            "thumbnail",
+            "GET",
+            "/proxy/protect/api/events/event-1/thumbnail",
+        ),
+        (
+            "logs",
+            "POST",
+            "/proxy/network/v2/api/site/default/system-log/all",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let original = format!("{}original-{read}-tail", "o".repeat(60_000));
+        let refresh = format!("{}refresh-{read}-tail", "r".repeat(60_000));
+        let count = Arc::new(AtomicUsize::new(0));
+        let logins = Arc::clone(&count);
+        let refresh_body = refresh.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(move |_: &wiremock::Request| {
+                if logins.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200)
+                        .insert_header("set-cookie", "TOKEN=fixture-session; Path=/")
+                        .set_body_json(serde_json::json!({}))
+                } else {
+                    ResponseTemplate::new(503).set_body_string(&refresh_body)
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method(request_method))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(401).set_body_string(&original))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let result = match read {
+            "clients" => client.active_clients("default").await.map(|_| ()),
+            "groups" => client.ap_groups("default").await.map(|_| ()),
+            "dpi" => client.dpi_by_application("default").await.map(|_| ()),
+            "bootstrap" => client.protect_bootstrap().await.map(|_| ()),
+            "events" => client.protect_events(1000, 2000, 1, None).await.map(|_| ()),
+            "thumbnail" => client.protect_event_thumbnail("event-1").await.map(|_| ()),
+            "logs" => client
+                .system_log(
+                    "default",
+                    &unifi_api::system_log::SystemLogQuery::new(0, 2000, 10).expect("query"),
+                )
+                .await
+                .map(|_| ()),
+            _ => unreachable!("fixture read"),
+        };
+        let error = result.expect_err("both upstream failures");
+        let text = error.to_string();
+        assert!(matches!(error, ApiError::SessionRefresh { .. }));
+        assert!(text.contains(&original), "{read}");
+        assert!(text.contains(&refresh), "{read}");
+        assert!(text.contains("HTTP 401"));
+        assert!(text.contains("HTTP 503"));
+        assert_eq!(server.received_requests().await.expect("requests").len(), 3);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn a_legacy_decode_failure_keeps_the_controller_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -433,14 +515,15 @@ async fn a_failed_refresh_is_shared_across_concurrent_expiry_observers() {
     let client = client_for(&server);
     let (first, second) =
         tokio::join!(client.site_health("default"), client.site_health("default"));
-    assert!(matches!(
-        first.expect_err("shared refresh failure"),
-        ApiError::RateLimited { .. }
-    ));
-    assert!(matches!(
-        second.expect_err("shared refresh failure"),
-        ApiError::RateLimited { .. }
-    ));
+    for error in [first, second] {
+        let ApiError::SessionRefresh { original, refresh } =
+            error.expect_err("shared refresh failure")
+        else {
+            panic!("both responses must be retained");
+        };
+        assert!(original.to_string().contains("api.err.LoginRequired"));
+        assert!(matches!(*refresh, ApiError::RateLimited { .. }));
+    }
 }
 
 #[tokio::test]
@@ -1591,6 +1674,75 @@ async fn a_read_still_reauthenticates_and_replays_after_the_same_signal() {
         .await
         .expect("replayed read");
     assert_eq!(wlan.id, "wlan-1");
+}
+
+#[tokio::test]
+async fn failed_session_refresh_preserves_the_original_mutation_error() {
+    for status in [200, 401] {
+        let server = MockServer::start().await;
+        let login_failure =
+            r#"{"message":"fixture authentication failure","upstreamDetail":"login-specific"}"#;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(login_failure))
+            .with_priority(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let original = r#" {"meta":{"rc":"error","msg":"api.err.LoginRequired"},"data":[],"unknownDetail":{"fixtureCredential":"mutation-fixture"}} "#;
+        Mock::given(method("PUT"))
+            .and(path("/proxy/network/api/s/default/rest/wlanconf/wlan-1"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(original))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let patch = WlanPatch {
+            enabled: Some(true),
+            ..WlanPatch::default()
+        };
+        let error = client
+            .update_wlan("default", "wlan-1", &patch)
+            .await
+            .expect_err("upstream rejection");
+        match error {
+            ApiError::Rejected { message, .. } if status == 200 => {
+                assert_eq!(message.as_str(), original);
+            }
+            ApiError::Status {
+                status: received,
+                message,
+            } if status == 401 => {
+                assert_eq!(received, status);
+                assert_eq!(message.as_str(), original);
+            }
+            other => panic!("original mutation error was replaced: {other:?}"),
+        }
+        // The refresh failure is retained for the next request, without
+        // another login or any replay of the mutation.
+        let error = client
+            .site_health("default")
+            .await
+            .expect_err("shared login failure");
+        assert!(error.to_string().contains(login_failure), "{error}");
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+    }
 }
 
 #[tokio::test]
