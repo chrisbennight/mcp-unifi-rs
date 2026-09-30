@@ -941,7 +941,11 @@ exhausting this process; trading that away would not make delivery certain, it
 would only move the failure.
 
 Complete accepted creation responses remain available, including unusually
-large batches. Voucher list and detail reads can also retrieve their codes.
+large batches. `responseStatus` and `responseBody` retain the accepted status
+and original body, including names, timestamps and unknown fields. Large bodies
+use labeled MCP content with `responseBodyInContent`; the voucher summary and
+verification results remain available. Voucher list and detail reads can also
+retrieve their codes.
 
 For the same reason, everything that can refuse a batch refuses it before
 minting: the count and validity bounds and the label's length are decided from

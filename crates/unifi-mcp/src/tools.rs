@@ -3985,6 +3985,11 @@ struct VouchersCreateOutput {
     batch: VoucherBatch,
     /// How many were requested.
     requested: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    /// Complete accepted creation body, including fields outside the voucher summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
     /// The vouchers, present only on a confirmed call. These are returned
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -9706,6 +9711,8 @@ impl UnifiMcp {
                 applied: false,
                 batch,
                 requested: input.count,
+                response_status: None,
+                response_body: None,
                 vouchers: None,
                 checks: None,
                 well_formed: None,
@@ -9719,9 +9726,9 @@ impl UnifiMcp {
         }
 
         let site_id = self.site_id().await?;
-        let created = self
+        let (created, response_status, response_body) = self
             .integration()
-            .create_vouchers(
+            .create_vouchers_with_response(
                 &site_id,
                 &VoucherCreate {
                     name: batch.name.clone(),
@@ -9767,6 +9774,12 @@ impl UnifiMcp {
             applied: true,
             batch,
             requested: input.count,
+            response_status: Some(response_status),
+            response_body: Some(
+                BoundedMessage::from_controller_bytes(&response_body)
+                    .as_str()
+                    .to_owned(),
+            ),
             vouchers: Some(vouchers),
             checks: Some(checks),
             well_formed: Some(well_formed),
@@ -12737,13 +12750,13 @@ fn structured_with_mutation_readback_errors<T: Serialize>(
         && let Some(errors) = fields.remove("readbackErrors")
     {
         fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
-        let mut result = CallToolResult::structured(value);
+        let mut result = structured_with_accepted_response(value)?;
         result
             .content
             .push(ContentBlock::text(format!("readbackErrors: {errors}")));
         return Ok(result);
     }
-    Ok(CallToolResult::structured(value))
+    structured_with_accepted_response(value)
 }
 
 fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
