@@ -242,14 +242,40 @@ to MCP content with explicit markers.
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 
 These tools use the [official Network Wi-Fi broadcast API](https://developer.ui.com/network/v10.4.57/getwifibroadcastpage).
-`wifi.broadcasts.list` accepts `offset` and `limit` (1-200, default 50),
+`wifi.broadcasts.list` accepts `offset` (0-2147483647), `limit` (1-200, default 50),
+and the documented `filter` query (at most 2048 bytes),
 returns complete controller fields for each selected row, and supplies
 `nextOffset` until the list is complete. `wifi.broadcasts.status` accepts a
 `broadcastId` from that list and returns its complete controller record,
-including security and network configuration. An over-budget list fails
-explicitly; lower `limit` to receive smaller pages.
+including security and network configuration. Additional controller page fields
+remain in `pageMetadata`. Large pages or metadata move to labeled MCP content
+with `broadcastsInContent` or `pageMetadataInContent`; a large detail record
+moves to content with `recordInContent`. The original record fields remain
+unchanged. Empty pages past the reported total are valid.
 Contradictory page metadata returns the complete accepted controller response
 with a separate validation diagnostic.
+
+### `wifi.broadcasts.configure`
+
+This tool exposes the [official Wi-Fi broadcast lifecycle](https://developer.ui.com/network/v10.4.57/openapi.json).
+`operation` is `create`, `update`, or `delete`; update/delete take
+`broadcastId`. Create/update take a complete typed `broadcast`, with
+`type: "STANDARD"` or `"IOT_OPTIMIZED"` and the controller's documented
+configuration fields. Security variants include open and enhanced open,
+WPA2/WPA3 personal and enterprise modes, RADIUS configuration, multiple
+pre-shared keys with network assignments, protected management frames, and SAE.
+Other fields cover network and broadcasting device selection, client filtering,
+mDNS and multicast handling, basic rates, blackout schedules, roaming, DTIM,
+DNS assistance, hotspot modes, and MLO. The controller decides cross-field
+validity and support; the server preserves its rejection body.
+
+Calls preview by default. `confirm: true` submits once. Deletion exposes the
+controller's `force` option (default false). `responseStatus` and `responseBody`
+retain complete acceptance even when it is not JSON or readback fails.
+`after`, `verified`, `verifiedAbsent`, and `readbackError` report bounded
+observation. Large fields move to labeled MCP content with corresponding
+`InContent` markers. Configuration and returned values are sensitive; the
+gateway decides caller access and disclosure.
 
 ### `wifi.diagnose`
 
@@ -688,6 +714,7 @@ it.
 | `acl.rules.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `networks.configure` | no | yes | yes |
+| `wifi.broadcasts.configure` | no | yes | yes |
 | `firewall.zones.configure` | no | yes | yes |
 | `firewall.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |

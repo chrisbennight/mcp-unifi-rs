@@ -52,8 +52,10 @@ mod activity;
 mod firewall_policy_request;
 mod network_configuration;
 mod network_request;
+mod wifi_request;
 use network_configuration::{
-    NetworksConfigureInput, NetworksListInput, NetworksResult, NetworksStatusInput,
+    ConfigurationResult, NetworksConfigureInput, NetworksListInput, NetworksStatusInput,
+    WifiBroadcastsConfigureInput,
 };
 mod system_log;
 mod traffic;
@@ -3191,12 +3193,22 @@ struct WifiBroadcastsListInput {
     /// Broadcasts per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
+    /// The official controller filter query, sent unchanged.
+    filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct WifiBroadcastsListOutput {
-    broadcasts: Vec<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    broadcasts: Option<Vec<Map<String, Value>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    broadcasts_in_content: Option<bool>,
+    /// Additional page fields returned by the controller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -4371,9 +4383,14 @@ impl ToolSpec {
             ToolKind::DevicesRemove => tool::<DevicesRemoveInput, DevicesRemoveOutput>(self),
             ToolKind::FirewallRead => tool::<FirewallReadInput, FirewallReadOutput>(self),
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
-            ToolKind::NetworksList => tool::<NetworksListInput, NetworksResult>(self),
-            ToolKind::NetworksStatus => tool::<NetworksStatusInput, NetworksResult>(self),
-            ToolKind::NetworksConfigure => tool::<NetworksConfigureInput, NetworksResult>(self),
+            ToolKind::NetworksList => tool::<NetworksListInput, ConfigurationResult>(self),
+            ToolKind::NetworksStatus => tool::<NetworksStatusInput, ConfigurationResult>(self),
+            ToolKind::NetworksConfigure => {
+                tool::<NetworksConfigureInput, ConfigurationResult>(self)
+            }
+            ToolKind::WifiBroadcastsConfigure => {
+                tool::<WifiBroadcastsConfigureInput, ConfigurationResult>(self)
+            }
             ToolKind::RadiusProfilesList => {
                 tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
             }
@@ -4740,6 +4757,7 @@ impl UnifiMcp {
             ToolKind::NetworksList => self.networks_list(params).await,
             ToolKind::NetworksStatus => self.networks_status(params).await,
             ToolKind::NetworksConfigure => self.networks_configure(params).await,
+            ToolKind::WifiBroadcastsConfigure => self.wifi_broadcasts_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
@@ -8207,21 +8225,43 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<WifiBroadcastsListInput>(params)?;
-        if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.offset > i32::MAX as u64 || input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT
+        {
+            return Err(McpError::invalid_params(
+                "offset must be 0-2147483647 and limit must be 1-200",
+                None,
+            ));
+        }
+        if input
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.len() > 2048)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be at most 2048 bytes",
+                None,
+            ));
         }
         let site_id = self.site_id().await?;
-        let (page, response) = self
+        let (original, response) = self
             .integration()
-            .wifi_broadcasts_with_response(
+            .wifi_broadcast_records(
                 &site_id,
                 PageRequest {
                     offset: input.offset,
                     limit: u32::from(input.limit),
                 },
+                input.filter.as_deref(),
             )
             .await
             .map_err(api_error)?;
+        let page: unifi_api::models::Page<Map<String, Value>> =
+            serde_json::from_value(original.clone())
+                .map_err(|error| page_validation_error(&response, error.to_string()))?;
+        let mut page_metadata = original.as_object().expect("decoded page object").clone();
+        for field in ["offset", "limit", "count", "totalCount", "data"] {
+            page_metadata.remove(field);
+        }
         let row_count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
@@ -8241,7 +8281,7 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "Wi-Fi broadcast offset overflow"))?;
-        if next > page.total_count {
+        if row_count > 0 && next > page.total_count {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -8259,8 +8299,11 @@ impl UnifiMcp {
                 ),
             ));
         }
-        structured(WifiBroadcastsListOutput {
-            broadcasts: page.data,
+        wifi_broadcasts_list_result(WifiBroadcastsListOutput {
+            broadcasts: Some(page.data),
+            broadcasts_in_content: None,
+            page_metadata: (!page_metadata.is_empty()).then_some(page_metadata),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -8289,7 +8332,18 @@ impl UnifiMcp {
             .wifi_broadcast(&site_id, &input.broadcast_id)
             .await
             .map_err(api_error)?;
-        structured(record)
+        let full = structured(&record)?;
+        if full
+            .structured_content
+            .as_ref()
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        {
+            return network_policy_detail_result(NetworkPolicyDetailOutput {
+                record: Some(Value::Object(record)),
+                record_in_content: None,
+            });
+        }
+        Ok(full)
     }
 
     /// Authorize one client for guest access, previewing unless the caller
@@ -13330,6 +13384,37 @@ fn protect_arm_operation_result(
     Ok(result)
 }
 
+fn wifi_broadcasts_list_result(
+    mut output: WifiBroadcastsListOutput,
+) -> Result<CallToolResult, McpError> {
+    let mut content = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(broadcasts) = output.broadcasts.take()
+    {
+        output.broadcasts_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "broadcasts: {}",
+            serde_json::to_value(broadcasts).expect("controller JSON records")
+        )));
+    }
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn network_policy_detail_result(
     mut output: NetworkPolicyDetailOutput,
 ) -> Result<CallToolResult, McpError> {
@@ -14294,6 +14379,7 @@ mod tests {
         // carries a passphrase and the result reports configuration.
         ("wlans.update", true, true, true),
         ("networks.configure", false, true, true),
+        ("wifi.broadcasts.configure", false, true, true),
         // Disconnecting twice disconnects twice; no secret is involved.
         ("clients.control", false, false, true),
         // Each restart restarts; no secret is involved.
