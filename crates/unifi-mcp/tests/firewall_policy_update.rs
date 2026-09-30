@@ -1126,8 +1126,8 @@ async fn a_request_that_changes_nothing_is_refused_before_any_controller_call() 
         )
         .await
         .expect_err("unknown field");
-    // What a policy matches is not settable here, and the rejection says what
-    // is rather than leaving a caller to guess.
+    // The enable shortcut rejects full policy fields; creation and replacement
+    // have their own typed request schema.
     assert!(
         unknown.message.contains("action") && unknown.message.contains("enabled"),
         "{}",

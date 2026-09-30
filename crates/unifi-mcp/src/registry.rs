@@ -51,6 +51,7 @@ pub enum ToolKind {
     FirewallPoliciesOrderingConfigure,
     DnsPoliciesConfigure,
     FirewallZonesConfigure,
+    FirewallPoliciesConfigure,
     TrafficListsConfigure,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
@@ -119,6 +120,7 @@ impl ToolKind {
             | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
+            | Self::FirewallPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
@@ -241,6 +243,7 @@ impl ToolKind {
             | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
+            | Self::FirewallPoliciesConfigure
             | Self::TrafficListsConfigure
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
@@ -708,12 +711,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkPolicyList,
         "network.policy.list",
-        "Page through complete ACL rule, firewall zone, DNS policy, or traffic matching list records using a typed family selector and the documented filter query.",
+        "Page through complete ACL rule, firewall zone, firewall policy, DNS policy, or traffic matching list records using a typed family selector and the documented filter query.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkPolicyDetail,
         "network.policy.detail",
-        "Read one complete ACL rule, firewall zone, DNS policy, or traffic matching list by its official id and typed family selector.",
+        "Read one complete ACL rule, firewall zone, firewall policy, DNS policy, or traffic matching list by its official id and typed family selector.",
     ),
     write_spec(
         ToolKind::AclRulesConfigure,
@@ -753,6 +756,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::FirewallZonesConfigure,
         "firewall.zones.configure",
         "Preview or create, replace, or delete a custom firewall zone with its name and network membership. Returns complete accepted controller data and bounded readback. Read zones through network.policy.list/detail with kind firewallZones.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
+        ToolKind::FirewallPoliciesConfigure,
+        "firewall.policies.configure",
+        "Preview or create, replace, or delete a zone-based firewall policy with typed action, zones, traffic filters, protocols, logging, connection states, and schedule. Returns complete accepted controller data and bounded readback. Read full policies through network.policy.list/detail with kind firewallPolicies.",
         ToolBehavior::write(false)
             .input_sensitive()
             .result_sensitive(),
@@ -870,7 +881,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          is read back and verified. The upstream interface has no partial \
          update for this, so the whole policy is resent exactly as read with \
          only the switch altered, and an edit made elsewhere in between is \
-         overwritten. What the policy matches is not settable here.",
+         overwritten. Use firewall.policies.configure for full policy authoring.",
         // Setting a policy to the state it already holds leaves the same
         // state. The result reports the zones and ports a policy governs.
         ToolBehavior::write(true).result_sensitive(),
@@ -955,6 +966,7 @@ mod tests {
         ToolKind::FirewallPoliciesOrderingConfigure,
         ToolKind::DnsPoliciesConfigure,
         ToolKind::FirewallZonesConfigure,
+        ToolKind::FirewallPoliciesConfigure,
         ToolKind::TrafficListsConfigure,
         ToolKind::WifiBroadcastsList,
         ToolKind::WifiBroadcastsStatus,
@@ -1087,6 +1099,7 @@ mod tests {
                 | ToolKind::FirewallPoliciesOrderingConfigure
                 | ToolKind::DnsPoliciesConfigure
                 | ToolKind::FirewallZonesConfigure
+                | ToolKind::FirewallPoliciesConfigure
                 | ToolKind::TrafficListsConfigure
                 | ToolKind::WifiBroadcastsList
                 | ToolKind::WifiBroadcastsStatus

@@ -140,9 +140,9 @@ record. A large record is carried in MCP content and marked by
 
 ### `network.policy.list` and `network.policy.detail`
 
-These tools read [ACL rules, firewall zones, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
+These tools read [ACL rules, firewall zones, firewall policies, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
 from the official Network Integration API. Choose `kind` as `aclRules`,
-`firewallZones`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
+`firewallZones`, `firewallPolicies`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
 (1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
 `recordsInContent`. Invalid page metadata returns the complete controller
@@ -173,6 +173,20 @@ record or deletion body remain available even when bounded readback fails.
 Read complete zone records through `network.policy.list` and
 `network.policy.detail` with `kind: "firewallZones"`. The controller decides
 which zones and memberships can be changed; its rejection text is returned.
+
+`firewall.policies.configure` previews or creates, replaces, or deletes a
+zone-based policy. Create requires a full `policy`; update also requires `id`;
+delete requires `id` without a body. Set `confirm: true` to submit. The typed
+request exposes actions, source and destination zones, traffic filters, protocol
+scope, connection states, IPsec matching, logging, and all four schedule modes.
+Protocol names use the documented lowercase values such as `tcp`, `icmp`, and
+`ipv6-frag`; the protocol preset is `TCP_UDP`. Region filters use country codes
+from `network.inventory.list` with `kind: "countries"`. Cross-field validation
+belongs to the controller.
+Complete accepted records and readback errors use the shared policy response
+contract. Read full records with `network.policy.list/detail` and
+`kind: "firewallPolicies"`. The existing `firewall.policies.update` remains a
+shortcut for changing `enabled` while preserving other fields.
 
 `firewall.policies.ordering.read` returns the complete user-defined policy
 ordering. `firewall.policies.ordering.configure` accepts
@@ -644,6 +658,7 @@ it.
 | `firewall.policies.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `firewall.zones.configure` | no | yes | yes |
+| `firewall.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
 | `guests.authorize` | **no** | no | yes |
 | `guests.unauthorize` | **no** | no | yes |
@@ -811,9 +826,8 @@ Not idempotent, and says so — each call mints another batch.
 
 ### The zone-based policy write is the exception
 
-`firewall.policies.update` takes `policy` and `changes: {enabled}`, and works
-differently from every other write here, because its upstream interface leaves
-no other option.
+`firewall.policies.update` takes `policy` and `changes: {enabled}` to change
+the evaluation flag while preserving the other controller fields.
 
 There is no partial update that can flip a policy's switch: the API's `PATCH`
 accepts only the policy's logging flag, and its `PUT` requires the whole
@@ -842,9 +856,8 @@ Two consequences a caller should know, and which the preview states:
   window, which this tool cannot tell apart — what it establishes is that the
   change was not asked for.
 
-What a policy matches is not settable. Its source, destination, protocol scope
-and schedule are a nested structure whose parts validate together, and changing
-one is authoring a policy rather than operating one.
+Use `firewall.policies.configure` to create or replace the full source,
+destination, protocol scope, actions, logging, and schedule.
 
 ### Actions: `clients.control`, `devices.control`, `guests.authorize`, `guests.unauthorize`
 
