@@ -189,9 +189,9 @@ readback is reported alongside the creation response. `vouchers.search` and
 
 The creation response preserves rows even when a batch check fails.
 Input
-bounds are checked before minting. All tool results have a response budget;
-an unusually large creation response fails loudly, and the voucher reads can
-recover its codes in bounded pages.
+bounds are checked before minting. Complete accepted creation responses
+remain available, including unusually large records. Voucher reads also
+recover codes in caller-selected pages.
 
 ## Response bounds
 
@@ -205,7 +205,7 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | Search page limit | 1-200, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset` | one page stays well under the response budget |
 | Search offset cap | 10 000 | same | fail-loud | error names the cap | deep offsets signal a wrong query, not paging |
 | Filter length | 128 UTF-8 bytes | all string filters, and the voucher batch label | fail-loud | error; surrounding whitespace trimmed before the check, content never cut | longer values are ids pasted by mistake |
-| Response budget | 48 KiB | every structured result except one carrying credentials the call created | fail-loud | "narrow the query" error; `vouchers.create` is exempt and bounded by its request instead — batch ceiling and label length, both checked before minting — since its codes exist nowhere else and there is nothing to narrow | keeps one result a fraction of a model context |
+| Structured content formatting target | 48 KiB | formatters that move large fields to labeled MCP content | complete values preserved | `...InContent` flags locate moved fields; structured results may exceed the target | avoids repeating large values in structured and text content |
 | Device inventory scan | 1000 rows | devices.*, AP name joins | signaled | `inventoryTruncated`; status selector error names the ceiling | order of magnitude above any home site |
 | Firewall zone scan | 400 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: zones` and `sectionOffset` from `nextSectionOffset` | ceiling-limited section still fits the budget |
 | Firewall policy scan | 200 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: policies` and `sectionOffset` from `nextSectionOffset` | full policy rows near the budget at this count |
