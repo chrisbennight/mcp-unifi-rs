@@ -43,6 +43,75 @@ fn transaction() -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn transaction_amounts_preserve_exact_json_numbers_in_preview_and_post() {
+    for amount in [
+        "9007199254740993",
+        "12.123456789012345678901234567890",
+        "1e400",
+        "-0e-400",
+    ] {
+        let server = MockServer::start().await;
+        let mut request = transaction();
+        request["amount"] = serde_json::from_str(amount).expect("JSON number");
+        Mock::given(method("POST"))
+            .and(path(ROUTE))
+            .and(wiremock::matchers::body_json(&request))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"created":true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let handler = handler_for(&server);
+        let preview = handler
+            .call(
+                &call(&serde_json::json!({"cameraId":"camera-1","transaction":request})),
+                None,
+            )
+            .await
+            .expect("exact preview")
+            .structured_content
+            .expect("structured");
+        assert_eq!(preview["transaction"]["amount"], request["amount"]);
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+        let result = handler.call(&call(&serde_json::json!({"cameraId":"camera-1","transaction":request,"confirm":true})), None)
+            .await.expect("exact POST").structured_content.expect("structured");
+        assert_eq!(result["submitted"], true);
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("posted JSON");
+        assert_eq!(body["amount"], request["amount"]);
+    }
+}
+
+#[tokio::test]
+async fn negative_amounts_are_rejected_without_rounding_them_to_zero() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for amount in ["-1e-400", "-1", "-0.000000000000000000000001"] {
+        let mut request = transaction();
+        request["amount"] = serde_json::from_str(amount).expect("JSON number");
+        let error = handler.call(&call(&serde_json::json!({"cameraId":"camera-1","transaction":request,"confirm":true})), None)
+            .await.expect_err("negative amount");
+        assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn preview_contains_the_complete_request_and_confirm_submits_once() {
     let server = MockServer::start().await;
     let response = serde_json::json!({

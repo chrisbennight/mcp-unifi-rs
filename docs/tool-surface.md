@@ -158,20 +158,29 @@ accepted controller response with a separate validation diagnostic.
 ### `network.inventory.list` and `network.switching.detail`
 
 These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
-`network.inventory.list` accepts a `kind` of `countries`, `deviceTags`,
+`network.inventory.list` accepts a `kind` of `countries`, `sites`, `clients`,
+`devices`, `deviceTags`,
 `lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
 `siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
 The documented `filter` query is available except for WAN interfaces, whose
-endpoint has no filter parameter. Countries are controller-wide; other kinds
+endpoint has no filter parameter. Countries and sites are controller-wide; other kinds
 use the selected site. Each page returns complete controller records, page
-counts, and `nextOffset`. Large pages retain their records in MCP content
-and mark `recordsInContent` in the structured result. Invalid page metadata
+counts, and `nextOffset`. `pageMetadata` preserves all original page fields
+except the data array, which is returned as `records`. Large pages retain
+records and metadata in MCP content, marked by `recordsInContent` and
+`pageMetadataInContent`. Invalid page metadata
 returns the complete controller response with a separate diagnostic.
 
 `network.switching.detail` accepts `kind` (`lag`, `mcLagDomain`, or
 `switchStack`) and the official `id`, returning the complete controller
 record. A large record is carried in MCP content and marked by
 `recordInContent`.
+
+`network.inventory.detail` accepts `kind` (`client`, `device`, or
+`deviceStatistics`) and the official record `id`. It returns the complete
+connected client, adopted device, or latest device statistics record,
+including unknown fields and interface details. Large records remain in
+MCP content with `recordInContent`. Controller errors retain their full bodies.
 
 ### `network.policy.list` and `network.policy.detail`
 
@@ -352,8 +361,8 @@ only, an absent Activity endpoint permits the original legacy DPI fallback
 when no explicit time window was requested;
 its `counterSemantics` explicitly retain the unverified interval, direction,
 and scope. Authentication failures never trigger that fallback. An unrecognized
-Activity response is reported as such. Record/string/body bounds fail loudly;
-there is no silent scan truncation. Activity record, string, graph, identity,
+Activity response is reported as such. Transport body bounds fail loudly;
+there is no silent scan truncation. Activity schema, graph interval, identity,
 counter, and arithmetic validation errors return the complete accepted
 controller body with the local diagnostic.
 A malformed or duplicate WAN comparison hour returns the complete accepted
@@ -371,6 +380,26 @@ block; the structured result keeps coverage and source information.
 
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
+
+### `traffic.read`
+
+Read one complete fixed source with `source` set to `activity`, `graph`, or
+`wan`. Supply `startMs` and `endMs` on whole UTC hour boundaries for a fixed
+interval of one hour to seven days ending in the past. Alternatively,
+`hours` (1-168, default 24) ends at the latest completed UTC hour.
+
+The tool returns all original JSON fields as `data`, including client
+fingerprints, graph rates, unknown metadata and precise numeric values.
+It reads only the selected source and performs no aggregation or follow-up
+catalog reads. `status` distinguishes collected, unsupported, unrecognized and
+failed results; unrecognized JSON is still returned completely. Unsupported
+HTTP responses retain their complete controller error. Authentication,
+transport and other upstream failures set `status: "failed"` and the MCP error
+flag, with the original controller body when available. Large data or errors
+remain in labeled MCP content with `dataInContent` or `errorInContent`.
+If session refresh also fails, the result retains both the original report
+failure and the refresh failure, including their complete upstream bodies.
+The existing transport bounds apply. Use `stats.query` for compact summaries.
 
 ### Protect cameras, streams, talkback, overview, and events
 
@@ -537,7 +566,9 @@ Protect 7.3.53. Consoles without this route return their upstream error. The
 `transaction` object accepts the documented `type` (`sale` or `refund`),
 `externalId`, and nonnegative `amount`, plus optional `currency`, `lineItems`,
 `location`, `paymentTypes`, and `timestamp`. Preview returns the complete
-request without posting it. If that request exceeds the structured-result
+request without posting it. Amounts retain the caller's exact JSON number in
+previews and upstream requests, including decimal precision and large integers.
+If that request exceeds the structured-result
 budget, the complete transaction is returned in content with
 `transactionInContent: true`. A confirmed call returns the complete accepted
 controller result in `response`,

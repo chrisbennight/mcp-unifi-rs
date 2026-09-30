@@ -44,6 +44,7 @@ pub enum ToolKind {
     NetworksConfigure,
     RadiusProfilesList,
     NetworkInventoryList,
+    NetworkInventoryDetail,
     NetworkSwitchingDetail,
     NetworkPolicyList,
     NetworkPolicyDetail,
@@ -94,6 +95,7 @@ pub enum ToolKind {
     WifiDiagnose,
     EventsSearch,
     StatsQuery,
+    TrafficRead,
     WlansUpdate,
     WlansList,
     WlansStatus,
@@ -177,6 +179,7 @@ impl ToolKind {
             | Self::PortForwardsStatus
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
+            | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
@@ -206,6 +209,7 @@ impl ToolKind {
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
+            | Self::TrafficRead
             | Self::VouchersSearch
             | Self::VouchersStatus => false,
         }
@@ -262,6 +266,7 @@ impl ToolKind {
             | Self::WifiBroadcastsConfigure
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
+            | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
@@ -279,6 +284,7 @@ impl ToolKind {
             | Self::WifiDiagnose
             | Self::EventsSearch
             | Self::StatsQuery
+            | Self::TrafficRead
             | Self::WlansUpdate
             | Self::WlansList
             | Self::WlansStatus
@@ -728,6 +734,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          observed site graph timestamps, collection limitations, and signed differences from WAN totals.",
     ),
     sensitive_read_spec(
+        ToolKind::TrafficRead,
+        "traffic.read",
+        "Read one complete Network traffic source: activity counters, activity graph, or hourly WAN report. Use source activity, graph, or wan and fixed startMs/endMs or hours (1-168). Returns every original JSON field, including unknown extensions. Reports unsupported or unrecognized sources explicitly; large data remains in MCP content. Use stats.query for compact attribution and accounting summaries.",
+    ),
+    sensitive_read_spec(
         ToolKind::NetworksRead,
         "networks.read",
         "Configured networks and wireless networks: VLANs, subnets, DHCP \
@@ -760,7 +771,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkInventoryList,
         "network.inventory.list",
-        "Page through countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns every field in each controller record with page metadata and a continuation offset.",
+        "Page through sites, connected clients, adopted devices, countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworkInventoryDetail,
+        "network.inventory.detail",
+        "Read a complete connected client, adopted device, or latest device statistics record by its official id. Use kind client, device, or deviceStatistics. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkSwitchingDetail,
@@ -794,7 +810,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::AclRulesOrderingConfigure,
         "acl.rules.ordering.configure",
         "Preview or replace the selected site's complete ACL rule priority ordering. Returns the accepted controller record and bounded readback.",
-        ToolBehavior::write(false)
+        ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
     ),
@@ -807,7 +823,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::FirewallPoliciesOrderingConfigure,
         "firewall.policies.ordering.configure",
         "Preview or replace user-defined firewall policy ordering before and after system-defined policies. Returns the complete accepted record and bounded readback.",
-        ToolBehavior::write(false)
+        ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
     ),
@@ -1067,6 +1083,7 @@ mod tests {
         ToolKind::WifiBroadcastsConfigure,
         ToolKind::RadiusProfilesList,
         ToolKind::NetworkInventoryList,
+        ToolKind::NetworkInventoryDetail,
         ToolKind::NetworkSwitchingDetail,
         ToolKind::NetworkPolicyList,
         ToolKind::NetworkPolicyDetail,
@@ -1116,6 +1133,7 @@ mod tests {
         ToolKind::WifiDiagnose,
         ToolKind::EventsSearch,
         ToolKind::StatsQuery,
+        ToolKind::TrafficRead,
         ToolKind::WlansUpdate,
         ToolKind::WlansList,
         ToolKind::WlansStatus,
@@ -1193,7 +1211,7 @@ mod tests {
     #[test]
     #[expect(
         clippy::too_many_lines,
-        reason = "the exhaustive kind list verifies the complete registered catalog"
+        reason = "the exhaustive registry assertion lists every tool kind"
     )]
     fn every_kind_is_registered_exactly_once_with_a_unique_name() {
         for kind in ALL_KINDS {
@@ -1216,6 +1234,7 @@ mod tests {
                 | ToolKind::WifiBroadcastsConfigure
                 | ToolKind::RadiusProfilesList
                 | ToolKind::NetworkInventoryList
+                | ToolKind::NetworkInventoryDetail
                 | ToolKind::NetworkSwitchingDetail
                 | ToolKind::NetworkPolicyList
                 | ToolKind::NetworkPolicyDetail
@@ -1265,6 +1284,7 @@ mod tests {
                 | ToolKind::WifiDiagnose
                 | ToolKind::EventsSearch
                 | ToolKind::StatsQuery
+                | ToolKind::TrafficRead
                 | ToolKind::WlansUpdate
                 | ToolKind::WlansList
                 | ToolKind::WlansStatus

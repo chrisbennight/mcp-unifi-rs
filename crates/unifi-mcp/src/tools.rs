@@ -86,7 +86,6 @@ const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 /// Search pagination bounds shared by the list tools.
 const MAXIMUM_SEARCH_LIMIT: u16 = 200;
 const DEFAULT_SEARCH_LIMIT: u16 = 50;
-const MAXIMUM_SEARCH_OFFSET: u16 = 10_000;
 /// Ceiling on client rows scanned to resolve one hardware address to the
 /// controller's own client id.
 const CLIENT_SCAN_CEILING: u64 = 1000;
@@ -207,7 +206,7 @@ struct ClientsSearchInput {
     connection: Option<ConnectionKind>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -236,7 +235,7 @@ struct DevicesSearchInput {
     state: Option<String>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -382,7 +381,7 @@ struct ClientsSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the access-point name join was built from a truncated
     /// device scan: an absent `apName` may exist beyond the scan.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -461,7 +460,7 @@ struct DevicesSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the bounded inventory scan cut the catalog short; the
     /// result covers only the scanned prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -541,7 +540,7 @@ struct CamerasSearchInput {
     state: Option<String>,
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -735,11 +734,11 @@ struct ProtectLightDeviceSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_indicator_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_duration: Option<f64>,
+    pir_duration: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_sensitivity: Option<f64>,
+    pir_sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    led_level: Option<f64>,
+    led_level: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -758,7 +757,7 @@ struct ProtectRelayLedSettings {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum ProtectNullableNumber {
-    Number(f64),
+    Number(Number),
     Clear,
 }
 
@@ -768,7 +767,7 @@ fn deserialize_present_nullable_number<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    Option::<f64>::deserialize(deserializer).map(|value| {
+    Option::<Number>::deserialize(deserializer).map(|value| {
         Some(match value {
             Some(number) => ProtectNullableNumber::Number(number),
             None => ProtectNullableNumber::Clear,
@@ -803,7 +802,7 @@ struct ProtectSensorThresholdSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    margin: Option<f64>,
+    margin: Option<Number>,
     #[serde(
         default,
         deserialize_with = "deserialize_present_nullable_number",
@@ -824,9 +823,9 @@ struct ProtectSensorMotionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity: Option<f64>,
+    sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity_when_armed: Option<f64>,
+    sensitivity_when_armed: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -847,9 +846,9 @@ enum ProtectSensorScheduleMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectChimeRingSettings {
     camera_id: String,
-    repeat_times: f64,
+    repeat_times: Number,
     ringtone_id: String,
-    volume: f64,
+    volume: Number,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1145,7 +1144,7 @@ struct PosTransaction {
     #[serde(rename = "type")]
     transaction_type: PosTransactionType,
     external_id: String,
-    amount: f64,
+    amount: Number,
     #[serde(skip_serializing_if = "Option::is_none")]
     currency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2136,7 +2135,7 @@ struct CamerasSearchOutput {
     total: usize,
     /// Continuation offset when more rows match than were returned.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     capabilities: ProtectCapabilitiesView,
 }
 
@@ -2483,6 +2482,9 @@ struct RadiusProfilesListOutput {
 #[serde(rename_all = "camelCase")]
 enum NetworkInventoryKind {
     Countries,
+    Sites,
+    Clients,
+    Devices,
     DeviceTags,
     Lags,
     McLagDomains,
@@ -2495,7 +2497,9 @@ enum NetworkInventoryKind {
 impl NetworkInventoryKind {
     const fn site_kind(self) -> Option<SiteInventoryKind> {
         match self {
-            Self::Countries => None,
+            Self::Countries | Self::Sites => None,
+            Self::Clients => Some(SiteInventoryKind::Clients),
+            Self::Devices => Some(SiteInventoryKind::Devices),
             Self::DeviceTags => Some(SiteInventoryKind::DeviceTags),
             Self::Lags => Some(SiteInventoryKind::Lags),
             Self::McLagDomains => Some(SiteInventoryKind::McLagDomains),
@@ -2526,6 +2530,11 @@ struct NetworkInventoryListOutput {
     records: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     records_in_content: Option<bool>,
+    /// Original page fields other than its data array.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -2549,9 +2558,24 @@ struct NetworkSwitchingDetailInput {
     id: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum NetworkInventoryDetailKind {
+    Client,
+    Device,
+    DeviceStatistics,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct NetworkInventoryDetailInput {
+    kind: NetworkInventoryDetailKind,
+    id: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkSwitchingDetailOutput {
+struct NetworkRecordOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4324,7 +4348,7 @@ struct EventsSearchInput {
     client: Option<String>,
     /// Zero-based offset into the time-sorted result.
     #[serde(default)]
-    offset: u16,
+    offset: usize,
     /// Rows per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
@@ -4355,7 +4379,7 @@ struct EventsSearchOutput {
     total_matches: u64,
     /// Offset of the next page when more rows remain.
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Present when the controller reports rows beyond the bounded scan.
     #[serde(skip_serializing_if = "Option::is_none")]
     fetch_window_truncated: Option<bool>,
@@ -4387,7 +4411,43 @@ struct StatsQueryInput {
     /// Client-history page size, 1-200; defaults to 50.
     limit: Option<u16>,
     /// Client-history row offset. Reuse fixed timestamps across pages.
-    offset: Option<u16>,
+    offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum TrafficReadSource {
+    Activity,
+    Graph,
+    Wan,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TrafficReadInput {
+    source: TrafficReadSource,
+    /// Whole UTC hours, 1-168; defaults to 24 ending at the latest completed hour.
+    hours: Option<u32>,
+    /// Fixed UTC hour boundaries in epoch milliseconds, instead of hours.
+    start_ms: Option<u64>,
+    end_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TrafficReadOutput {
+    source: TrafficReadSource,
+    status: &'static str,
+    start_ms: u64,
+    end_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_in_content: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
@@ -4481,7 +4541,10 @@ impl ToolSpec {
                 tool::<NetworkInventoryListInput, NetworkInventoryListOutput>(self)
             }
             ToolKind::NetworkSwitchingDetail => {
-                tool::<NetworkSwitchingDetailInput, NetworkSwitchingDetailOutput>(self)
+                tool::<NetworkSwitchingDetailInput, NetworkRecordOutput>(self)
+            }
+            ToolKind::NetworkInventoryDetail => {
+                tool::<NetworkInventoryDetailInput, NetworkRecordOutput>(self)
             }
             ToolKind::NetworkPolicyList => {
                 tool::<NetworkPolicyListInput, NetworkPolicyListOutput>(self)
@@ -4608,6 +4671,7 @@ impl ToolSpec {
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
+            ToolKind::TrafficRead => tool::<TrafficReadInput, TrafficReadOutput>(self),
             ToolKind::WlansList | ToolKind::PortForwardsList => {
                 tool::<LegacyConfigurationListInput, LegacyConfigurationResult>(self)
             }
@@ -4840,7 +4904,7 @@ impl UnifiMcp {
     /// Upstream faults preserve the complete accepted controller error body.
     #[expect(
         clippy::too_many_lines,
-        reason = "one exhaustive dispatch keeps the registered tool surface explicit"
+        reason = "exhaustive dispatch states the handler for every registered tool"
     )]
     pub async fn call(
         &self,
@@ -4872,6 +4936,7 @@ impl UnifiMcp {
             ToolKind::WifiBroadcastsConfigure => self.wifi_broadcasts_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
+            ToolKind::NetworkInventoryDetail => self.network_inventory_detail(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
@@ -4931,6 +4996,7 @@ impl UnifiMcp {
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
+            ToolKind::TrafficRead => self.traffic_read(params).await,
             ToolKind::WlansList => self.wlans_list(params).await,
             ToolKind::WlansStatus => self.wlans_status(params).await,
             ToolKind::WlanGroupsList => self.wlan_groups_list(params).await,
@@ -5024,7 +5090,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ClientsSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let query = validate_filter(input.query.as_deref())?;
         let ssid = validate_filter(input.ssid.as_deref())?;
 
@@ -5040,7 +5106,7 @@ impl UnifiMcp {
         sort_clients(&mut clients);
 
         let total = clients.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let page: Vec<ActiveClient> = clients
             .into_iter()
             .skip(offset)
@@ -5184,7 +5250,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<DevicesSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let query = validate_filter(input.query.as_deref())?;
         let state = validate_filter(input.state.as_deref())?;
 
@@ -5197,7 +5263,7 @@ impl UnifiMcp {
         });
 
         let total = devices.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let rows: Vec<DeviceRow> = devices
             .into_iter()
             .skip(offset)
@@ -5668,7 +5734,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<CamerasSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let (offset, limit) = (input.offset, input.limit);
         let query = validate_filter(input.query.as_deref())?;
         let model = validate_filter(input.model.as_deref())?;
@@ -5729,10 +5795,10 @@ impl UnifiMcp {
         let total = matched.len();
         let rows: Vec<CameraView> = matched
             .into_iter()
-            .skip(usize::from(offset))
+            .skip(offset)
             .take(usize::from(limit))
             .collect();
-        let next_offset = next_offset(usize::from(offset), rows.len(), total);
+        let next_offset = next_offset(offset, rows.len(), total);
         structured(CamerasSearchOutput {
             cameras: rows,
             total,
@@ -7259,7 +7325,7 @@ impl UnifiMcp {
         let input = parse::<ProtectEventsInput>(params)?;
         let (include_details, detail_fields) = event_detail_selection(&input)?;
         let limit = input.limit;
-        validate_page(0, limit)?;
+        validate_page(limit)?;
 
         let selector = input.camera.as_deref().map(camera_selector).transpose()?;
         let mut inventory = self
@@ -7472,17 +7538,7 @@ impl UnifiMcp {
                 cut.push(section_word(this));
                 return;
             }
-            // Never advertise a continuation the validator would refuse;
-            // say why instead, so the contract holds in both directions.
-            let next = start + returned as u64;
-            if next <= MAXIMUM_SECTION_OFFSET {
-                scan.next_offset = Some(next);
-            } else {
-                scan.note = Some(format!(
-                    "continuation stops at the sectionOffset bound of \
-                     {MAXIMUM_SECTION_OFFSET}; narrow the query instead"
-                ));
-            }
+            scan.next_offset = Some(start.saturating_add(returned as u64));
         };
         let scan_start = |this: FirewallSection| if section == Some(this) { start } else { 0 };
 
@@ -7733,6 +7789,10 @@ impl UnifiMcp {
             self.integration()
                 .site_inventory(&site_id, kind, requested, input.filter.as_deref())
                 .await
+        } else if matches!(input.kind, NetworkInventoryKind::Sites) {
+            self.integration()
+                .site_records(requested, input.filter.as_deref())
+                .await
         } else {
             self.integration()
                 .countries(requested, input.filter.as_deref())
@@ -7758,7 +7818,7 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "inventory offset overflow"))?;
-        if next > page.total_count {
+        if row_count > 0 && next > page.total_count {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7776,10 +7836,15 @@ impl UnifiMcp {
                 ),
             ));
         }
+        let mut page_metadata = serde_json::from_str::<Map<String, Value>>(response.as_str())
+            .map_err(|error| page_validation_error(&response, error.to_string()))?;
+        page_metadata.remove("data");
         network_inventory_list_result(NetworkInventoryListOutput {
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
+            page_metadata: Some(page_metadata),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -7813,7 +7878,37 @@ impl UnifiMcp {
             .switching_detail(&site_id, kind, &input.id)
             .await
             .map_err(api_error)?;
-        network_switching_detail_result(NetworkSwitchingDetailOutput {
+        network_record_result(NetworkRecordOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn network_inventory_detail(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<NetworkInventoryDetailInput>(params)?;
+        if input.id.is_empty() || input.id.len() > 256 || matches!(input.id.as_str(), "." | "..") {
+            return Err(McpError::invalid_params(
+                "id must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
+        let kind = match input.kind {
+            NetworkInventoryDetailKind::Client => unifi_api::InventoryDetailKind::Client,
+            NetworkInventoryDetailKind::Device => unifi_api::InventoryDetailKind::Device,
+            NetworkInventoryDetailKind::DeviceStatistics => {
+                unifi_api::InventoryDetailKind::DeviceStatistics
+            }
+        };
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .inventory_detail(&site_id, kind, &input.id)
+            .await
+            .map_err(api_error)?;
+        network_record_result(NetworkRecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -10264,7 +10359,7 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<EventsSearchInput>(params)?;
-        validate_page(input.offset, input.limit)?;
+        validate_page(input.limit)?;
         let category = validate_filter(input.category.as_deref())?;
         let client = validate_filter(input.client.as_deref())?;
         let window_hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
@@ -10311,7 +10406,7 @@ impl UnifiMcp {
         rows.sort_by_key(|row| std::cmp::Reverse(row.time));
 
         let total = rows.len();
-        let offset = usize::from(input.offset);
+        let offset = input.offset;
         let page: Vec<EventRow> = rows
             .into_iter()
             .skip(offset)
@@ -10382,6 +10477,59 @@ impl UnifiMcp {
             source_errors: Vec::new(),
             source_errors_in_content: None,
             activity_in_content: None,
+        })
+    }
+
+    async fn traffic_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        use unifi_api::collection::{SourceStatus, TrafficSource};
+        let input = parse::<TrafficReadInput>(params)?;
+        let window = activity::report_window(&StatsQueryInput {
+            report: StatsReport::ClientWanHistory,
+            hours: input.hours,
+            top: None,
+            start_ms: input.start_ms,
+            end_ms: input.end_ms,
+            limit: None,
+            offset: None,
+        })?;
+        let selected = match input.source {
+            TrafficReadSource::Activity => TrafficSource::Activity,
+            TrafficReadSource::Graph => TrafficSource::Graph,
+            TrafficReadSource::Wan => TrafficSource::Wan,
+        };
+        let report = self
+            .legacy()
+            .traffic_source(self.legacy_site(), window, selected)
+            .await
+            .map_err(api_error)?;
+        let data = report
+            .data
+            .map(|raw| {
+                serde_json::from_str(raw.get()).map_err(|error| {
+                    api_error(ApiError::DecodeResponse {
+                        response: BoundedMessage::from_controller_bytes(raw.get().as_bytes()),
+                        diagnostic: error.to_string().into(),
+                    })
+                })
+            })
+            .transpose()?;
+        traffic_read_result(TrafficReadOutput {
+            source: input.source,
+            status: match report.status {
+                SourceStatus::Collected => "collected",
+                SourceStatus::Unsupported => "unsupported",
+                SourceStatus::Unrecognized => "unrecognized",
+                SourceStatus::Failed => "failed",
+            },
+            start_ms: window.start,
+            end_ms: window.end,
+            data,
+            data_in_content: None,
+            error: report.error,
+            error_in_content: None,
         })
     }
 
@@ -10505,7 +10653,7 @@ impl UnifiMcp {
                 .map_err(api_error)?;
             let fetched = page.data.len() as u64;
             devices.extend(page.data);
-            offset += fetched;
+            offset = offset.saturating_add(fetched);
             if fetched == 0 || offset >= page.total_count {
                 break;
             }
@@ -10581,16 +10729,10 @@ fn wireless_load(
     (clients_by_ap, weak_clients)
 }
 
-fn validate_page(offset: u16, limit: u16) -> Result<(), McpError> {
+fn validate_page(limit: u16) -> Result<(), McpError> {
     if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&limit) {
         return Err(McpError::invalid_params(
             format!("limit must be between 1 and {MAXIMUM_SEARCH_LIMIT}"),
-            None,
-        ));
-    }
-    if offset > MAXIMUM_SEARCH_OFFSET {
-        return Err(McpError::invalid_params(
-            format!("offset must not exceed {MAXIMUM_SEARCH_OFFSET}"),
             None,
         ));
     }
@@ -11152,6 +11294,76 @@ fn validate_stream_quality_selection(qualities: &[StreamQuality]) -> Result<(), 
     Ok(())
 }
 
+fn number_is_negative(value: &Number) -> bool {
+    let text = value.as_str();
+    text.starts_with('-')
+        && text
+            .split(['e', 'E'])
+            .next()
+            .is_some_and(|mantissa| mantissa.bytes().any(|digit| matches!(digit, b'1'..=b'9')))
+}
+
+fn number_in_range(value: &Number, minimum: i64, maximum: i64) -> bool {
+    fn compare(value: &Number, bound: i64) -> std::cmp::Ordering {
+        let text = value.as_str();
+        let negative = number_is_negative(value);
+        let bound_negative = bound < 0;
+        if negative != bound_negative {
+            return if negative {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let unsigned = text.strip_prefix('-').unwrap_or(text);
+        let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+        let digits = mantissa.replace('.', "");
+        let digits = digits.trim_start_matches('0');
+        let bound_digits = bound.unsigned_abs().to_string();
+        let magnitude = if digits.is_empty() {
+            0_u64.cmp(&bound.unsigned_abs())
+        } else if bound == 0 {
+            std::cmp::Ordering::Greater
+        } else {
+            // Saturation only affects exponents far beyond an integer bound;
+            // their magnitude still compares exactly with that bound.
+            let exponent = exponent.parse::<i128>().unwrap_or_else(|_| {
+                if exponent.starts_with('-') {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            });
+            let fractional_digits = mantissa
+                .split_once('.')
+                .map_or(0, |(_, fraction)| fraction.len());
+            let order = exponent
+                .saturating_sub(fractional_digits as i128)
+                .saturating_add(digits.len() as i128);
+            order.cmp(&(bound_digits.len() as i128)).then_with(|| {
+                let length = digits.len().max(bound_digits.len());
+                digits
+                    .bytes()
+                    .chain(std::iter::repeat(b'0'))
+                    .take(length)
+                    .cmp(
+                        bound_digits
+                            .bytes()
+                            .chain(std::iter::repeat(b'0'))
+                            .take(length),
+                    )
+            })
+        };
+        if negative {
+            magnitude.reverse()
+        } else {
+            magnitude
+        }
+    }
+    compare(value, minimum) != std::cmp::Ordering::Less
+        && compare(value, maximum) != std::cmp::Ordering::Greater
+}
+
 fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError> {
     fn text_length(value: &str, name: &str) -> Result<(), McpError> {
         if !(1..=255).contains(&value.chars().count()) {
@@ -11164,9 +11376,9 @@ fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError
     }
 
     text_length(&transaction.external_id, "externalId")?;
-    if !transaction.amount.is_finite() || transaction.amount < 0.0 {
+    if number_is_negative(&transaction.amount) {
         return Err(McpError::invalid_params(
-            "amount must be a nonnegative finite number",
+            "amount must be a nonnegative number",
             None,
         ));
     }
@@ -11269,17 +11481,10 @@ fn validate_filter(value: Option<&str>) -> Result<Option<String>, McpError> {
     }
 }
 
-/// The next page's offset, emitted only when that page is actually
-/// requestable within the accepted offset bound; otherwise the caller sees
-/// no continuation and narrows the query instead of chasing an unreachable
-/// page.
-fn next_offset(offset: usize, returned: usize, total: usize) -> Option<u16> {
+/// The next page's offset whenever unread matching rows remain.
+fn next_offset(offset: usize, returned: usize, total: usize) -> Option<usize> {
     let consumed = offset.saturating_add(returned);
-    if consumed < total && consumed <= usize::from(MAXIMUM_SEARCH_OFFSET) {
-        u16::try_from(consumed).ok()
-    } else {
-        None
-    }
+    (consumed < total).then_some(consumed)
 }
 
 /// Bound one line of controller-reported text for display, appending a
@@ -11535,8 +11740,6 @@ fn page_at(offset: u64) -> PageRequest {
 /// reachable data.
 const ZONE_SCAN_CEILING: u64 = 400;
 const POLICY_SCAN_CEILING: u64 = 200;
-/// Ceiling on a caller-supplied section continuation offset.
-const MAXIMUM_SECTION_OFFSET: u64 = 100_000;
 
 /// Follow one paginated Integration collection from `start` to its end or
 /// `ceiling` more rows. The boolean reports whether the ceiling cut the
@@ -11558,7 +11761,7 @@ where
         let page = fetch(offset).await.map_err(api_error)?;
         let fetched = page.data.len() as u64;
         items.extend(page.data);
-        offset += fetched;
+        offset = offset.saturating_add(fetched);
         if fetched == 0 || offset >= page.total_count {
             break;
         }
@@ -11581,8 +11784,7 @@ struct ZoneScan {
     note: Option<String>,
 }
 
-/// A continuation offset applies only to the paginated sections and is
-/// bounded; anything else is a caller error rather than a silent no-op.
+/// A continuation offset applies only to the paginated sections.
 fn validate_section_offset(input: &FirewallReadInput) -> Result<u64, McpError> {
     let start = input.section_offset.unwrap_or(0);
     if input.section_offset.is_some()
@@ -11593,12 +11795,6 @@ fn validate_section_offset(input: &FirewallReadInput) -> Result<u64, McpError> {
     {
         return Err(McpError::invalid_params(
             "sectionOffset requires section zones or policies",
-            None,
-        ));
-    }
-    if start > MAXIMUM_SECTION_OFFSET {
-        return Err(McpError::invalid_params(
-            format!("sectionOffset must not exceed {MAXIMUM_SECTION_OFFSET}"),
             None,
         ));
     }
@@ -13030,6 +13226,31 @@ fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError
     Ok(result)
 }
 
+fn traffic_read_result(mut output: TrafficReadOutput) -> Result<CallToolResult, McpError> {
+    let failed = output.status == "failed";
+    let mut content = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(data) = output.data.take()
+    {
+        output.data_in_content = Some(true);
+        content.push(ContentBlock::text(format!("data: {data}")));
+    }
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(error) = output.error.take()
+    {
+        output.error_in_content = Some(true);
+        content.push(ContentBlock::text(format!("error: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.is_error = Some(failed);
+    result.content.extend(content);
+    Ok(result)
+}
+
 /// Keep an applied mutation's result available when a failed verification
 /// read returned more text than fits beside that result.
 fn structured_with_mutation_readback_error<T: Serialize>(
@@ -13294,13 +13515,18 @@ fn device_settings_request(
             ..
         } => {
             if light_device_settings.as_ref().is_some_and(|settings| {
-                settings.pir_duration.is_some_and(|value| value < 0.0)
+                settings
+                    .pir_duration
+                    .as_ref()
+                    .is_some_and(number_is_negative)
                     || settings
                         .pir_sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                     || settings
                         .led_level
-                        .is_some_and(|value| !(1.0..=6.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 1, 6))
             }) {
                 return Err(McpError::invalid_params(
                     "light pirDuration must be nonnegative, pirSensitivity 0-100, and ledLevel 1-6",
@@ -13319,17 +13545,17 @@ fn device_settings_request(
             ..
         } => {
             for (field, settings, minimum, maximum) in [
-                ("lightSettings", light_settings.as_ref(), 1.0, 503_192.0),
-                ("humiditySettings", humidity_settings.as_ref(), 1.0, 99.0),
+                ("lightSettings", light_settings.as_ref(), 1, 503_192),
+                ("humiditySettings", humidity_settings.as_ref(), 1, 99),
                 (
                     "temperatureSettings",
                     temperature_settings.as_ref(),
-                    -39.0,
-                    124.0,
+                    -39,
+                    124,
                 ),
             ] {
                 if settings.is_some_and(|settings| {
-                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !(minimum..=maximum).contains(value))
+                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !number_in_range(value, minimum, maximum))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field}.lowThreshold is outside the documented range"),
@@ -13344,10 +13570,12 @@ fn device_settings_request(
                 if settings.is_some_and(|settings| {
                     settings
                         .sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                         || settings
                             .sensitivity_when_armed
-                            .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                            .as_ref()
+                            .is_some_and(|value| !number_in_range(value, 0, 100))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field} sensitivity must be 0-100"),
@@ -13367,8 +13595,8 @@ fn device_settings_request(
         ProtectDeviceSettingsChanges::Chime { ring_settings, .. } => {
             if ring_settings.as_ref().is_some_and(|rows| {
                 rows.iter().any(|row| {
-                    !(1.0..=10.0).contains(&row.repeat_times)
-                        || !(0.0..=100.0).contains(&row.volume)
+                    !number_in_range(&row.repeat_times, 1, 10)
+                        || !number_in_range(&row.volume, 0, 100)
                 })
             }) {
                 return Err(McpError::invalid_params(
@@ -13914,9 +14142,7 @@ fn pending_devices_list_result(
     Ok(full)
 }
 
-fn network_switching_detail_result(
-    mut output: NetworkSwitchingDetailOutput,
-) -> Result<CallToolResult, McpError> {
+fn network_record_result(mut output: NetworkRecordOutput) -> Result<CallToolResult, McpError> {
     let full = structured(&output)?;
     if full
         .structured_content
@@ -13937,22 +14163,33 @@ fn network_switching_detail_result(
 fn network_inventory_list_result(
     mut output: NetworkInventoryListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
-        .structured_content
-        .as_ref()
-        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+    let exceeds = |output: &NetworkInventoryListOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(records) = output.records.take()
     {
-        let records = output.records.take().expect("page records exist");
         output.records_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "records: {}",
             Value::Array(records)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if exceeds(&output)?
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
 fn devices_adopt_result(mut output: DevicesAdoptOutput) -> Result<CallToolResult, McpError> {
@@ -14191,11 +14428,11 @@ fn liveview_changes_match(changes: &Value, after: &Value) -> bool {
 }
 
 fn liveview_configuration_request(changes: &LiveviewChanges) -> Result<Value, McpError> {
-    if changes.layout.as_ref().is_some_and(|layout| {
-        layout
-            .as_f64()
-            .is_none_or(|value| !(1.0..=26.0).contains(&value))
-    }) {
+    if changes
+        .layout
+        .as_ref()
+        .is_some_and(|layout| !number_in_range(layout, 1, 26))
+    {
         return Err(McpError::invalid_params(
             "layout must be between 1 and 26",
             None,
@@ -14235,15 +14472,35 @@ fn numbers_equivalent(wanted: &Number, actual: &Number) -> bool {
     if wanted == actual {
         return true;
     }
-    if wanted.is_f64() == actual.is_f64() {
-        return false;
+    match (decimal_parts(wanted), decimal_parts(actual)) {
+        (Some(wanted), Some(actual)) => wanted == actual,
+        _ => false,
     }
-    let integer = if wanted.is_f64() { actual } else { wanted };
-    let exactly_representable = integer
-        .as_i64()
-        .is_some_and(|value| value.unsigned_abs() <= (1_u64 << 53))
-        || integer.as_u64().is_some_and(|value| value <= (1_u64 << 53));
-    exactly_representable && wanted.as_f64() == actual.as_f64()
+}
+
+/// Compare decimal coefficients and exponents without floating-point rounding.
+/// An exponent that cannot be represented leaves equivalence unproven; the
+/// original requested and observed values remain available to the caller.
+fn decimal_parts(number: &Number) -> Option<(bool, String, i128)> {
+    let text = number.to_string();
+    let negative = text.starts_with('-');
+    let unsigned = text.strip_prefix('-').unwrap_or(&text);
+    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+    let fractional_digits = mantissa
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    let digits = mantissa.replace('.', "");
+    let significant = digits.trim_start_matches('0').trim_end_matches('0');
+    if significant.is_empty() {
+        return Some((false, String::new(), 0));
+    }
+    let trailing_zeros = digits.len() - digits.trim_end_matches('0').len();
+    let exponent = exponent
+        .parse::<i128>()
+        .ok()?
+        .checked_sub(i128::try_from(fractional_digits).ok()?)?
+        .checked_add(i128::try_from(trailing_zeros).ok()?)?;
+    Some((negative, significant.to_owned(), exponent))
 }
 
 fn liveview_configure_result(
@@ -14574,12 +14831,11 @@ mod tests {
     }
 
     #[test]
-    fn pagination_never_advertises_an_unreachable_page() {
+    fn pagination_continues_while_matching_rows_remain() {
         assert_eq!(super::next_offset(0, 50, 100), Some(50));
         assert_eq!(super::next_offset(0, 100, 100), None);
-        // More rows match, but the continuation would exceed the accepted
-        // offset bound, so no next page is advertised.
-        assert_eq!(super::next_offset(10_000, 50, 20_000), None);
+        assert_eq!(super::next_offset(10_000, 50, 20_000), Some(10_050));
+        assert_eq!(super::next_offset(100_000, 50, 200_000), Some(100_050));
     }
 
     #[test]
@@ -14756,8 +15012,8 @@ mod tests {
         ("devices.adopt", false, true, true),
         ("devices.remove", false, false, true),
         ("acl.rules.configure", false, true, true),
-        ("acl.rules.ordering.configure", false, true, true),
-        ("firewall.policies.ordering.configure", false, true, true),
+        ("acl.rules.ordering.configure", true, true, true),
+        ("firewall.policies.ordering.configure", true, true, true),
         ("dns.policies.configure", false, true, true),
         ("firewall.zones.configure", false, true, true),
         ("firewall.policies.configure", false, true, true),

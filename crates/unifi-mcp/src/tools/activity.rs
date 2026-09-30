@@ -36,7 +36,7 @@ pub(super) struct ClientRow {
 pub(super) struct ActivityDetails {
     clients: Vec<ClientRow>,
     total_clients: usize,
-    next_offset: Option<u16>,
+    next_offset: Option<usize>,
     /// Totals across all returned clients, independent of the output page.
     client_totals: Bytes,
     application_totals: Bytes,
@@ -113,13 +113,12 @@ impl UnifiMcp {
         let offset = input.offset.unwrap_or(0);
         if !(1..=MAXIMUM_TOP_APPLICATIONS).contains(&top)
             || !(1..=MAXIMUM_SEARCH_LIMIT).contains(&limit)
-            || offset > 1000
             || (input.report == StatsReport::ClientWanHistory && input.top.is_some())
             || (input.report == StatsReport::DpiApplications
                 && (input.limit.is_some() || input.offset.is_some()))
         {
             return Err(McpError::invalid_params(
-                "top (1-50) applies only to dpiApplications; limit (1-200) and offset (0-1000) apply only to clientWanHistory",
+                "top (1-50) applies only to dpiApplications; limit (1-200) and nonnegative offset apply only to clientWanHistory",
                 None,
             ));
         }
@@ -151,13 +150,12 @@ impl UnifiMcp {
                 .then_with(|| a.mac.cmp(&b.mac))
         });
         let total_clients = clients.len();
-        let next = usize::from(offset).saturating_add(usize::from(limit));
-        let next_offset =
-            (next < total_clients).then(|| u16::try_from(next).expect("bounded client count"));
+        let next = offset.saturating_add(usize::from(limit));
+        let next_offset = (next < total_clients).then_some(next);
         let clients = if input.report == StatsReport::ClientWanHistory {
             clients
                 .into_iter()
-                .skip(usize::from(offset))
+                .skip(offset)
                 .take(usize::from(limit))
                 .collect()
         } else {
