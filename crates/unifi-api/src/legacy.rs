@@ -700,7 +700,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         match self.execute_ap_groups(site).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_ap_groups(site).await
             }
             Err(ApiError::RateLimited {
@@ -876,7 +878,9 @@ impl LegacyClient {
         let first = self.execute_protect_event_thumbnail(event_id).await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_event_thumbnail(event_id).await
             }
             Err(ApiError::RateLimited {
@@ -969,7 +973,9 @@ impl LegacyClient {
         let first = self.execute_protect_bootstrap::<T>().await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_bootstrap::<T>().await
             }
             Err(ApiError::RateLimited {
@@ -995,7 +1001,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         match self.execute_dpi(site).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_dpi(site).await
             }
             Err(ApiError::RateLimited {
@@ -1182,7 +1190,9 @@ impl LegacyClient {
         let first = self.execute_protect_events(start, end, limit).await;
         match first {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_protect_events(start, end, limit).await
             }
             Err(ApiError::RateLimited {
@@ -1419,7 +1429,7 @@ impl LegacyClient {
                 if class == RequestClass::Mutation {
                     return Err(error);
                 }
-                refresh?;
+                refresh.map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_with_status_bytes(class, method, site, tail, body.as_ref())
                     .await
             }

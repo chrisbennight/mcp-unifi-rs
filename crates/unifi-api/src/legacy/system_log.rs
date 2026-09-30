@@ -26,7 +26,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         let result = match self.execute_system_log(site, query).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_system_log(site, query).await
             }
             Err(ApiError::RateLimited {
