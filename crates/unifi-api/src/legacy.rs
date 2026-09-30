@@ -896,8 +896,7 @@ impl LegacyClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] when the console is not `UniFi` OS, the
-    /// session or request fails, required camera or recorder fields cannot be
+    /// Returns an [`ApiError`] when the session or request fails, required camera or recorder fields cannot be
     /// decoded, or the camera count exceeds the hard inventory ceiling.
     pub async fn protect_bootstrap(&self) -> Result<ProtectBootstrap, ApiError> {
         self.protect_bootstrap_with_response()
@@ -932,8 +931,7 @@ impl LegacyClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] when the console is not `UniFi` OS, the
-    /// session or request fails, the camera projection is invalid, or the
+    /// Returns an [`ApiError`] when the session or request fails, the camera projection is invalid, or the
     /// camera count exceeds the hard inventory ceiling.
     pub async fn protect_camera_inventory(&self) -> Result<Vec<ProtectLocalCamera>, ApiError> {
         self.protect_camera_inventory_with_response()
