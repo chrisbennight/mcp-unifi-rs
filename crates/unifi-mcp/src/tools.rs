@@ -3820,6 +3820,55 @@ struct VoucherRevokeInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VouchersRevokeMatchingInput {
+    /// Documented controller filter, sent unchanged. Maximum 2048 bytes.
+    filter: String,
+    /// Offset of the preview page, independent of the deletion selection.
+    #[serde(default)]
+    preview_offset: u32,
+    /// Preview rows, 1-100. Default 25. Confirmation deletes every filter match.
+    #[serde(default = "default_voucher_limit")]
+    preview_limit: u16,
+    /// Delete all matching vouchers. Absent or false previews one page.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct VouchersRevokeMatchingOutput {
+    filter: String,
+    matches_before: u64,
+    preview_complete: bool,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vouchers_deleted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matches_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct VoucherRevokeOutput {
@@ -4544,6 +4593,9 @@ impl ToolSpec {
             ToolKind::VouchersSearch => tool::<VouchersSearchInput, VouchersSearchOutput>(self),
             ToolKind::VouchersStatus => tool::<VoucherIdInput, VoucherReadView>(self),
             ToolKind::VouchersRevoke => tool::<VoucherRevokeInput, VoucherRevokeOutput>(self),
+            ToolKind::VouchersRevokeMatching => {
+                tool::<VouchersRevokeMatchingInput, VouchersRevokeMatchingOutput>(self)
+            }
             ToolKind::VouchersCreate => tool::<VouchersCreateInput, VouchersCreateOutput>(self),
         }
     }
@@ -4832,6 +4884,7 @@ impl UnifiMcp {
             ToolKind::VouchersSearch => self.vouchers_search(params).await,
             ToolKind::VouchersStatus => self.vouchers_status(params).await,
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
+            ToolKind::VouchersRevokeMatching => self.vouchers_revoke_matching(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
         result.map(|result| trust_annotated(result, spec.behavior))
@@ -8206,7 +8259,14 @@ impl UnifiMcp {
                                 output.verified = Some(
                                     after.get("id").and_then(Value::as_str) == Some(id.as_str())
                                         && accepted_id.as_deref() == Some(id.as_str())
-                                        && requested_json_matches(requested, &after),
+                                        && if matches!(
+                                            output.kind,
+                                            NetworkPolicyKind::FirewallPolicies
+                                        ) {
+                                            firewall_policy_request::matches(requested, &after)
+                                        } else {
+                                            requested_json_matches(requested, &after)
+                                        },
                                 );
                                 output.after = Some(after);
                             }
@@ -9569,6 +9629,118 @@ impl UnifiMcp {
             ));
         }
         structured(VoucherReadView::from(voucher))
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one bounded preview, deletion, and observation retain all controller responses"
+    )]
+    async fn vouchers_revoke_matching(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<VouchersRevokeMatchingInput>(params)?;
+        if input.filter.trim().is_empty()
+            || input.filter.len() > 2048
+            || input.preview_offset > i32::MAX as u32
+            || !(1..=100).contains(&input.preview_limit)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be nonempty and at most 2048 bytes; previewOffset must fit a nonnegative 32-bit integer; previewLimit must be 1-100",
+                None,
+            ));
+        }
+        let site_id = self.site_id().await?;
+        let (before, response) = self
+            .integration()
+            .voucher_records(
+                &site_id,
+                PageRequest {
+                    offset: u64::from(input.preview_offset),
+                    limit: u32::from(input.preview_limit),
+                },
+                Some(&input.filter),
+            )
+            .await
+            .map_err(api_error)?;
+        validate_voucher_records_page(
+            &before,
+            &response,
+            u64::from(input.preview_offset),
+            input.preview_limit,
+        )?;
+        let mut output = VouchersRevokeMatchingOutput {
+            filter: input.filter,
+            matches_before: before.total_count,
+            preview_complete: before.offset == 0 && before.count == before.total_count,
+            applied: false,
+            before_response: Some(response.to_string()),
+            before_response_in_content: None,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            vouchers_deleted: None,
+            matches_after: None,
+            verified_absent: None,
+            after_response: None,
+            after_response_in_content: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return vouchers_revoke_matching_result(output);
+        }
+        let (status, body) = self
+            .integration()
+            .delete_matching_vouchers(&site_id, &output.filter)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        output.response_status = Some(status);
+        output.vouchers_deleted = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|record| record.get("vouchersDeleted").and_then(Value::as_u64));
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(VOUCHER_RESPONSE_RESERVE)
+            .min(VOUCHER_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("voucher filter readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().voucher_records(
+                    &site_id,
+                    PageRequest {
+                        offset: 0,
+                        limit: 1,
+                    },
+                    Some(&output.filter),
+                ),
+            )
+            .await
+            {
+                Ok(Ok((after, response))) => {
+                    output.after_response = Some(response.to_string());
+                    match validate_voucher_records_page(&after, &response, 0, 1) {
+                        Ok(()) => {
+                            output.matches_after = Some(after.total_count);
+                            output.verified_absent = Some(after.total_count == 0);
+                        }
+                        Err(error) => output.readback_error = Some(error.message.into_owned()),
+                    }
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error = Some("voucher filter readback timed out".to_owned());
+                }
+            }
+        }
+        vouchers_revoke_matching_result(output)
     }
 
     async fn vouchers_revoke(
@@ -13751,6 +13923,70 @@ fn devices_control_result(mut output: DevicesControlOutput) -> Result<CallToolRe
     Ok(result)
 }
 
+fn validate_voucher_records_page(
+    page: &unifi_api::models::Page<Value>,
+    response: &BoundedMessage,
+    offset: u64,
+    limit: u16,
+) -> Result<(), McpError> {
+    if page.offset != offset
+        || page.count != page.data.len() as u64
+        || page.data.len() > usize::from(limit)
+        || (page.count != 0 && page.offset.saturating_add(page.count) > page.total_count)
+        || (page.count == 0 && page.offset < page.total_count)
+    {
+        return Err(page_validation_error(
+            response,
+            "controller returned an inconsistent voucher page",
+        ));
+    }
+    Ok(())
+}
+
+fn vouchers_revoke_matching_result(
+    mut output: VouchersRevokeMatchingOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_none_or(|value| value.to_string().len() <= MAXIMUM_RESULT_BYTES)
+    {
+        return Ok(full);
+    }
+    let mut content = Vec::new();
+    for (value, marker, label) in [
+        (
+            &mut output.before_response,
+            &mut output.before_response_in_content,
+            "beforeResponse",
+        ),
+        (
+            &mut output.response_body,
+            &mut output.response_body_in_content,
+            "responseBody",
+        ),
+        (
+            &mut output.after_response,
+            &mut output.after_response_in_content,
+            "afterResponse",
+        ),
+        (
+            &mut output.readback_error,
+            &mut output.readback_error_in_content,
+            "readbackError",
+        ),
+    ] {
+        if let Some(value) = value.take() {
+            *marker = Some(true);
+            content.push(ContentBlock::text(format!("{label}: {value}")));
+        }
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
 fn voucher_revoke_result(mut output: VoucherRevokeOutput) -> Result<CallToolResult, McpError> {
     let exceeds = |output: &VoucherRevokeOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
@@ -14462,6 +14698,7 @@ mod tests {
         ("vouchers.create", false, false, true),
         // Revoking the same voucher again leaves it absent.
         ("vouchers.revoke", true, false, true),
+        ("vouchers.revoke_matching", false, true, true),
     ];
 
     /// The catalog text is what a model reads before choosing arguments, so

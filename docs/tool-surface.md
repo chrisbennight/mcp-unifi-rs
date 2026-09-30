@@ -362,9 +362,10 @@ metadata, so an agent can inspect a frame without receiving a base64 string
 as text. The `channel` input chooses `main` (default) or `package`; the latter
 is for cameras with a package camera. `highQuality` requests 1080p or higher
 when available. A response above 4 MiB fails explicitly.
-A nonempty invalid JPEG returns the accepted controller response with the
-decoder diagnostic. Non-UTF-8 bytes use base64; valid UTF-8 stays as text.
-The same behavior applies to event thumbnails.
+JPEG-typed bodies are returned byte for byte without pixel decoding or local
+image dimension limits. A response with another media type retains the complete
+controller body in its error; non-UTF-8 bytes use base64. The same behavior
+applies to event thumbnails.
 
 ### `protect.devices.list` and `protect.devices.status`
 
@@ -616,8 +617,8 @@ available. Use
 `detailFields` to select named controller fields when only part of an event's
 detail is needed; it can be used without `includeDetails`. Use
 `protect.event.thumbnail` with an event id from the result to fetch its image
-as MCP image content. The thumbnail read uses the same local session, checks
-the JPEG format, and fails explicitly when the controller has no image for
+as MCP image content. The thumbnail read uses the same local session, accepts
+the JPEG media type, and fails explicitly when the controller has no image for
 that event.
 
 The first call accepts `lastHours` (default 24), or an explicit `start` and
@@ -667,12 +668,31 @@ it.
 | `firewall.policies.delete` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
+| `vouchers.revoke_matching` | no | yes | yes |
 | `cameras.ptz.control` | **no** | no | yes |
 | `cameras.microphone.disable` | yes | no | yes |
 | `protect.assets.upload` | **no** | yes | yes |
 | `cameras.settings.update` | yes | no | yes |
 | `cameras.streams.update` | **no** | no | yes |
 | `cameras.talkback.start` | **no** | no | yes |
+
+### Bulk voucher revocation
+
+`vouchers.revoke_matching` accepts the documented Network API `filter`
+(nonempty, at most 2048 bytes), optional `previewOffset` and `previewLimit`
+(1-100, default 25), and `confirm` (default false). Filters are sent unchanged,
+including case and whitespace. Supported predicates are defined by the
+[controller catalog](https://developer.ui.com/network/v10.4.57/openapi.json).
+
+The preview returns the complete controller page in `beforeResponse`, the total
+`matchesBefore`, and `previewComplete`. Confirmation deletes **every filter
+match**, regardless of the preview page. The accepted status and body, including
+`vouchersDeleted` when present, remain available if bounded readback fails.
+A subsequent filtered page reports `matchesAfter` and whether no matches were
+observed in `verifiedAbsent`; another editor can create new matching vouchers.
+Large controller responses and errors move to labeled content with explicit
+`InContent` markers. This action is classified as non-idempotent because a
+repeated filter can delete newly matching vouchers. The mutation is sent once.
 
 ### What every write does
 
