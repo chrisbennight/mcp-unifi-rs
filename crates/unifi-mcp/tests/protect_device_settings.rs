@@ -44,6 +44,87 @@ fn call(arguments: Value) -> CallToolRequestParams {
 }
 
 #[tokio::test]
+async fn exact_settings_outside_the_documented_range_send_no_requests() {
+    for value in ["100.0000000000000000001", "-1e-400", "1e400", "-1e400"] {
+        let server = MockServer::start().await;
+        let arguments = serde_json::from_str(&format!(
+            r#"{{"deviceId":"device-1","changes":{{"kind":"light","lightDeviceSettings":{{"pirSensitivity":{value}}}}},"confirm":true}}"#
+        )).expect("exact numeric arguments");
+        let error = handler_for(&server)
+            .call(&call(arguments), None)
+            .await
+            .expect_err("outside range");
+        assert!(error.message.contains("pirSensitivity 0-100"));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn settings_preserve_exact_numbers_in_requests_and_readback() {
+    for (family, changes) in [
+        (
+            "lights",
+            r#"{"kind":"light","lightDeviceSettings":{"pirDuration":9007199254740993,"pirSensitivity":50.123456789012345678901234567890,"ledLevel":4.123456789012345678901234567890}}"#,
+        ),
+        (
+            "sensors",
+            r#"{"kind":"sensor","lightSettings":{"margin":0.123456789012345678901234567890,"lowThreshold":20.123456789012345678901234567890,"highThreshold":30.123456789012345678901234567890},"temperatureSettings":{"lowThreshold":null},"motionSettings":{"sensitivity":50.123456789012345678901234567890,"sensitivityWhenArmed":80.123456789012345678901234567890}}"#,
+        ),
+        (
+            "chimes",
+            r#"{"kind":"chime","ringSettings":[{"cameraId":"camera-1","repeatTimes":3.123456789012345678901234567890,"ringtoneId":"tone-1","volume":80.123456789012345678901234567890}]}"#,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let changes: Value = serde_json::from_str(changes).expect("exact changes");
+        let mut requested = changes.clone();
+        requested.as_object_mut().expect("object").remove("kind");
+        let mut after = requested.clone();
+        after["id"] = json!("device-1");
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/{family}/device-1")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("{PREFIX}/{family}/device-1")))
+            .and(body_json(&requested))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call(json!({"deviceId":"device-1","changes":changes,"confirm":true})),
+                None,
+            )
+            .await
+            .expect("exact settings")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["requested"], requested);
+        assert_eq!(output["after"], after);
+        assert_eq!(output["verified"], true);
+        let requests = server.received_requests().await.expect("requests");
+        let patch = requests
+            .iter()
+            .find(|request| request.method.as_str() == "PATCH")
+            .expect("PATCH");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&patch.body).expect("posted JSON"),
+            requested
+        );
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn documented_device_settings_use_fixed_routes_typed_bodies_and_readback() {
     let cases = [
@@ -51,19 +132,19 @@ async fn documented_device_settings_use_fixed_routes_typed_bodies_and_readback()
             "light",
             "lights",
             json!({"kind":"light","name":"Front","isLightForceEnabled":true,"lightModeSettings":{"mode":"motion","enableAt":"dark"},"lightDeviceSettings":{"isIndicatorEnabled":false,"pirDuration":30000,"pirSensitivity":50,"ledLevel":4}}),
-            json!({"name":"Front","isLightForceEnabled":true,"lightModeSettings":{"mode":"motion","enableAt":"dark"},"lightDeviceSettings":{"isIndicatorEnabled":false,"pirDuration":30000.0,"pirSensitivity":50.0,"ledLevel":4.0}}),
+            json!({"name":"Front","isLightForceEnabled":true,"lightModeSettings":{"mode":"motion","enableAt":"dark"},"lightDeviceSettings":{"isIndicatorEnabled":false,"pirDuration":30000,"pirSensitivity":50,"ledLevel":4}}),
         ),
         (
             "sensor",
             "sensors",
             json!({"kind":"sensor","name":"Window","lightSettings":{"isEnabled":true,"lowThreshold":null,"highThreshold":100},"humiditySettings":{"lowThreshold":30},"temperatureSettings":{"lowThreshold":-10},"motionSettings":{"sensitivity":50},"glassBreakSettings":{"sensitivityWhenArmed":80},"scheduleMode":"when_armed","armProfileIds":null,"hasCustomSensitivityWhenArmed":true,"alarmSettings":{"isEnabled":true}}),
-            json!({"name":"Window","lightSettings":{"isEnabled":true,"lowThreshold":null,"highThreshold":100.0},"humiditySettings":{"lowThreshold":30.0},"temperatureSettings":{"lowThreshold":-10.0},"motionSettings":{"sensitivity":50.0},"glassBreakSettings":{"sensitivityWhenArmed":80.0},"scheduleMode":"when_armed","armProfileIds":null,"hasCustomSensitivityWhenArmed":true,"alarmSettings":{"isEnabled":true}}),
+            json!({"name":"Window","lightSettings":{"isEnabled":true,"lowThreshold":null,"highThreshold":100},"humiditySettings":{"lowThreshold":30},"temperatureSettings":{"lowThreshold":-10},"motionSettings":{"sensitivity":50},"glassBreakSettings":{"sensitivityWhenArmed":80},"scheduleMode":"when_armed","armProfileIds":null,"hasCustomSensitivityWhenArmed":true,"alarmSettings":{"isEnabled":true}}),
         ),
         (
             "chime",
             "chimes",
             json!({"kind":"chime","name":"Hall Chime","cameraIds":["camera-1"],"ringSettings":[{"cameraId":"camera-1","repeatTimes":3,"ringtoneId":"tone-1","volume":80}]}),
-            json!({"name":"Hall Chime","cameraIds":["camera-1"],"ringSettings":[{"cameraId":"camera-1","repeatTimes":3.0,"ringtoneId":"tone-1","volume":80.0}]}),
+            json!({"name":"Hall Chime","cameraIds":["camera-1"],"ringSettings":[{"cameraId":"camera-1","repeatTimes":3,"ringtoneId":"tone-1","volume":80}]}),
         ),
         (
             "siren",
@@ -366,4 +447,55 @@ async fn invalid_sensor_and_chime_ranges_send_no_request() {
             .expect("requests")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn decimal_spelling_is_preserved_and_does_not_change_readback_verification() {
+    for (requested, observed, verified) in [
+        ("4.00", "4.0", true),
+        ("4.0", "4.00", true),
+        ("4.0000000000000000001", "4.0", false),
+    ] {
+        let server = MockServer::start().await;
+        let request: Value = serde_json::from_str(&format!(
+            r#"{{"lightDeviceSettings":{{"ledLevel":{requested}}}}}"#
+        ))
+        .expect("request JSON");
+        let after: Value = serde_json::from_str(&format!(
+            r#"{{"id":"device-1","lightDeviceSettings":{{"ledLevel":{observed}}}}}"#
+        ))
+        .expect("controller JSON");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&reads);
+        let persisted = after.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/lights/device-1")))
+            .respond_with(move |_: &wiremock::Request| {
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200).set_body_json(json!({"id":"device-1"}))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(&persisted)
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("{PREFIX}/lights/device-1")))
+            .and(body_json(&request))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"device-1"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let arguments:Value=serde_json::from_str(&format!(r#"{{"deviceId":"device-1","changes":{{"kind":"light","lightDeviceSettings":{{"ledLevel":{requested}}}}},"confirm":true}}"#)).expect("MCP JSON");
+        let result = handler_for(&server)
+            .call(&call(arguments), None)
+            .await
+            .expect("accepted decimal settings")
+            .structured_content
+            .expect("structured");
+        assert_eq!(result["requested"], request);
+        assert_eq!(result["after"], after);
+        assert_eq!(result["verified"], verified);
+    }
 }

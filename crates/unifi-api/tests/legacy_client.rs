@@ -1594,6 +1594,75 @@ async fn a_read_still_reauthenticates_and_replays_after_the_same_signal() {
 }
 
 #[tokio::test]
+async fn failed_session_refresh_preserves_the_original_mutation_error() {
+    for status in [200, 401] {
+        let server = MockServer::start().await;
+        let login_failure =
+            r#"{"message":"fixture authentication failure","upstreamDetail":"login-specific"}"#;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(login_failure))
+            .with_priority(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let original = r#" {"meta":{"rc":"error","msg":"api.err.LoginRequired"},"data":[],"unknownDetail":{"fixtureCredential":"mutation-fixture"}} "#;
+        Mock::given(method("PUT"))
+            .and(path("/proxy/network/api/s/default/rest/wlanconf/wlan-1"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(original))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let patch = WlanPatch {
+            enabled: Some(true),
+            ..WlanPatch::default()
+        };
+        let error = client
+            .update_wlan("default", "wlan-1", &patch)
+            .await
+            .expect_err("upstream rejection");
+        match error {
+            ApiError::Rejected { message, .. } if status == 200 => {
+                assert_eq!(message.as_str(), original);
+            }
+            ApiError::Status {
+                status: received,
+                message,
+            } if status == 401 => {
+                assert_eq!(received, status);
+                assert_eq!(message.as_str(), original);
+            }
+            other => panic!("original mutation error was replaced: {other:?}"),
+        }
+        // The refresh failure is retained for the next request, without
+        // another login or any replay of the mutation.
+        let error = client
+            .site_health("default")
+            .await
+            .expect_err("shared login failure");
+        assert!(error.to_string().contains(login_failure), "{error}");
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
 #[expect(
     clippy::too_many_lines,
     reason = "one full-shape fixture verifies the operational projection and original response"

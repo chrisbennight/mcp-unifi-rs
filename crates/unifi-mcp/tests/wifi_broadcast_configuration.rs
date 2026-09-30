@@ -556,3 +556,22 @@ async fn oversized_configuration_is_rejected_before_a_write() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn positional_page_arrays_return_the_complete_response_without_panicking() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let body = " [0,50,0,0,[]] ";
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/wifi/broadcasts")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(&call("wifi.broadcasts.list", json!({})), None)
+        .await
+        .expect_err("invalid object page");
+    assert!(error.message.contains(body), "{}", error.message);
+    assert!(error.message.contains("page must be a JSON object"));
+}
