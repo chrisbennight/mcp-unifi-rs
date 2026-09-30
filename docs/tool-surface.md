@@ -536,7 +536,9 @@ Protect 7.3.53. Consoles without this route return their upstream error. The
 `transaction` object accepts the documented `type` (`sale` or `refund`),
 `externalId`, and nonnegative `amount`, plus optional `currency`, `lineItems`,
 `location`, `paymentTypes`, and `timestamp`. Preview returns the complete
-request without posting it. If that request exceeds the structured-result
+request without posting it. Amounts retain the caller's exact JSON number in
+previews and upstream requests, including decimal precision and large integers.
+If that request exceeds the structured-result
 budget, the complete transaction is returned in content with
 `transactionInContent: true`. A confirmed call returns the complete accepted
 controller result in `response`,

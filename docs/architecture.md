@@ -113,11 +113,10 @@ altering only the switch. Nothing interprets the record in between, which is
 the point: a write that sent back only what this server models would drop the
 rest, on the object that decides what the network permits.
 
-Each property travels as the bytes the controller sent. Parsing them into a
-value model and serializing them again would be the same mistake in smaller
-form — a number outside what `f64` distinguishes comes back changed — so the
-parsed form exists only for the few properties this server reads, and is never
-what is written.
+Each property travels as the bytes the controller sent. Complete response
+values preserve numeric precision, but parsing and serializing can still change
+whitespace and other JSON formatting. This write path retains the original
+property text; parsed values are used only to inspect the properties it changes.
 
 Two consequences follow, and the tool states both rather than leaving them to
 be discovered. It cannot merge, so an edit made elsewhere between the read and

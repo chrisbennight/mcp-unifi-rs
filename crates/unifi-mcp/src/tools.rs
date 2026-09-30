@@ -733,11 +733,11 @@ struct ProtectLightDeviceSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_indicator_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_duration: Option<f64>,
+    pir_duration: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pir_sensitivity: Option<f64>,
+    pir_sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    led_level: Option<f64>,
+    led_level: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -756,7 +756,7 @@ struct ProtectRelayLedSettings {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum ProtectNullableNumber {
-    Number(f64),
+    Number(Number),
     Clear,
 }
 
@@ -766,7 +766,7 @@ fn deserialize_present_nullable_number<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    Option::<f64>::deserialize(deserializer).map(|value| {
+    Option::<Number>::deserialize(deserializer).map(|value| {
         Some(match value {
             Some(number) => ProtectNullableNumber::Number(number),
             None => ProtectNullableNumber::Clear,
@@ -801,7 +801,7 @@ struct ProtectSensorThresholdSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    margin: Option<f64>,
+    margin: Option<Number>,
     #[serde(
         default,
         deserialize_with = "deserialize_present_nullable_number",
@@ -822,9 +822,9 @@ struct ProtectSensorMotionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity: Option<f64>,
+    sensitivity: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sensitivity_when_armed: Option<f64>,
+    sensitivity_when_armed: Option<Number>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -845,9 +845,9 @@ enum ProtectSensorScheduleMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectChimeRingSettings {
     camera_id: String,
-    repeat_times: f64,
+    repeat_times: Number,
     ringtone_id: String,
-    volume: f64,
+    volume: Number,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1143,7 +1143,7 @@ struct PosTransaction {
     #[serde(rename = "type")]
     transaction_type: PosTransactionType,
     external_id: String,
-    amount: f64,
+    amount: Number,
     #[serde(skip_serializing_if = "Option::is_none")]
     currency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -11166,6 +11166,76 @@ fn validate_stream_quality_selection(qualities: &[StreamQuality]) -> Result<(), 
     Ok(())
 }
 
+fn number_is_negative(value: &Number) -> bool {
+    let text = value.as_str();
+    text.starts_with('-')
+        && text
+            .split(['e', 'E'])
+            .next()
+            .is_some_and(|mantissa| mantissa.bytes().any(|digit| matches!(digit, b'1'..=b'9')))
+}
+
+fn number_in_range(value: &Number, minimum: i64, maximum: i64) -> bool {
+    fn compare(value: &Number, bound: i64) -> std::cmp::Ordering {
+        let text = value.as_str();
+        let negative = number_is_negative(value);
+        let bound_negative = bound < 0;
+        if negative != bound_negative {
+            return if negative {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let unsigned = text.strip_prefix('-').unwrap_or(text);
+        let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+        let digits = mantissa.replace('.', "");
+        let digits = digits.trim_start_matches('0');
+        let bound_digits = bound.unsigned_abs().to_string();
+        let magnitude = if digits.is_empty() {
+            0_u64.cmp(&bound.unsigned_abs())
+        } else if bound == 0 {
+            std::cmp::Ordering::Greater
+        } else {
+            // Saturation only affects exponents far beyond an integer bound;
+            // their magnitude still compares exactly with that bound.
+            let exponent = exponent.parse::<i128>().unwrap_or_else(|_| {
+                if exponent.starts_with('-') {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            });
+            let fractional_digits = mantissa
+                .split_once('.')
+                .map_or(0, |(_, fraction)| fraction.len());
+            let order = exponent
+                .saturating_sub(fractional_digits as i128)
+                .saturating_add(digits.len() as i128);
+            order.cmp(&(bound_digits.len() as i128)).then_with(|| {
+                let length = digits.len().max(bound_digits.len());
+                digits
+                    .bytes()
+                    .chain(std::iter::repeat(b'0'))
+                    .take(length)
+                    .cmp(
+                        bound_digits
+                            .bytes()
+                            .chain(std::iter::repeat(b'0'))
+                            .take(length),
+                    )
+            })
+        };
+        if negative {
+            magnitude.reverse()
+        } else {
+            magnitude
+        }
+    }
+    compare(value, minimum) != std::cmp::Ordering::Less
+        && compare(value, maximum) != std::cmp::Ordering::Greater
+}
+
 fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError> {
     fn text_length(value: &str, name: &str) -> Result<(), McpError> {
         if !(1..=255).contains(&value.chars().count()) {
@@ -11178,9 +11248,9 @@ fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError
     }
 
     text_length(&transaction.external_id, "externalId")?;
-    if !transaction.amount.is_finite() || transaction.amount < 0.0 {
+    if number_is_negative(&transaction.amount) {
         return Err(McpError::invalid_params(
-            "amount must be a nonnegative finite number",
+            "amount must be a nonnegative number",
             None,
         ));
     }
@@ -13331,13 +13401,18 @@ fn device_settings_request(
             ..
         } => {
             if light_device_settings.as_ref().is_some_and(|settings| {
-                settings.pir_duration.is_some_and(|value| value < 0.0)
+                settings
+                    .pir_duration
+                    .as_ref()
+                    .is_some_and(number_is_negative)
                     || settings
                         .pir_sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                     || settings
                         .led_level
-                        .is_some_and(|value| !(1.0..=6.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 1, 6))
             }) {
                 return Err(McpError::invalid_params(
                     "light pirDuration must be nonnegative, pirSensitivity 0-100, and ledLevel 1-6",
@@ -13356,17 +13431,17 @@ fn device_settings_request(
             ..
         } => {
             for (field, settings, minimum, maximum) in [
-                ("lightSettings", light_settings.as_ref(), 1.0, 503_192.0),
-                ("humiditySettings", humidity_settings.as_ref(), 1.0, 99.0),
+                ("lightSettings", light_settings.as_ref(), 1, 503_192),
+                ("humiditySettings", humidity_settings.as_ref(), 1, 99),
                 (
                     "temperatureSettings",
                     temperature_settings.as_ref(),
-                    -39.0,
-                    124.0,
+                    -39,
+                    124,
                 ),
             ] {
                 if settings.is_some_and(|settings| {
-                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !(minimum..=maximum).contains(value))
+                    matches!(&settings.low_threshold, Some(ProtectNullableNumber::Number(value)) if !number_in_range(value, minimum, maximum))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field}.lowThreshold is outside the documented range"),
@@ -13381,10 +13456,12 @@ fn device_settings_request(
                 if settings.is_some_and(|settings| {
                     settings
                         .sensitivity
-                        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                        .as_ref()
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                         || settings
                             .sensitivity_when_armed
-                            .is_some_and(|value| !(0.0..=100.0).contains(&value))
+                            .as_ref()
+                            .is_some_and(|value| !number_in_range(value, 0, 100))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field} sensitivity must be 0-100"),
@@ -13404,8 +13481,8 @@ fn device_settings_request(
         ProtectDeviceSettingsChanges::Chime { ring_settings, .. } => {
             if ring_settings.as_ref().is_some_and(|rows| {
                 rows.iter().any(|row| {
-                    !(1.0..=10.0).contains(&row.repeat_times)
-                        || !(0.0..=100.0).contains(&row.volume)
+                    !number_in_range(&row.repeat_times, 1, 10)
+                        || !number_in_range(&row.volume, 0, 100)
                 })
             }) {
                 return Err(McpError::invalid_params(
@@ -14228,11 +14305,11 @@ fn liveview_changes_match(changes: &Value, after: &Value) -> bool {
 }
 
 fn liveview_configuration_request(changes: &LiveviewChanges) -> Result<Value, McpError> {
-    if changes.layout.as_ref().is_some_and(|layout| {
-        layout
-            .as_f64()
-            .is_none_or(|value| !(1.0..=26.0).contains(&value))
-    }) {
+    if changes
+        .layout
+        .as_ref()
+        .is_some_and(|layout| !number_in_range(layout, 1, 26))
+    {
         return Err(McpError::invalid_params(
             "layout must be between 1 and 26",
             None,
@@ -14272,15 +14349,35 @@ fn numbers_equivalent(wanted: &Number, actual: &Number) -> bool {
     if wanted == actual {
         return true;
     }
-    if wanted.is_f64() == actual.is_f64() {
-        return false;
+    match (decimal_parts(wanted), decimal_parts(actual)) {
+        (Some(wanted), Some(actual)) => wanted == actual,
+        _ => false,
     }
-    let integer = if wanted.is_f64() { actual } else { wanted };
-    let exactly_representable = integer
-        .as_i64()
-        .is_some_and(|value| value.unsigned_abs() <= (1_u64 << 53))
-        || integer.as_u64().is_some_and(|value| value <= (1_u64 << 53));
-    exactly_representable && wanted.as_f64() == actual.as_f64()
+}
+
+/// Compare decimal coefficients and exponents without floating-point rounding.
+/// An exponent that cannot be represented leaves equivalence unproven; the
+/// original requested and observed values remain available to the caller.
+fn decimal_parts(number: &Number) -> Option<(bool, String, i128)> {
+    let text = number.to_string();
+    let negative = text.starts_with('-');
+    let unsigned = text.strip_prefix('-').unwrap_or(&text);
+    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+    let fractional_digits = mantissa
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    let digits = mantissa.replace('.', "");
+    let significant = digits.trim_start_matches('0').trim_end_matches('0');
+    if significant.is_empty() {
+        return Some((false, String::new(), 0));
+    }
+    let trailing_zeros = digits.len() - digits.trim_end_matches('0').len();
+    let exponent = exponent
+        .parse::<i128>()
+        .ok()?
+        .checked_sub(i128::try_from(fractional_digits).ok()?)?
+        .checked_add(i128::try_from(trailing_zeros).ok()?)?;
+    Some((negative, significant.to_owned(), exponent))
 }
 
 fn liveview_configure_result(

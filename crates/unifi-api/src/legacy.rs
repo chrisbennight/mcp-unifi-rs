@@ -163,9 +163,8 @@ impl RecordFingerprint {
     /// Take a fingerprint of a record held as its original JSON text.
     ///
     /// Each property is compared as the bytes the controller sent, so two
-    /// readings that differ only in a way a value model would flatten — a
-    /// number beyond what `f64` distinguishes, say — still compare as
-    /// different.
+    /// readings with equivalent parsed values but different original JSON
+    /// formatting still compare as different.
     pub(crate) fn from_raw_record(
         record: &std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
     ) -> Self {
