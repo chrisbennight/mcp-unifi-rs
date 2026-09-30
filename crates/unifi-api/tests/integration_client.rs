@@ -803,6 +803,7 @@ async fn capability_detection_classifies_both_firewall_generations() {
         .expect("zone-based detection");
     assert_eq!(capabilities.firewall, FirewallGeneration::ZoneBased);
     assert_eq!(capabilities.application_version, "9.4.19");
+    assert!(capabilities.firewall_rejection.is_none());
 
     let classic = MockServer::start().await;
     Mock::given(method("GET"))
@@ -824,6 +825,13 @@ async fn capability_detection_classifies_both_firewall_generations() {
         .await
         .expect("classic detection");
     assert_eq!(capabilities.firewall, FirewallGeneration::Classic);
+    let rejection = capabilities.firewall_rejection.expect("original rejection");
+    assert!(
+        rejection
+            .to_string()
+            .contains("Zone Based Firewall is not configured")
+    );
+    assert!(rejection.to_string().contains("HTTP 400"));
 
     let broken = MockServer::start().await;
     Mock::given(method("GET"))

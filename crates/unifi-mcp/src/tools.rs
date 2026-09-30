@@ -3324,8 +3324,8 @@ struct TrafficRouteView {
 #[serde(rename_all = "camelCase")]
 struct FirewallReadOutput {
     /// `zoneBased`, from live capability detection. Only that generation is
-    /// readable here; a classic console is refused rather than returned with
-    /// this field set. Absent when a narrowing selected only sections that
+    /// readable here; an unsupported zone API returns its original rejection.
+    /// Absent when a narrowing selected only sections that
     /// exist identically on both generations, so detection was not needed and
     /// was not performed — unverified rather than guessed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7379,37 +7379,20 @@ impl UnifiMcp {
         let needs_generation = input.section.is_none_or(generation_specific);
         let zone_based = if needs_generation {
             let site_id = self.site_id().await?;
-            capability::detect(self.integration(), &site_id)
+            let capabilities = capability::detect(self.integration(), &site_id)
                 .await
-                .map_err(api_error)?
-                .firewall
-                == FirewallGeneration::ZoneBased
+                .map_err(api_error)?;
+            if let Some(rejection) = capabilities.firewall_rejection {
+                return Err(api_error(rejection));
+            }
+            capabilities.firewall == FirewallGeneration::ZoneBased
         } else {
             false
         };
-        // A classic console is refused rather than answered. This surface
-        // reads the zone-based firewall only, so returning what a classic
-        // console does have -- port forwards and traffic rules -- alongside an
-        // empty firewall would report an open network to a caller auditing
-        // one. The refusal names the generation and the sections that still
-        // read identically on both, so a caller that wanted those can ask for
-        // them directly.
-        if needs_generation && !zone_based {
-            return Err(McpError::invalid_params(
-                "this console runs the classic firewall, which this server does \
-                 not read; its zones and policies do not exist. Narrow to \
-                 portForwards, trafficRules, or trafficRoutes, which read the \
-                 same on either generation",
-                None,
-            ));
-        }
         let (generation, generation_note) = if needs_generation {
             (
                 Some("zoneBased"),
-                Some(
-                    "zone-based firewall console; a classic console is refused \
-                     rather than reported as having no firewall",
-                ),
+                Some("zone-based firewall supported by the controller capability probe"),
             )
         } else {
             (None, None)
@@ -9268,21 +9251,14 @@ impl UnifiMcp {
         structured_with_accepted_response(output)
     }
 
-    /// Refuse the policy surface on a console that runs the classic firewall,
-    /// naming the generation rather than letting the endpoint's rejection
-    /// arrive as an unexplained controller failure.
+    /// Verify the zone API is available, retaining the original controller rejection.
     async fn require_zone_based_firewall(&self) -> Result<(), McpError> {
         let site_id = self.site_id().await?;
         let capabilities = capability::detect(self.integration(), &site_id)
             .await
             .map_err(api_error)?;
-        if capabilities.firewall == FirewallGeneration::Classic {
-            return Err(McpError::invalid_params(
-                "this console runs the classic firewall, which has no zone-based \
-                 policies; this server reads and writes the zone-based firewall \
-                 only",
-                None,
-            ));
+        if let Some(rejection) = capabilities.firewall_rejection {
+            return Err(api_error(rejection));
         }
         Ok(())
     }
@@ -9324,9 +9300,7 @@ impl UnifiMcp {
             ));
         }
 
-        // A classic console has no policies at all, so reading one there would
-        // surface as an unexplained controller failure rather than as the
-        // console running a different firewall generation.
+        // Preserve the zone API rejection before attempting a policy write.
         self.require_zone_based_firewall().await?;
 
         let site_id = self.site_id().await?;

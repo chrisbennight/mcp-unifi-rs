@@ -94,13 +94,11 @@ upstream error, not an empty pending inventory.
 The normalized firewall audit view: zone-based zones and policies with their
 match semantics, plus port forwards, traffic rules, and traffic routes.
 
-This server reads the zone-based firewall only. A console still running the
-classic firewall is **refused by name**, because returning the sections it does
-have with the firewall silently absent would read as an open network to a
-caller auditing one. The refusal names `portForwards`, `trafficRules`, and
-`trafficRoutes`, which read identically on either generation and stay available
-by narrowing. Narrow with `section`; continue a truncated `zones` or `policies`
-scan with `sectionOffset` taken from `nextSectionOffset`.
+Zone-based sections use a capability probe. When the controller rejects that API,
+the complete original rejection is returned instead of an empty policy list.
+`portForwards`, `trafficRules` and `trafficRoutes` remain available by narrowing
+on either generation. Narrow with `section`; continue a truncated `zones` or
+`policies` scan with `sectionOffset` from `nextSectionOffset`.
 
 ### `networks.read`
 
@@ -983,10 +981,9 @@ accepted but read-back identifies another policy, the result says `applied`
 and carries that complete response in `readbackError` without claiming
 verification.
 
-A classic console is refused by name before anything is read, the same line
-`firewall.read` holds. Without that, the missing endpoint arrives as a generic
-controller failure and "this console has no such policy" cannot be told from
-"this console has no policies at all".
+Before update or delete, the zone capability probe verifies the API generation.
+An unsupported zone API returns the original controller status and complete
+rejection body. Other probe failures remain their original errors.
 
 Two consequences a caller should know, and which the preview states:
 

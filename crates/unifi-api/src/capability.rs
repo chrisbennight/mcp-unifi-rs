@@ -22,10 +22,12 @@ pub enum FirewallGeneration {
 }
 
 /// What one controller supports, resolved at runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Capabilities {
     pub application_version: String,
     pub firewall: FirewallGeneration,
+    /// Original controller rejection when the zone-based API is unavailable.
+    pub firewall_rejection: Option<ApiError>,
 }
 
 /// Detect the controller's capabilities using one site as the probe target.
@@ -45,8 +47,8 @@ pub async fn detect(client: &IntegrationClient, site_id: &str) -> Result<Capabil
             },
         )
         .await;
-    let firewall = match probe {
-        Ok(_) => FirewallGeneration::ZoneBased,
+    let (firewall, firewall_rejection) = match probe {
+        Ok(_) => (FirewallGeneration::ZoneBased, None),
         // The controller's documented classic-firewall rejection is HTTP 400
         // with a message naming the zone-based firewall. Any other 400 is a
         // request-level failure and must propagate, never classify.
@@ -58,12 +60,19 @@ pub async fn detect(client: &IntegrationClient, site_id: &str) -> Result<Capabil
             .to_lowercase()
             .contains("zone based firewall") =>
         {
-            FirewallGeneration::Classic
+            (
+                FirewallGeneration::Classic,
+                Some(ApiError::Status {
+                    status: 400,
+                    message,
+                }),
+            )
         }
         Err(error) => return Err(error),
     };
     Ok(Capabilities {
         application_version: info.application_version,
         firewall,
+        firewall_rejection,
     })
 }
