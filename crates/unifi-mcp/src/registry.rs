@@ -44,6 +44,7 @@ pub enum ToolKind {
     NetworksConfigure,
     RadiusProfilesList,
     NetworkInventoryList,
+    NetworkInventoryDetail,
     NetworkSwitchingDetail,
     NetworkPolicyList,
     NetworkPolicyDetail,
@@ -171,6 +172,7 @@ impl ToolKind {
             | Self::PortForwardsStatus
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
+            | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
@@ -253,6 +255,7 @@ impl ToolKind {
             | Self::WifiBroadcastsConfigure
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
+            | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
@@ -743,7 +746,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkInventoryList,
         "network.inventory.list",
-        "Page through countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns every field in each controller record with page metadata and a continuation offset.",
+        "Page through sites, connected clients, adopted devices, countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworkInventoryDetail,
+        "network.inventory.detail",
+        "Read a complete connected client, adopted device, or latest device statistics record by its official id. Use kind client, device, or deviceStatistics. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkSwitchingDetail,
@@ -1029,6 +1037,7 @@ mod tests {
         ToolKind::WifiBroadcastsConfigure,
         ToolKind::RadiusProfilesList,
         ToolKind::NetworkInventoryList,
+        ToolKind::NetworkInventoryDetail,
         ToolKind::NetworkSwitchingDetail,
         ToolKind::NetworkPolicyList,
         ToolKind::NetworkPolicyDetail,
@@ -1170,6 +1179,7 @@ mod tests {
                 | ToolKind::WifiBroadcastsConfigure
                 | ToolKind::RadiusProfilesList
                 | ToolKind::NetworkInventoryList
+                | ToolKind::NetworkInventoryDetail
                 | ToolKind::NetworkSwitchingDetail
                 | ToolKind::NetworkPolicyList
                 | ToolKind::NetworkPolicyDetail

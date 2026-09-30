@@ -2485,6 +2485,9 @@ struct RadiusProfilesListOutput {
 #[serde(rename_all = "camelCase")]
 enum NetworkInventoryKind {
     Countries,
+    Sites,
+    Clients,
+    Devices,
     DeviceTags,
     Lags,
     McLagDomains,
@@ -2497,7 +2500,9 @@ enum NetworkInventoryKind {
 impl NetworkInventoryKind {
     const fn site_kind(self) -> Option<SiteInventoryKind> {
         match self {
-            Self::Countries => None,
+            Self::Countries | Self::Sites => None,
+            Self::Clients => Some(SiteInventoryKind::Clients),
+            Self::Devices => Some(SiteInventoryKind::Devices),
             Self::DeviceTags => Some(SiteInventoryKind::DeviceTags),
             Self::Lags => Some(SiteInventoryKind::Lags),
             Self::McLagDomains => Some(SiteInventoryKind::McLagDomains),
@@ -2528,6 +2533,11 @@ struct NetworkInventoryListOutput {
     records: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     records_in_content: Option<bool>,
+    /// Original page fields other than its data array.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -2551,9 +2561,24 @@ struct NetworkSwitchingDetailInput {
     id: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum NetworkInventoryDetailKind {
+    Client,
+    Device,
+    DeviceStatistics,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct NetworkInventoryDetailInput {
+    kind: NetworkInventoryDetailKind,
+    id: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkSwitchingDetailOutput {
+struct NetworkRecordOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4404,7 +4429,10 @@ impl ToolSpec {
                 tool::<NetworkInventoryListInput, NetworkInventoryListOutput>(self)
             }
             ToolKind::NetworkSwitchingDetail => {
-                tool::<NetworkSwitchingDetailInput, NetworkSwitchingDetailOutput>(self)
+                tool::<NetworkSwitchingDetailInput, NetworkRecordOutput>(self)
+            }
+            ToolKind::NetworkInventoryDetail => {
+                tool::<NetworkInventoryDetailInput, NetworkRecordOutput>(self)
             }
             ToolKind::NetworkPolicyList => {
                 tool::<NetworkPolicyListInput, NetworkPolicyListOutput>(self)
@@ -4785,6 +4813,7 @@ impl UnifiMcp {
             ToolKind::WifiBroadcastsConfigure => self.wifi_broadcasts_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
+            ToolKind::NetworkInventoryDetail => self.network_inventory_detail(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
@@ -7648,6 +7677,10 @@ impl UnifiMcp {
             self.integration()
                 .site_inventory(&site_id, kind, requested, input.filter.as_deref())
                 .await
+        } else if matches!(input.kind, NetworkInventoryKind::Sites) {
+            self.integration()
+                .site_records(requested, input.filter.as_deref())
+                .await
         } else {
             self.integration()
                 .countries(requested, input.filter.as_deref())
@@ -7673,7 +7706,7 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "inventory offset overflow"))?;
-        if next > page.total_count {
+        if row_count > 0 && next > page.total_count {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7691,10 +7724,15 @@ impl UnifiMcp {
                 ),
             ));
         }
+        let mut page_metadata = serde_json::from_str::<Map<String, Value>>(response.as_str())
+            .map_err(|error| page_validation_error(&response, error.to_string()))?;
+        page_metadata.remove("data");
         network_inventory_list_result(NetworkInventoryListOutput {
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
+            page_metadata: Some(page_metadata),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -7728,7 +7766,37 @@ impl UnifiMcp {
             .switching_detail(&site_id, kind, &input.id)
             .await
             .map_err(api_error)?;
-        network_switching_detail_result(NetworkSwitchingDetailOutput {
+        network_record_result(NetworkRecordOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn network_inventory_detail(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<NetworkInventoryDetailInput>(params)?;
+        if input.id.is_empty() || input.id.len() > 256 || matches!(input.id.as_str(), "." | "..") {
+            return Err(McpError::invalid_params(
+                "id must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
+        let kind = match input.kind {
+            NetworkInventoryDetailKind::Client => unifi_api::InventoryDetailKind::Client,
+            NetworkInventoryDetailKind::Device => unifi_api::InventoryDetailKind::Device,
+            NetworkInventoryDetailKind::DeviceStatistics => {
+                unifi_api::InventoryDetailKind::DeviceStatistics
+            }
+        };
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .inventory_detail(&site_id, kind, &input.id)
+            .await
+            .map_err(api_error)?;
+        network_record_result(NetworkRecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -13623,9 +13691,7 @@ fn pending_devices_list_result(
     Ok(full)
 }
 
-fn network_switching_detail_result(
-    mut output: NetworkSwitchingDetailOutput,
-) -> Result<CallToolResult, McpError> {
+fn network_record_result(mut output: NetworkRecordOutput) -> Result<CallToolResult, McpError> {
     let full = structured(&output)?;
     if full
         .structured_content
@@ -13646,22 +13712,33 @@ fn network_switching_detail_result(
 fn network_inventory_list_result(
     mut output: NetworkInventoryListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
-        .structured_content
-        .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+    let exceeds = |output: &NetworkInventoryListOutput| -> Result<bool, McpError> {
+        Ok(structured(output)?
+            .structured_content
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+    };
+    let mut content = Vec::new();
+    if exceeds(&output)?
+        && let Some(records) = output.records.take()
     {
-        let records = output.records.take().expect("page records exist");
         output.records_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "records: {}",
             Value::Array(records)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if exceeds(&output)?
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
 fn devices_adopt_result(mut output: DevicesAdoptOutput) -> Result<CallToolResult, McpError> {

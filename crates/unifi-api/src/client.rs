@@ -26,6 +26,8 @@ pub(crate) const MAXIMUM_RETRY_AFTER: Duration = Duration::from_secs(10);
 /// Documented site inventory families in the Network Integration API.
 #[derive(Debug, Clone, Copy)]
 pub enum SiteInventoryKind {
+    Clients,
+    Devices,
     DeviceTags,
     Lags,
     McLagDomains,
@@ -41,6 +43,14 @@ pub enum SwitchingDetailKind {
     Lag,
     McLagDomain,
     SwitchStack,
+}
+
+/// Complete operational records in the site's device and client inventory.
+#[derive(Debug, Clone, Copy)]
+pub enum InventoryDetailKind {
+    Client,
+    Device,
+    DeviceStatistics,
 }
 
 /// Network policy collections documented by the Integration API.
@@ -184,6 +194,8 @@ impl IntegrationClient {
     ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
         let mut segments = vec!["sites", site_id];
         match kind {
+            SiteInventoryKind::Clients => segments.push("clients"),
+            SiteInventoryKind::Devices => segments.push("devices"),
             SiteInventoryKind::DeviceTags => segments.push("device-tags"),
             SiteInventoryKind::Lags => segments.extend(["switching", "lags"]),
             SiteInventoryKind::McLagDomains => {
@@ -224,6 +236,49 @@ impl IntegrationClient {
         self.get_json_with_response(&["countries"], &query)
             .await
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Page complete site records with the documented filter expression.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn site_records(
+        &self,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Read a complete client, device, or latest device statistics record.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn inventory_detail(
+        &self,
+        site_id: &str,
+        kind: InventoryDetailKind,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        match kind {
+            InventoryDetailKind::Client => {
+                self.get_json(&["sites", site_id, "clients", id], &[]).await
+            }
+            InventoryDetailKind::Device => self.device_detail_raw(site_id, id).await,
+            InventoryDetailKind::DeviceStatistics => {
+                self.get_json(
+                    &["sites", site_id, "devices", id, "statistics", "latest"],
+                    &[],
+                )
+                .await
+            }
+        }
     }
 
     /// Read one complete LAG, MC-LAG domain, or switch stack record.
