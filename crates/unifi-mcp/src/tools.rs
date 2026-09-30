@@ -3538,6 +3538,12 @@ struct GuestsAuthorizeOutput {
     action: &'static str,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     requested_limits: Option<GuestLimitsView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     authorized_before: Option<bool>,
@@ -3895,6 +3901,12 @@ struct VoucherVerification {
 struct VouchersCreateOutput {
     /// Whether the controller was asked to mint. False for a preview.
     applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// What the call mints: how many vouchers, for how long, and under which
     /// limits. Two batches differing only in validity or access limits are
     /// different batches, and a preview that showed only a count could not
@@ -3906,6 +3918,8 @@ struct VouchersCreateOutput {
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
     vouchers: Option<Vec<VoucherView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vouchers_in_content: Option<bool>,
     /// What could be established about the batch. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     checks: Option<VoucherChecks>,
@@ -8172,6 +8186,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "authorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: Some(GuestLimitsView {
                 time_limit_minutes: input.time_limit_minutes,
                 data_usage_limit_m_bytes: input.data_usage_limit_m_bytes,
@@ -8195,12 +8212,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .authorize_guest(&site_id, &client_id, limits)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         let grant = response
             .granted_authorization
             .expect("validated action response");
@@ -8230,6 +8249,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "unauthorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: None,
             authorized_before: None,
             authorized_after: None,
@@ -8248,12 +8270,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .unauthorize_guest(&site_id, &client_id)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         output.revoked_authorization = response.revoked_authorization.map(Into::into);
         let upstream_error = self
             .guest_readback(&site_id, &client_id, &client, started, &mut output, None)
@@ -9420,9 +9444,13 @@ impl UnifiMcp {
         if !input.confirm.unwrap_or(false) {
             return structured(VouchersCreateOutput {
                 applied: false,
+                response_status: None,
+                response_body: None,
+                response_body_in_content: None,
                 batch,
                 requested: input.count,
                 vouchers: None,
+                vouchers_in_content: None,
                 checks: None,
                 well_formed: None,
                 verified: None,
@@ -9435,7 +9463,7 @@ impl UnifiMcp {
         }
 
         let site_id = self.site_id().await?;
-        let created = self
+        let (created, status, body) = self
             .integration()
             .create_vouchers(
                 &site_id,
@@ -9481,9 +9509,13 @@ impl UnifiMcp {
             && checks.all_well_formed;
         structured_with_mutation_readback_errors(VouchersCreateOutput {
             applied: true,
+            response_status: Some(status),
+            response_body: Some(BoundedMessage::from_controller_bytes(&body).to_string()),
+            response_body_in_content: None,
             batch,
             requested: input.count,
             vouchers: Some(vouchers),
+            vouchers_in_content: None,
             checks: Some(checks),
             well_formed: Some(well_formed),
             verified: Some(verification.verified),
@@ -12419,6 +12451,14 @@ fn structured_with_mutation_readback_error<T: Serialize>(
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > MAXIMUM_RESULT_BYTES
         && let Some(error) = upstream_error
         && let Value::Object(fields) = &mut value
@@ -12426,12 +12466,15 @@ fn structured_with_mutation_readback_error<T: Serialize>(
     {
         fields.insert("readbackErrorInContent".to_owned(), Value::Bool(true));
         let mut result = CallToolResult::structured(value);
+        result.content.extend(extra_content);
         result
             .content
             .push(ContentBlock::text(format!("readbackError: {error}")));
         return Ok(result);
     }
-    Ok(CallToolResult::structured(value))
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Keep a confirmed action's accepted response and any later controller
@@ -12457,25 +12500,38 @@ fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallTool
     Ok(result)
 }
 
-/// Keep issued voucher codes in the structured result when several
-/// verification failures do not fit alongside them.
+/// Preserve issued codes, accepted bodies, and verification failures through
+/// labeled content when their combined values exceed the structured bound.
 fn structured_with_mutation_readback_errors<T: Serialize>(
     output: T,
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > MAXIMUM_RESULT_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("readbackErrors")
     {
         fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
-        let mut result = CallToolResult::structured(value);
-        result
-            .content
-            .push(ContentBlock::text(format!("readbackErrors: {errors}")));
-        return Ok(result);
+        extra_content.push(ContentBlock::text(format!("readbackErrors: {errors}")));
     }
-    Ok(CallToolResult::structured(value))
+    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(vouchers) = fields.remove("vouchers")
+    {
+        fields.insert("vouchersInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("vouchers: {vouchers}")));
+    }
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Enforce the response budget on the values returned by the tool, then

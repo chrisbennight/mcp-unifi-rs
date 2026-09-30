@@ -711,6 +711,12 @@ If a voucher page or detail response disagrees with the requested offset or id,
 the error includes the complete accepted controller response alongside the
 validation diagnostic, including fields outside the typed voucher view.
 
+Creation returns the accepted HTTP status and complete controller body,
+including fields outside the compact voucher view. Large accepted bodies move
+to labeled MCP content with `responseBodyInContent`. An oversized voucher view
+also moves intact to content with `vouchersInContent`; issued codes remain
+available without repeating creation.
+
 Creation checks the returned batch — whether as many came back as
 were asked for, whether each carries an id and a code, whether the codes are
 distinct, and whether each is free of whitespace and within a plausible length.
@@ -849,6 +855,9 @@ leave absence unverified. Large accepted or observed records move into MCP
 content with explicit markers.
 
 `guests.authorize` returns the granted record and any grant it replaced.
+Authorization and revocation also return the accepted HTTP status and complete
+controller body. Large accepted bodies move to labeled MCP content with an
+explicit marker.
 Repeating authorization replaces the active grant and resets traffic counters,
 so it is not idempotent. `guests.unauthorize` returns the revoked grant and
 disconnects the client. Both actions mark `verified` true only when a bounded

@@ -160,21 +160,25 @@ async fn accepted_guest_grant_keeps_controller_readback_error() {
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "action": "AUTHORIZE_GUEST_ACCESS",
-            "grantedAuthorization": grant("2026-09-28T00:00:00Z")
+            "grantedAuthorization": grant("2026-09-28T00:00:00Z"),
+            "controllerExtension":format!("{}accepted-guest-tail", "y".repeat(50_000))
         })))
         .expect(1)
         .mount(&server)
         .await;
 
-    let output = handler_for(&server)
+    let result = handler_for(&server)
         .call(
             &authorize(&serde_json::json!({"client": MAC, "confirm": true})),
             None,
         )
         .await
-        .expect("action accepted")
-        .structured_content
-        .expect("structured");
+        .expect("action accepted");
+    let content = serde_json::to_value(&result.content).expect("content");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["responseStatus"], 200);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert!(content.to_string().contains("accepted-guest-tail"));
     assert_eq!(output["applied"], true);
     assert_eq!(output["grantedAuthorization"]["dataUsageLimitMBytes"], 500);
     assert_eq!(
@@ -473,7 +477,7 @@ async fn unauthorize_returns_revoked_grant_and_checks_state() {
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "action": "UNAUTHORIZE_GUEST_ACCESS",
-            "revokedAuthorization": grant("2026-09-28T00:00:00Z")
+            "revokedAuthorization": grant("2026-09-28T00:00:00Z"), "controllerExtension":"guest revoked"
         })))
         .expect(1)
         .mount(&server)
@@ -492,6 +496,13 @@ async fn unauthorize_returns_revoked_grant_and_checks_state() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert!(
+        output["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("guest revoked")
+    );
     assert_eq!(output["verified"], true);
     assert_eq!(output["authorizedAfter"], false);
     assert_eq!(output["revokedAuthorization"]["authorizationMethod"], "API");
