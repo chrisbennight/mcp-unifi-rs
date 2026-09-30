@@ -706,6 +706,7 @@ it.
 | Tool | Idempotent | Sensitive input | Sensitive result |
 |---|---|---|---|
 | `wlans.update` | yes | yes | yes |
+| `wlans.configure` | no | yes | yes |
 | `clients.control` | no | no | yes |
 | `devices.control` | no | no | yes |
 | `devices.adopt` | no | yes | yes |
@@ -791,6 +792,40 @@ results.
 the source, target, ports, and protocol. Its preview shows the requested
 values and warns when the match or target changes; confirmed changes read the
 rule back and report any field the controller dropped or changed.
+
+### Legacy WLAN lifecycle and complete reads
+
+`wlans.list` pages complete legacy WLAN records with `offset` and `limit`
+(1–200, default 50). `wlans.status` takes `id` and returns the full detail
+envelope. Controller metadata and configuration values remain available,
+including passphrases and fields outside the compact network view. Collection
+reads are bounded by the transport body limit and fail explicitly if exceeded.
+
+`wlans.groups.list` takes `kind` (`userGroups`, `wlanGroups`, `apGroups`) and
+the same pagination arguments. It returns complete group records for WLAN
+configuration references. User and WLAN groups use legacy REST envelopes;
+AP groups use the controller's v2 array response. `totalCount` and `nextOffset`
+describe the fetched collection without a separate depth cap.
+
+`wlans.configure` takes `operation` (`create`, `update`, `delete`), optional
+`id`, optional typed `configuration`, and `confirm` (default false). Creation
+requires configuration without a path id, update requires both, and delete
+requires an id without configuration. Preview makes no controller request.
+Configuration retains the controller's field names and exposes security,
+WPA3 and SAE, private keys, RADIUS and MAC authentication, group and network
+references, radio settings, roaming, filtering, schedules, and record
+attributes. Passphrases and existing key configuration can be omitted. The
+controller decides supported modes, valid combinations, and attribute
+mutability. Requests are bounded to 1 MiB before submission.
+
+Confirmation submits once, retaining the exact accepted `responseBody` and
+`responseStatus`. Bounded readback returns the full envelope in `after`, with
+`verified` for a matching id and requested fields, or `verifiedAbsent` for an
+empty detail envelope or HTTP 404 after deletion. Failed observation retains
+acceptance and the complete upstream response in `readbackError`. Large
+responses, requested configuration, acceptance bodies, observations, and errors
+move to labeled MCP content with corresponding `...InContent` markers. The
+gateway owns caller authorization and disclosure.
 
 ### Port-forward lifecycle and complete reads
 

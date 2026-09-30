@@ -1,15 +1,16 @@
-//! Fixed legacy port-forward workflows with complete controller envelopes.
+//! Fixed legacy configuration workflows with complete controller envelopes.
 
 use super::{
     ApiError, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
     MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_RESULT_BYTES, McpError, NETWORK_POLICY_READBACK_BUDGET,
     NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation, Serialize, UnifiMcp, Value,
-    api_error, parse, requested_json_matches, structured,
+    api_error, legacy_wlan_request::LegacyWlanConfiguration, parse, requested_json_matches,
+    structured,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct PortForwardListInput {
+pub(super) struct LegacyConfigurationListInput {
     #[serde(default)]
     offset: u32,
     #[serde(default = "super::default_search_limit")]
@@ -18,13 +19,13 @@ pub(super) struct PortForwardListInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct PortForwardStatusInput {
+pub(super) struct LegacyConfigurationStatusInput {
     id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PortForwardResult {
+pub(super) struct LegacyConfigurationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     response: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,6 +116,59 @@ pub(super) struct PortForwardConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct WlansConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    configuration: Option<LegacyWlanConfiguration>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) enum WlanGroupKind {
+    #[serde(rename = "userGroups")]
+    Users,
+    #[serde(rename = "wlanGroups")]
+    Wlans,
+    #[serde(rename = "apGroups")]
+    AccessPoints,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct WlanGroupsListInput {
+    kind: WlanGroupKind,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default = "super::default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Clone, Copy)]
+enum ConfigurationFamily {
+    PortForward,
+    Wlan,
+}
+
+impl ConfigurationFamily {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::PortForward => "port-forward",
+            Self::Wlan => "WLAN",
+        }
+    }
+}
+
+struct ConfigurationRequest {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    requested: Option<Value>,
+    confirm: bool,
+    family: ConfigurationFamily,
+}
+
 fn validate_id(id: &str) -> Result<(), McpError> {
     if id.is_empty() || id.len() > 256 || matches!(id, "." | "..") {
         return Err(McpError::invalid_params(
@@ -125,17 +179,12 @@ fn validate_id(id: &str) -> Result<(), McpError> {
     Ok(())
 }
 
-impl PortForwardConfigureInput {
-    fn validate(&self) -> Result<Option<Value>, McpError> {
+impl ConfigurationRequest {
+    fn validate(&self) -> Result<(), McpError> {
         if let Some(id) = &self.id {
             validate_id(id)?;
         }
-        let requested = self
-            .configuration
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let requested = &self.requested;
         let has_configuration = requested
             .as_ref()
             .is_some_and(|value| value.as_object().is_some_and(|map| !map.is_empty()));
@@ -159,7 +208,7 @@ impl PortForwardConfigureInput {
                 None,
             ));
         }
-        Ok(requested)
+        Ok(())
     }
 
     async fn submit(
@@ -168,13 +217,13 @@ impl PortForwardConfigureInput {
         site: &str,
         requested: Option<&Value>,
     ) -> Result<(u16, Vec<u8>), ApiError> {
-        match self.operation {
-            NetworkPolicyWriteOperation::Create => {
+        match (self.family, self.operation) {
+            (ConfigurationFamily::PortForward, NetworkPolicyWriteOperation::Create) => {
                 legacy
                     .create_port_forward(site, requested.expect("validated configuration"))
                     .await
             }
-            NetworkPolicyWriteOperation::Update => {
+            (ConfigurationFamily::PortForward, NetworkPolicyWriteOperation::Update) => {
                 legacy
                     .configure_port_forward(
                         site,
@@ -183,9 +232,28 @@ impl PortForwardConfigureInput {
                     )
                     .await
             }
-            NetworkPolicyWriteOperation::Delete => {
+            (ConfigurationFamily::PortForward, NetworkPolicyWriteOperation::Delete) => {
                 legacy
                     .delete_port_forward(site, self.id.as_deref().expect("validated id"))
+                    .await
+            }
+            (ConfigurationFamily::Wlan, NetworkPolicyWriteOperation::Create) => {
+                legacy
+                    .create_wlan(site, requested.expect("validated configuration"))
+                    .await
+            }
+            (ConfigurationFamily::Wlan, NetworkPolicyWriteOperation::Update) => {
+                legacy
+                    .configure_wlan(
+                        site,
+                        self.id.as_deref().expect("validated id"),
+                        requested.expect("validated configuration"),
+                    )
+                    .await
+            }
+            (ConfigurationFamily::Wlan, NetworkPolicyWriteOperation::Delete) => {
+                legacy
+                    .delete_wlan(site, self.id.as_deref().expect("validated id"))
                     .await
             }
         }
@@ -197,36 +265,23 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<PortForwardListInput>(params)?;
+        let input = parse::<LegacyConfigurationListInput>(params)?;
         if !(1..=super::MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
             return Err(McpError::invalid_params("limit must be 1-200", None));
         }
-        let mut response = self
+        let response = self
             .legacy()
             .port_forward_records(self.legacy_site())
             .await
             .map_err(api_error)?;
-        let rows = response
-            .get_mut("data")
-            .and_then(Value::as_array_mut)
-            .expect("decoded legacy envelope");
-        let total = rows.len();
-        let offset = usize::try_from(input.offset)
-            .expect("u32 fits supported platforms")
-            .min(total);
-        let end = offset.saturating_add(usize::from(input.limit)).min(total);
-        *rows = rows.drain(offset..end).collect();
-        result(
-            serde_json::json!({"response": response, "offset": input.offset, "limit": input.limit,
-            "totalCount":total, "nextOffset": (end < total).then_some(end)}),
-        )
+        page(response, input.offset, input.limit)
     }
 
     pub(super) async fn port_forward_status(
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<PortForwardStatusInput>(params)?;
+        let input = parse::<LegacyConfigurationStatusInput>(params)?;
         validate_id(&input.id)?;
         let response = self
             .legacy()
@@ -240,9 +295,109 @@ impl UnifiMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let started = tokio::time::Instant::now();
         let input = parse::<PortForwardConfigureInput>(params)?;
-        let requested = input.validate()?;
+        let requested = input
+            .configuration
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        self.legacy_configuration_write(ConfigurationRequest {
+            operation: input.operation,
+            id: input.id,
+            requested,
+            confirm: input.confirm,
+            family: ConfigurationFamily::PortForward,
+        })
+        .await
+    }
+
+    pub(super) async fn wlans_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<WlansConfigureInput>(params)?;
+        let requested = input
+            .configuration
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        self.legacy_configuration_write(ConfigurationRequest {
+            operation: input.operation,
+            id: input.id,
+            requested,
+            confirm: input.confirm,
+            family: ConfigurationFamily::Wlan,
+        })
+        .await
+    }
+
+    pub(super) async fn wlans_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<LegacyConfigurationListInput>(params)?;
+        validate_page(input.limit)?;
+        let response = self
+            .legacy()
+            .wlan_records(self.legacy_site())
+            .await
+            .map_err(api_error)?;
+        page(response, input.offset, input.limit)
+    }
+
+    pub(super) async fn wlans_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<LegacyConfigurationStatusInput>(params)?;
+        validate_id(&input.id)?;
+        let response = self
+            .legacy()
+            .wlan_record(self.legacy_site(), &input.id)
+            .await
+            .map_err(api_error)?;
+        result(serde_json::json!({"response":response}))
+    }
+
+    pub(super) async fn wlan_groups_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<WlanGroupsListInput>(params)?;
+        validate_page(input.limit)?;
+        let response = match input.kind {
+            WlanGroupKind::Users => self.legacy().user_groups(self.legacy_site()).await,
+            WlanGroupKind::Wlans => self.legacy().wlan_groups(self.legacy_site()).await,
+            WlanGroupKind::AccessPoints => self.legacy().ap_groups(self.legacy_site()).await,
+        }
+        .map_err(api_error)?;
+        page(response, input.offset, input.limit)
+    }
+
+    async fn configuration_record(
+        &self,
+        family: ConfigurationFamily,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        match family {
+            ConfigurationFamily::PortForward => {
+                self.legacy()
+                    .port_forward_record(self.legacy_site(), id)
+                    .await
+            }
+            ConfigurationFamily::Wlan => self.legacy().wlan_record(self.legacy_site(), id).await,
+        }
+    }
+
+    async fn legacy_configuration_write(
+        &self,
+        input: ConfigurationRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        input.validate()?;
+        let requested = &input.requested;
         let mut output = serde_json::json!({"operation":input.operation,"id":input.id,"requested":requested,
             "submitted":false});
         if !input.confirm {
@@ -264,9 +419,10 @@ impl UnifiMcp {
             .and_then(Value::as_str);
         let id = input.id.as_deref().or(accepted_id);
         let Some(id) = id else {
-            output["readbackError"] = Value::String(
-                "accepted response contains no single port-forward identifier".to_owned(),
-            );
+            output["readbackError"] = Value::String(format!(
+                "accepted response contains no single {} identifier",
+                input.family.label()
+            ));
             return result(output);
         };
         output["id"] = Value::String(id.to_owned());
@@ -280,16 +436,13 @@ impl UnifiMcp {
             .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
             .min(NETWORK_POLICY_READBACK_BUDGET);
         if budget.is_zero() {
-            output["readbackError"] =
-                Value::String("port-forward readback skipped near request deadline".to_owned());
+            output["readbackError"] = Value::String(format!(
+                "{} readback skipped near request deadline",
+                input.family.label()
+            ));
             return result(output);
         }
-        match tokio::time::timeout(
-            budget,
-            self.legacy().port_forward_record(self.legacy_site(), id),
-        )
-        .await
-        {
+        match tokio::time::timeout(budget, self.configuration_record(input.family, id)).await {
             Ok(Ok(after)) => {
                 let rows = after
                     .get("data")
@@ -321,11 +474,42 @@ impl UnifiMcp {
             }
             Err(_) => {
                 output["readbackError"] =
-                    Value::String("port-forward readback timed out".to_owned());
+                    Value::String(format!("{} readback timed out", input.family.label()));
             }
         }
         result(output)
     }
+}
+
+fn validate_page(limit: u16) -> Result<(), McpError> {
+    if !(1..=super::MAXIMUM_SEARCH_LIMIT).contains(&limit) {
+        return Err(McpError::invalid_params("limit must be 1-200", None));
+    }
+    Ok(())
+}
+
+fn page(
+    mut response: Value,
+    requested_offset: u32,
+    limit: u16,
+) -> Result<CallToolResult, McpError> {
+    let rows = if let Value::Array(rows) = &mut response {
+        rows
+    } else {
+        response
+            .get_mut("data")
+            .and_then(Value::as_array_mut)
+            .expect("decoded legacy envelope")
+    };
+    let total = rows.len();
+    let offset = usize::try_from(requested_offset)
+        .expect("u32 fits supported platforms")
+        .min(total);
+    let end = offset.saturating_add(usize::from(limit)).min(total);
+    *rows = rows.drain(offset..end).collect();
+    result(
+        serde_json::json!({"response": response,"offset":requested_offset,"limit":limit,"totalCount":total,"nextOffset":(end<total).then_some(end)}),
+    )
 }
 
 fn result(mut output: Value) -> Result<CallToolResult, McpError> {
@@ -349,7 +533,7 @@ fn result(mut output: Value) -> Result<CallToolResult, McpError> {
             output[format!("{field}InContent")] = Value::Bool(true);
         }
     }
-    let output: PortForwardResult = serde_json::from_value(output)
+    let output: LegacyConfigurationResult = serde_json::from_value(output)
         .map_err(|error| McpError::internal_error(error.to_string(), None))?;
     let mut result = structured(output)?;
     result.content.extend(content);

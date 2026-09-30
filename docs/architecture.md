@@ -65,6 +65,12 @@ the controller's force deletion option.
 `port_forwards.configure` provides typed creation, field updates, and deletion,
 with complete accepted responses and bounded observation.
 
+`wlans.list/status` expose complete legacy WLAN records, and
+`wlans.groups.list` discovers their user, WLAN, and AP group references.
+`wlans.configure` provides typed creation, field updates, and deletion,
+including security, private keys, RADIUS, filtering, schedules, and radio
+settings. It retains accepted responses and bounded controller observation.
+
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).
 `wlans.update`, `clients.control` (block, unblock, reconnect),
