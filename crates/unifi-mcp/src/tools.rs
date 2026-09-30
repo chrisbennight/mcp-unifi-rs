@@ -8258,7 +8258,12 @@ impl UnifiMcp {
         let page: unifi_api::models::Page<Map<String, Value>> =
             serde_json::from_value(original.clone())
                 .map_err(|error| page_validation_error(&response, error.to_string()))?;
-        let mut page_metadata = original.as_object().expect("decoded page object").clone();
+        let mut page_metadata = original
+            .as_object()
+            .ok_or_else(|| {
+                page_validation_error(&response, "Wi-Fi broadcast page must be a JSON object")
+            })?
+            .clone();
         for field in ["offset", "limit", "count", "totalCount", "data"] {
             page_metadata.remove(field);
         }
