@@ -98,6 +98,9 @@ pub enum ToolKind {
     GuestsAuthorize,
     GuestsUnauthorize,
     PortForwardsUpdate,
+    PortForwardsList,
+    PortForwardsStatus,
+    PortForwardsConfigure,
     FirewallPoliciesUpdate,
     FirewallPoliciesDelete,
     VouchersSearch,
@@ -127,6 +130,7 @@ impl ToolKind {
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
+            | Self::PortForwardsConfigure
             | Self::FirewallPoliciesUpdate
             | Self::FirewallPoliciesDelete
             | Self::VouchersRevoke
@@ -155,6 +159,8 @@ impl ToolKind {
             | Self::NetworksRead
             | Self::NetworksList
             | Self::NetworksStatus
+            | Self::PortForwardsList
+            | Self::PortForwardsStatus
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
@@ -261,6 +267,9 @@ impl ToolKind {
             | Self::GuestsAuthorize
             | Self::GuestsUnauthorize
             | Self::PortForwardsUpdate
+            | Self::PortForwardsList
+            | Self::PortForwardsStatus
+            | Self::PortForwardsConfigure
             | Self::FirewallPoliciesUpdate
             | Self::FirewallPoliciesDelete
             | Self::VouchersSearch
@@ -876,6 +885,24 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Preview or revoke one connected guest's access by MAC address. A confirmed action disconnects the client, returns the revoked grant, and checks the reported access state when still readable.",
         ToolBehavior::write(false).result_sensitive(),
     ),
+    sensitive_read_spec(
+        ToolKind::PortForwardsList,
+        "port_forwards.list",
+        "Page complete legacy port-forward records and controller envelope metadata. Collection reads are bounded by the transport body limit; offset and limit select records without changing their fields.",
+    ),
+    sensitive_read_spec(
+        ToolKind::PortForwardsStatus,
+        "port_forwards.status",
+        "Read the complete legacy port-forward detail envelope by id, including unmodeled controller fields. Large envelopes are returned in labeled content with explicit markers.",
+    ),
+    write_spec(
+        ToolKind::PortForwardsConfigure,
+        "port_forwards.configure",
+        "Preview or create, update, or delete a legacy port forward. Accepts typed controller fields including interface, destination address, logging, and record attributes. Confirmation submits once and returns the complete acceptance envelope plus bounded observation. The controller decides valid configuration and mutability.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     write_spec(
         ToolKind::PortForwardsUpdate,
         "port_forwards.update",
@@ -1020,6 +1047,9 @@ mod tests {
         ToolKind::GuestsAuthorize,
         ToolKind::GuestsUnauthorize,
         ToolKind::PortForwardsUpdate,
+        ToolKind::PortForwardsList,
+        ToolKind::PortForwardsStatus,
+        ToolKind::PortForwardsConfigure,
         ToolKind::FirewallPoliciesUpdate,
         ToolKind::FirewallPoliciesDelete,
         ToolKind::VouchersSearch,
@@ -1154,6 +1184,9 @@ mod tests {
                 | ToolKind::GuestsAuthorize
                 | ToolKind::GuestsUnauthorize
                 | ToolKind::PortForwardsUpdate
+                | ToolKind::PortForwardsList
+                | ToolKind::PortForwardsStatus
+                | ToolKind::PortForwardsConfigure
                 | ToolKind::FirewallPoliciesUpdate
                 | ToolKind::FirewallPoliciesDelete
                 | ToolKind::VouchersSearch

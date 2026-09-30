@@ -52,6 +52,10 @@ mod activity;
 mod firewall_policy_request;
 mod network_configuration;
 mod network_request;
+mod port_forward_configuration;
+use port_forward_configuration::{
+    PortForwardConfigureInput, PortForwardListInput, PortForwardResult, PortForwardStatusInput,
+};
 mod wifi_request;
 use network_configuration::{
     ConfigurationResult, NetworksConfigureInput, NetworksListInput, NetworksStatusInput,
@@ -4525,6 +4529,11 @@ impl ToolSpec {
             ToolKind::GuestsUnauthorize => {
                 tool::<GuestsUnauthorizeInput, GuestsAuthorizeOutput>(self)
             }
+            ToolKind::PortForwardsList => tool::<PortForwardListInput, PortForwardResult>(self),
+            ToolKind::PortForwardsStatus => tool::<PortForwardStatusInput, PortForwardResult>(self),
+            ToolKind::PortForwardsConfigure => {
+                tool::<PortForwardConfigureInput, PortForwardResult>(self)
+            }
             ToolKind::PortForwardsUpdate => {
                 tool::<PortForwardsUpdateInput, PortForwardsUpdateOutput>(self)
             }
@@ -4818,6 +4827,9 @@ impl UnifiMcp {
             ToolKind::GuestsStatus => self.guests_status(params).await,
             ToolKind::GuestsAuthorize => self.guests_authorize(params).await,
             ToolKind::GuestsUnauthorize => self.guests_unauthorize(params).await,
+            ToolKind::PortForwardsList => self.port_forward_list(params).await,
+            ToolKind::PortForwardsStatus => self.port_forward_status(params).await,
+            ToolKind::PortForwardsConfigure => self.port_forward_configure(params).await,
             ToolKind::PortForwardsUpdate => self.port_forwards_update(params).await,
             ToolKind::FirewallPoliciesUpdate => self.firewall_policies_update(params).await,
             ToolKind::FirewallPoliciesDelete => self.firewall_policies_delete(params).await,
@@ -14399,6 +14411,7 @@ mod tests {
         // Setting the same rule state twice leaves the same state; no secret
         // is involved, and the result names the host a rule exposes.
         ("port_forwards.update", true, false, true),
+        ("port_forwards.configure", false, true, true),
         // Same, and the result names the zones and ports a policy governs.
         ("firewall.policies.update", true, false, true),
         // Repeating deletion leaves the policy absent.

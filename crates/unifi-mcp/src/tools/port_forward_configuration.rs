@@ -1,0 +1,357 @@
+//! Fixed legacy port-forward workflows with complete controller envelopes.
+
+use super::{
+    ApiError, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
+    MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_RESULT_BYTES, McpError, NETWORK_POLICY_READBACK_BUDGET,
+    NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation, Serialize, UnifiMcp, Value,
+    api_error, parse, requested_json_matches, structured,
+};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct PortForwardListInput {
+    #[serde(default)]
+    offset: u32,
+    #[serde(default = "super::default_search_limit")]
+    limit: u16,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct PortForwardStatusInput {
+    id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PortForwardResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation: Option<NetworkPolicyWriteOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    submitted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
+/// Controller field names remain unchanged in the submitted configuration.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PortForwardConfiguration {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attr_hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attr_hidden_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attr_no_delete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attr_no_edit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    site_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    src: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fwd_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dst_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proto: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    destination_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pfwd_interface: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct PortForwardConfigureInput {
+    operation: NetworkPolicyWriteOperation,
+    id: Option<String>,
+    configuration: Option<PortForwardConfiguration>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+fn validate_id(id: &str) -> Result<(), McpError> {
+    if id.is_empty() || id.len() > 256 || matches!(id, "." | "..") {
+        return Err(McpError::invalid_params(
+            "id must be nonempty, non-dot, and at most 256 bytes",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+impl PortForwardConfigureInput {
+    fn validate(&self) -> Result<Option<Value>, McpError> {
+        if let Some(id) = &self.id {
+            validate_id(id)?;
+        }
+        let requested = self
+            .configuration
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let has_configuration = requested
+            .as_ref()
+            .is_some_and(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+        let valid_shape = match self.operation {
+            NetworkPolicyWriteOperation::Create => self.id.is_none() && has_configuration,
+            NetworkPolicyWriteOperation::Update => self.id.is_some() && has_configuration,
+            NetworkPolicyWriteOperation::Delete => self.id.is_some() && requested.is_none(),
+        };
+        if !valid_shape {
+            return Err(McpError::invalid_params(
+                "create requires configuration without id; update requires id and configuration; delete requires id without configuration",
+                None,
+            ));
+        }
+        if requested
+            .as_ref()
+            .is_some_and(|value| value.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES)
+        {
+            return Err(McpError::invalid_params(
+                "configuration exceeds the 1 MiB request bound",
+                None,
+            ));
+        }
+        Ok(requested)
+    }
+
+    async fn submit(
+        &self,
+        legacy: &unifi_api::LegacyClient,
+        site: &str,
+        requested: Option<&Value>,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        match self.operation {
+            NetworkPolicyWriteOperation::Create => {
+                legacy
+                    .create_port_forward(site, requested.expect("validated configuration"))
+                    .await
+            }
+            NetworkPolicyWriteOperation::Update => {
+                legacy
+                    .configure_port_forward(
+                        site,
+                        self.id.as_deref().expect("validated id"),
+                        requested.expect("validated configuration"),
+                    )
+                    .await
+            }
+            NetworkPolicyWriteOperation::Delete => {
+                legacy
+                    .delete_port_forward(site, self.id.as_deref().expect("validated id"))
+                    .await
+            }
+        }
+    }
+}
+
+impl UnifiMcp {
+    pub(super) async fn port_forward_list(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<PortForwardListInput>(params)?;
+        if !(1..=super::MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+            return Err(McpError::invalid_params("limit must be 1-200", None));
+        }
+        let mut response = self
+            .legacy()
+            .port_forward_records(self.legacy_site())
+            .await
+            .map_err(api_error)?;
+        let rows = response
+            .get_mut("data")
+            .and_then(Value::as_array_mut)
+            .expect("decoded legacy envelope");
+        let total = rows.len();
+        let offset = usize::try_from(input.offset)
+            .expect("u32 fits supported platforms")
+            .min(total);
+        let end = offset.saturating_add(usize::from(input.limit)).min(total);
+        *rows = rows.drain(offset..end).collect();
+        result(
+            serde_json::json!({"response": response, "offset": input.offset, "limit": input.limit,
+            "totalCount":total, "nextOffset": (end < total).then_some(end)}),
+        )
+    }
+
+    pub(super) async fn port_forward_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<PortForwardStatusInput>(params)?;
+        validate_id(&input.id)?;
+        let response = self
+            .legacy()
+            .port_forward_record(self.legacy_site(), &input.id)
+            .await
+            .map_err(api_error)?;
+        result(serde_json::json!({"response": response}))
+    }
+
+    pub(super) async fn port_forward_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<PortForwardConfigureInput>(params)?;
+        let requested = input.validate()?;
+        let mut output = serde_json::json!({"operation":input.operation,"id":input.id,"requested":requested,
+            "submitted":false});
+        if !input.confirm {
+            return result(output);
+        }
+        let (status, body) = input
+            .submit(self.legacy(), self.legacy_site(), requested.as_ref())
+            .await
+            .map_err(api_error)?;
+        output["submitted"] = Value::Bool(true);
+        output["responseStatus"] = Value::from(status);
+        output["responseBody"] = Value::String(String::from_utf8_lossy(&body).into_owned());
+        let accepted: Value = serde_json::from_slice(&body).expect("validated legacy envelope");
+        let accepted_id = accepted
+            .get("data")
+            .and_then(Value::as_array)
+            .filter(|rows| rows.len() == 1)
+            .and_then(|rows| rows[0].get("_id"))
+            .and_then(Value::as_str);
+        let id = input.id.as_deref().or(accepted_id);
+        let Some(id) = id else {
+            output["readbackError"] = Value::String(
+                "accepted response contains no single port-forward identifier".to_owned(),
+            );
+            return result(output);
+        };
+        output["id"] = Value::String(id.to_owned());
+        if let Err(error) = validate_id(id) {
+            output["readbackError"] = Value::String(error.to_string());
+            return result(output);
+        }
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+            .min(NETWORK_POLICY_READBACK_BUDGET);
+        if budget.is_zero() {
+            output["readbackError"] =
+                Value::String("port-forward readback skipped near request deadline".to_owned());
+            return result(output);
+        }
+        match tokio::time::timeout(
+            budget,
+            self.legacy().port_forward_record(self.legacy_site(), id),
+        )
+        .await
+        {
+            Ok(Ok(after)) => {
+                let rows = after
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .expect("decoded legacy envelope");
+                if input.operation == NetworkPolicyWriteOperation::Delete {
+                    output["verifiedAbsent"] = Value::Bool(rows.is_empty());
+                } else {
+                    output["verified"] = Value::Bool(
+                        rows.len() == 1
+                            && rows[0].get("_id").and_then(Value::as_str) == Some(id)
+                            && accepted_id.is_none_or(|accepted| accepted == id)
+                            && requested_json_matches(
+                                requested.as_ref().expect("validated configuration"),
+                                &rows[0],
+                            ),
+                    );
+                }
+                output["after"] = after;
+            }
+            Ok(Err(error @ ApiError::Status { status: 404, .. }))
+                if input.operation == NetworkPolicyWriteOperation::Delete =>
+            {
+                output["verifiedAbsent"] = Value::Bool(true);
+                output["readbackError"] = Value::String(error.to_string());
+            }
+            Ok(Err(error)) => {
+                output["readbackError"] = Value::String(error.to_string());
+            }
+            Err(_) => {
+                output["readbackError"] =
+                    Value::String("port-forward readback timed out".to_owned());
+            }
+        }
+        result(output)
+    }
+}
+
+fn result(mut output: Value) -> Result<CallToolResult, McpError> {
+    let mut content = Vec::new();
+    for field in [
+        "response",
+        "requested",
+        "responseBody",
+        "after",
+        "readbackError",
+    ] {
+        if output.to_string().len() <= MAXIMUM_RESULT_BYTES {
+            break;
+        }
+        if let Some(part) = output.as_object_mut().expect("result object").remove(field) {
+            content.push(ContentBlock::text(format!(
+                "{field}: {}",
+                part.as_str()
+                    .map_or_else(|| part.to_string(), str::to_owned)
+            )));
+            output[format!("{field}InContent")] = Value::Bool(true);
+        }
+    }
+    let output: PortForwardResult = serde_json::from_value(output)
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
