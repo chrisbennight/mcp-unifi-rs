@@ -182,7 +182,7 @@ accepted write proves nothing. Every write tool shares one path:
 ### Voucher readback
 
 The official voucher list and detail endpoints return codes. `vouchers.create`
-checks the returned batch's count, identity, distinctness, and code form, then
+reports the returned batch's count, identity, distinctness and code lengths, then
 reads each identified voucher back to compare its id and code. A failed
 readback is reported alongside the creation response. `vouchers.search` and
 `vouchers.status` let callers retrieve codes later without minting again.

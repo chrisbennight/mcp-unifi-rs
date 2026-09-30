@@ -3950,22 +3950,15 @@ struct VoucherView {
 }
 
 /// Checks on the creation response, separate from readback verification.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "four independent checks, each a distinct question about the batch; collapsing them would report that something failed without saying what"
-)]
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct VoucherChecks {
     /// Whether the controller returned as many vouchers as were asked for.
     count_matches: bool,
-    /// Whether every voucher carries an id and a code.
+    /// Whether every voucher carries a nonempty id and code.
     all_identified: bool,
     /// Whether every code differs from every other.
     all_distinct: bool,
-    /// Whether every code is free of whitespace and within a plausible
-    /// length. A code that fails this is unusable as typed.
-    all_well_formed: bool,
     /// Character length of the codes, or the differing lengths when they are
     /// not uniform. Reported rather than judged: the controller decides the
     /// format, and this server should not refuse a batch for being unfamiliar.
@@ -4012,9 +4005,6 @@ struct VouchersCreateOutput {
     /// What could be established about the batch. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     checks: Option<VoucherChecks>,
-    /// Whether every check on the creation response passed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    well_formed: Option<bool>,
     /// Whether every identified voucher was read back with the same code.
     /// False also covers missing ids, failed reads and mismatched codes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -9748,7 +9738,6 @@ impl UnifiMcp {
                 response_body_in_content: None,
                 vouchers: None,
                 checks: None,
-                well_formed: None,
                 verified: None,
                 readback_errors: Vec::new(),
                 readback_errors_in_content: None,
@@ -9790,10 +9779,6 @@ impl UnifiMcp {
             .collect();
         // The checks describe the ids and codes returned by the controller.
         let checks = voucher_checks(input.count, &vouchers);
-        let well_formed = checks.count_matches
-            && checks.all_identified
-            && checks.all_distinct
-            && checks.all_well_formed;
         structured_with_mutation_readback_errors(VouchersCreateOutput {
             applied: true,
             batch,
@@ -9807,7 +9792,6 @@ impl UnifiMcp {
             response_body_in_content: None,
             vouchers: Some(vouchers),
             checks: Some(checks),
-            well_formed: Some(well_formed),
             verified: Some(verification.verified),
             readback_errors: verification.errors,
             readback_errors_in_content: None,
@@ -11749,10 +11733,6 @@ const NETWORK_POLICY_READBACK_BUDGET: Duration = Duration::from_secs(5);
 const NETWORK_POLICY_RESPONSE_RESERVE: Duration = Duration::from_millis(500);
 /// Maximum validity in the Integration API voucher creation contract.
 const VOUCHER_MINUTES_CEILING: u32 = 1_000_000;
-/// Widest code this server will call well formed. Generous on purpose — the
-/// controller decides the format, and refusing an unfamiliar one would
-/// condemn vouchers that already exist.
-const VOUCHER_CODE_MAX: usize = 64;
 
 fn voucher_id(raw: &str) -> Result<&str, McpError> {
     let id = raw.trim();
@@ -11848,12 +11828,6 @@ fn voucher_checks(requested: u32, vouchers: &[VoucherView]) -> VoucherChecks {
                 && voucher.code.as_ref().is_some_and(|code| !code.is_empty())
         }),
         all_distinct: codes.len() == distinct,
-        all_well_formed: vouchers.iter().all(|voucher| {
-            voucher.code.as_ref().is_some_and(|code| {
-                let length = code.chars().count();
-                length > 0 && length <= VOUCHER_CODE_MAX && !code.chars().any(char::is_whitespace)
-            })
-        }),
         code_lengths: lengths,
     }
 }

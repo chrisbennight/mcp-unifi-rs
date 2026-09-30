@@ -911,12 +911,10 @@ If a voucher page or detail response disagrees with the requested offset or id,
 the error includes the complete accepted controller response alongside the
 validation diagnostic, including fields outside the typed voucher view.
 
-Creation checks the returned batch — whether as many came back as
-were asked for, whether each carries an id and a code, whether the codes are
-distinct, and whether each is free of whitespace and within a plausible length.
-Code lengths are reported rather than judged: the controller decides the
-format, and refusing a batch for being unfamiliar would condemn vouchers that
-already exist. It also reads each identified voucher back and sets `verified`
+Creation checks report whether the returned count matches, whether each voucher
+carries a nonempty ID and code, and whether codes are distinct. Code lengths
+are observations; the controller defines the format. Creation also reads each
+identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
 and complete controller response or error. `readbackComplete` says whether verification
