@@ -162,9 +162,12 @@ async fn quiet_supported_windows_and_controller_closures_are_distinct() {
 
 #[tokio::test]
 async fn byte_limits_retain_prior_messages_and_explain_an_omitted_message() {
-    for messages in [
-        vec![Message::Text("ab".into()), Message::Text("cd".into())],
-        vec![Message::Text("abcd".into())],
+    for (messages, retained) in [
+        (
+            vec![Message::Text("ab".into()), Message::Text("cd".into())],
+            true,
+        ),
+        (vec![Message::Text("abcd".into())], false),
     ] {
         let (url, task) = socket_server("events", messages).await;
         let output = handler(&url)
@@ -187,11 +190,16 @@ async fn byte_limits_retain_prior_messages_and_explain_an_omitted_message() {
                     .expect("limit diagnostic")
                     .contains("Message")
         );
-        if output["messageCount"] == 1 {
+        if retained {
+            assert_eq!(output["messageCount"], 1);
+            assert_eq!(output["receivedBytes"], 2);
+            assert_eq!(output["messages"].as_array().expect("messages").len(), 1);
             assert_eq!(output["messages"][0]["payload"], "ab");
             assert_eq!(output["omittedMessageBytes"], 2);
         } else {
             assert_eq!(output["messageCount"], 0);
+            assert_eq!(output["receivedBytes"], 0);
+            assert_eq!(output["messages"], json!([]));
         }
         task.await.expect("fake server");
     }

@@ -2901,10 +2901,25 @@ struct AclRulesOrderingConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrdering {
+    before_system_defined: Vec<String>,
+    after_system_defined: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrderingConfigureInput {
+    ordered_firewall_policy_ids: FirewallPolicyOrdering,
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkPolicyWriteOutput {
-    kind: NetworkPolicyKind,
+struct NetworkPolicyWriteOutput<K = NetworkPolicyKind> {
+    kind: K,
     operation: NetworkPolicyWriteOperation,
     consequence: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3620,6 +3635,12 @@ struct GuestsAuthorizeOutput {
     action: &'static str,
     applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     requested_limits: Option<GuestLimitsView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     authorized_before: Option<bool>,
@@ -3833,6 +3854,55 @@ struct VoucherRevokeInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VouchersRevokeMatchingInput {
+    /// Documented controller filter, sent unchanged. Maximum 2048 bytes.
+    filter: String,
+    /// Offset of the preview page, independent of the deletion selection.
+    #[serde(default)]
+    preview_offset: u32,
+    /// Preview rows, 1-100. Default 25. Confirmation deletes every filter match.
+    #[serde(default = "default_voucher_limit")]
+    preview_limit: u16,
+    /// Delete all matching vouchers. Absent or false previews one page.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct VouchersRevokeMatchingOutput {
+    filter: String,
+    matches_before: u64,
+    preview_complete: bool,
+    applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vouchers_deleted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matches_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_absent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readback_error_in_content: Option<bool>,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct VoucherRevokeOutput {
@@ -4009,6 +4079,8 @@ struct VouchersCreateOutput {
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
     vouchers: Option<Vec<VoucherView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vouchers_in_content: Option<bool>,
     /// What could be established about the batch. Applied only.
     #[serde(skip_serializing_if = "Option::is_none")]
     checks: Option<VoucherChecks>,
@@ -4433,6 +4505,13 @@ impl ToolSpec {
             ToolKind::AclRulesConfigure => {
                 tool::<AclRulesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::FirewallPoliciesOrderingRead => {
+                tool::<EmptyInput, NetworkPolicyDetailOutput>(self)
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => tool::<
+                FirewallPolicyOrderingConfigureInput,
+                NetworkPolicyWriteOutput<&'static str>,
+            >(self),
             ToolKind::AclRulesOrderingRead => {
                 tool::<AclRulesOrderingReadInput, NetworkPolicyDetailOutput>(self)
             }
@@ -4577,6 +4656,9 @@ impl ToolSpec {
             ToolKind::VouchersSearch => tool::<VouchersSearchInput, VouchersSearchOutput>(self),
             ToolKind::VouchersStatus => tool::<VoucherIdInput, VoucherReadView>(self),
             ToolKind::VouchersRevoke => tool::<VoucherRevokeInput, VoucherRevokeOutput>(self),
+            ToolKind::VouchersRevokeMatching => {
+                tool::<VouchersRevokeMatchingInput, VouchersRevokeMatchingOutput>(self)
+            }
             ToolKind::VouchersCreate => tool::<VouchersCreateInput, VouchersCreateOutput>(self),
         }
     }
@@ -4771,7 +4853,7 @@ impl UnifiMcp {
     /// Upstream faults preserve the complete accepted controller error body.
     #[expect(
         clippy::too_many_lines,
-        reason = "exhaustive dispatch states the handler for every registered tool"
+        reason = "one exhaustive dispatch keeps the registered tool surface explicit"
     )]
     pub async fn call(
         &self,
@@ -4807,6 +4889,12 @@ impl UnifiMcp {
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
             ToolKind::AclRulesConfigure => self.acl_rules_configure(params).await,
+            ToolKind::FirewallPoliciesOrderingRead => {
+                self.firewall_policies_ordering_read(params).await
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => {
+                self.firewall_policies_ordering_configure(params).await
+            }
             ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
             ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
             ToolKind::FirewallZonesConfigure => self.firewall_zones_configure(params).await,
@@ -4875,6 +4963,7 @@ impl UnifiMcp {
             ToolKind::VouchersSearch => self.vouchers_search(params).await,
             ToolKind::VouchersStatus => self.vouchers_status(params).await,
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
+            ToolKind::VouchersRevokeMatching => self.vouchers_revoke_matching(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
         result.map(|result| trust_annotated(result, spec.behavior))
@@ -7927,6 +8016,115 @@ impl UnifiMcp {
         self.network_policy_write(plan).await
     }
 
+    async fn firewall_policies_ordering_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let _: EmptyInput = parse(params)?;
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .firewall_policy_ordering(&site_id)
+            .await
+            .map_err(api_error)?;
+        network_policy_detail_result(NetworkPolicyDetailOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn firewall_policies_ordering_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<FirewallPolicyOrderingConfigureInput>(params)?;
+        let requested = serde_json::json!({"orderedFirewallPolicyIds": {
+            "beforeSystemDefined": input.ordered_firewall_policy_ids.before_system_defined,
+            "afterSystemDefined": input.ordered_firewall_policy_ids.after_system_defined,
+        }});
+        if requested.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES {
+            return Err(McpError::invalid_params(
+                "firewall policy ordering request exceeds the 1 MiB request bound",
+                None,
+            ));
+        }
+        let mut output = NetworkPolicyWriteOutput {
+            kind: "firewallPolicies",
+            operation: NetworkPolicyWriteOperation::Update,
+            consequence: "replace the priority order of the site's user-defined firewall policies",
+            id: None,
+            requested: Some(requested),
+            requested_in_content: None,
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return network_policy_write_result(output);
+        }
+        let site_id = self.site_id().await?;
+        let (status, accepted) = self
+            .integration()
+            .replace_firewall_policy_ordering(
+                &site_id,
+                &input.ordered_firewall_policy_ids.before_system_defined,
+                &input.ordered_firewall_policy_ids.after_system_defined,
+            )
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.response_status = Some(status);
+        output.accepted = Some(accepted);
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+            .min(NETWORK_POLICY_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("firewall policy ordering readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().firewall_policy_ordering(&site_id),
+            )
+            .await
+            {
+                Ok(Ok(after)) => {
+                    let requested_ids = output
+                        .requested
+                        .as_ref()
+                        .and_then(|body| body.get("orderedFirewallPolicyIds"));
+                    output.verified = Some(
+                        after.get("orderedFirewallPolicyIds") == requested_ids
+                            && output
+                                .accepted
+                                .as_ref()
+                                .and_then(|body| body.get("orderedFirewallPolicyIds"))
+                                == requested_ids,
+                    );
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error =
+                        Some("firewall policy ordering readback timed out".to_owned());
+                }
+            }
+        }
+        network_policy_write_result(output)
+    }
+
     async fn acl_rules_ordering_read(
         &self,
         params: &CallToolRequestParams,
@@ -8138,7 +8336,14 @@ impl UnifiMcp {
                                 output.verified = Some(
                                     after.get("id").and_then(Value::as_str) == Some(id.as_str())
                                         && accepted_id.as_deref() == Some(id.as_str())
-                                        && requested_json_matches(requested, &after),
+                                        && if matches!(
+                                            output.kind,
+                                            NetworkPolicyKind::FirewallPolicies
+                                        ) {
+                                            firewall_policy_request::matches(requested, &after)
+                                        } else {
+                                            requested_json_matches(requested, &after)
+                                        },
                                 );
                                 output.after = Some(after);
                             }
@@ -8299,7 +8504,12 @@ impl UnifiMcp {
         let page: unifi_api::models::Page<Map<String, Value>> =
             serde_json::from_value(original.clone())
                 .map_err(|error| page_validation_error(&response, error.to_string()))?;
-        let mut page_metadata = original.as_object().expect("decoded page object").clone();
+        let mut page_metadata = original
+            .as_object()
+            .ok_or_else(|| {
+                page_validation_error(&response, "Wi-Fi broadcast page must be a JSON object")
+            })?
+            .clone();
         for field in ["offset", "limit", "count", "totalCount", "data"] {
             page_metadata.remove(field);
         }
@@ -8405,6 +8615,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "authorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: Some(GuestLimitsView {
                 time_limit_minutes: input.time_limit_minutes,
                 data_usage_limit_m_bytes: input.data_usage_limit_m_bytes,
@@ -8428,12 +8641,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .authorize_guest(&site_id, &client_id, limits)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         let grant = response
             .granted_authorization
             .expect("validated action response");
@@ -8463,6 +8678,9 @@ impl UnifiMcp {
             client: client.clone(),
             action: "unauthorize",
             applied: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
             requested_limits: None,
             authorized_before: None,
             authorized_after: None,
@@ -8481,12 +8699,14 @@ impl UnifiMcp {
         let client_id = self.integration_client_id(&site_id, &client).await?;
         let before = self.guest_detail(&site_id, &client_id, &client).await?;
         output.authorized_before = before.access.as_ref().and_then(|access| access.authorized);
-        let response = self
+        let (response, status, body) = self
             .integration()
             .unauthorize_guest(&site_id, &client_id)
             .await
             .map_err(api_error)?;
         output.applied = true;
+        output.response_status = Some(status);
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
         output.revoked_authorization = response.revoked_authorization.map(Into::into);
         let upstream_error = self
             .guest_readback(&site_id, &client_id, &client, started, &mut output, None)
@@ -9529,6 +9749,118 @@ impl UnifiMcp {
         structured(VoucherReadView::from(voucher))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one bounded preview, deletion, and observation retain all controller responses"
+    )]
+    async fn vouchers_revoke_matching(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<VouchersRevokeMatchingInput>(params)?;
+        if input.filter.trim().is_empty()
+            || input.filter.len() > 2048
+            || input.preview_offset > i32::MAX as u32
+            || !(1..=100).contains(&input.preview_limit)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be nonempty and at most 2048 bytes; previewOffset must fit a nonnegative 32-bit integer; previewLimit must be 1-100",
+                None,
+            ));
+        }
+        let site_id = self.site_id().await?;
+        let (before, response) = self
+            .integration()
+            .voucher_records(
+                &site_id,
+                PageRequest {
+                    offset: u64::from(input.preview_offset),
+                    limit: u32::from(input.preview_limit),
+                },
+                Some(&input.filter),
+            )
+            .await
+            .map_err(api_error)?;
+        validate_voucher_records_page(
+            &before,
+            &response,
+            u64::from(input.preview_offset),
+            input.preview_limit,
+        )?;
+        let mut output = VouchersRevokeMatchingOutput {
+            filter: input.filter,
+            matches_before: before.total_count,
+            preview_complete: before.offset == 0 && before.count == before.total_count,
+            applied: false,
+            before_response: Some(response.to_string()),
+            before_response_in_content: None,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            vouchers_deleted: None,
+            matches_after: None,
+            verified_absent: None,
+            after_response: None,
+            after_response_in_content: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return vouchers_revoke_matching_result(output);
+        }
+        let (status, body) = self
+            .integration()
+            .delete_matching_vouchers(&site_id, &output.filter)
+            .await
+            .map_err(api_error)?;
+        output.applied = true;
+        output.response_status = Some(status);
+        output.vouchers_deleted = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|record| record.get("vouchersDeleted").and_then(Value::as_u64));
+        output.response_body = Some(BoundedMessage::from_controller_bytes(&body).to_string());
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(VOUCHER_RESPONSE_RESERVE)
+            .min(VOUCHER_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("voucher filter readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().voucher_records(
+                    &site_id,
+                    PageRequest {
+                        offset: 0,
+                        limit: 1,
+                    },
+                    Some(&output.filter),
+                ),
+            )
+            .await
+            {
+                Ok(Ok((after, response))) => {
+                    output.after_response = Some(response.to_string());
+                    match validate_voucher_records_page(&after, &response, 0, 1) {
+                        Ok(()) => {
+                            output.matches_after = Some(after.total_count);
+                            output.verified_absent = Some(after.total_count == 0);
+                        }
+                        Err(error) => output.readback_error = Some(error.message.into_owned()),
+                    }
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error = Some("voucher filter readback timed out".to_owned());
+                }
+            }
+        }
+        vouchers_revoke_matching_result(output)
+    }
+
     async fn vouchers_revoke(
         &self,
         params: &CallToolRequestParams,
@@ -9747,6 +10079,7 @@ impl UnifiMcp {
                 response_body: None,
                 response_body_in_content: None,
                 vouchers: None,
+                vouchers_in_content: None,
                 checks: None,
                 well_formed: None,
                 verified: None,
@@ -9799,13 +10132,10 @@ impl UnifiMcp {
             batch,
             requested: input.count,
             response_status: Some(response_status),
-            response_body: Some(
-                BoundedMessage::from_controller_bytes(&response_body)
-                    .as_str()
-                    .to_owned(),
-            ),
+            response_body: Some(BoundedMessage::from_controller_bytes(&response_body).to_string()),
             response_body_in_content: None,
             vouchers: Some(vouchers),
+            vouchers_in_content: None,
             checks: Some(checks),
             well_formed: Some(well_formed),
             verified: Some(verification.verified),
@@ -11654,8 +11984,8 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
                 && match name.as_str() {
                     "enabled" => !value.is_boolean(),
                     "index" => value
-                        .as_u64()
-                        .is_none_or(|index| u32::try_from(index).is_err()),
+                        .as_i64()
+                        .is_none_or(|index| i32::try_from(index).is_err()),
                     _ => !value.is_string(),
                 })
         {
@@ -12751,6 +13081,14 @@ fn structured_with_mutation_readback_error<T: Serialize>(
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Some(error) = upstream_error
         && let Value::Object(fields) = &mut value
@@ -12758,12 +13096,15 @@ fn structured_with_mutation_readback_error<T: Serialize>(
     {
         fields.insert("readbackErrorInContent".to_owned(), Value::Bool(true));
         let mut result = CallToolResult::structured(value);
+        result.content.extend(extra_content);
         result
             .content
             .push(ContentBlock::text(format!("readbackError: {error}")));
         return Ok(result);
     }
-    Ok(CallToolResult::structured(value))
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 /// Keep a confirmed action's accepted response and any later controller
@@ -12789,25 +13130,38 @@ fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallTool
     Ok(result)
 }
 
-/// Keep issued voucher codes in the structured result when several
-/// verification failures do not fit alongside them.
+/// Preserve issued codes, accepted bodies, and verification failures through
+/// labeled content when their combined values exceed the structured bound.
 fn structured_with_mutation_readback_errors<T: Serialize>(
     output: T,
 ) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
+    let mut extra_content = Vec::new();
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(Value::String(body)) = fields.remove("responseBody")
+    {
+        fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
+    }
     if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("readbackErrors")
     {
         fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
-        let mut result = structured_with_accepted_response(value)?;
-        result
-            .content
-            .push(ContentBlock::text(format!("readbackErrors: {errors}")));
-        return Ok(result);
+        extra_content.push(ContentBlock::text(format!("readbackErrors: {errors}")));
     }
-    structured_with_accepted_response(value)
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
+        && let Value::Object(fields) = &mut value
+        && let Some(vouchers) = fields.remove("vouchers")
+    {
+        fields.insert("vouchersInContent".to_owned(), Value::Bool(true));
+        extra_content.push(ContentBlock::text(format!("vouchers: {vouchers}")));
+    }
+    let mut result = CallToolResult::structured(value);
+    result.content.extend(extra_content);
+    Ok(result)
 }
 
 fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
@@ -13468,10 +13822,10 @@ fn network_policy_list_result(
     Ok(full)
 }
 
-fn network_policy_write_result(
-    mut output: NetworkPolicyWriteOutput,
+fn network_policy_write_result<K: Serialize>(
+    mut output: NetworkPolicyWriteOutput<K>,
 ) -> Result<CallToolResult, McpError> {
-    let exceeds = |output: &NetworkPolicyWriteOutput| -> Result<bool, McpError> {
+    let exceeds = |output: &NetworkPolicyWriteOutput<K>| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
             .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
@@ -13722,6 +14076,70 @@ fn devices_control_result(mut output: DevicesControlOutput) -> Result<CallToolRe
     {
         output.readback_error_in_content = Some(true);
         content.push(ContentBlock::text(format!("readbackError: {error}")));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn validate_voucher_records_page(
+    page: &unifi_api::models::Page<Value>,
+    response: &BoundedMessage,
+    offset: u64,
+    limit: u16,
+) -> Result<(), McpError> {
+    if page.offset != offset
+        || page.count != page.data.len() as u64
+        || page.data.len() > usize::from(limit)
+        || (page.count != 0 && page.offset.saturating_add(page.count) > page.total_count)
+        || (page.count == 0 && page.offset < page.total_count)
+    {
+        return Err(page_validation_error(
+            response,
+            "controller returned an inconsistent voucher page",
+        ));
+    }
+    Ok(())
+}
+
+fn vouchers_revoke_matching_result(
+    mut output: VouchersRevokeMatchingOutput,
+) -> Result<CallToolResult, McpError> {
+    let full = structured(&output)?;
+    if full
+        .structured_content
+        .as_ref()
+        .is_none_or(|value| value.to_string().len() <= STRUCTURED_CONTENT_TARGET_BYTES)
+    {
+        return Ok(full);
+    }
+    let mut content = Vec::new();
+    for (value, marker, label) in [
+        (
+            &mut output.before_response,
+            &mut output.before_response_in_content,
+            "beforeResponse",
+        ),
+        (
+            &mut output.response_body,
+            &mut output.response_body_in_content,
+            "responseBody",
+        ),
+        (
+            &mut output.after_response,
+            &mut output.after_response_in_content,
+            "afterResponse",
+        ),
+        (
+            &mut output.readback_error,
+            &mut output.readback_error_in_content,
+            "readbackError",
+        ),
+    ] {
+        if let Some(value) = value.take() {
+            *marker = Some(true);
+            content.push(ContentBlock::text(format!("{label}: {value}")));
+        }
     }
     let mut result = structured(output)?;
     result.content.extend(content);
@@ -14215,6 +14633,25 @@ mod tests {
     }
 
     #[test]
+    fn trust_metadata_preserves_complete_large_results() {
+        let supplied = serde_json::json!({
+            "nested": {"controller-key": "controller-value"},
+            "code": "controller-code",
+            "large":"x".repeat(60000),
+        });
+        let mut result = structured(supplied.clone()).expect("built result");
+        result.is_error = Some(true);
+        result
+            .content
+            .push(rmcp::model::ContentBlock::text("complete upstream detail"));
+        let original_content = result.content.clone();
+        let returned = trust_annotated(result, ToolBehavior::read());
+        assert_eq!(returned.structured_content, Some(supplied));
+        assert_eq!(returned.is_error, Some(true));
+        assert_eq!(returned.content, original_content);
+    }
+
+    #[test]
     fn every_catalog_tool_publishes_schemas_annotations_and_action_metadata() {
         for spec in TOOL_REGISTRY {
             let tool = spec.catalog_tool();
@@ -14363,6 +14800,7 @@ mod tests {
         ("devices.remove", false, false, true),
         ("acl.rules.configure", false, true, true),
         ("acl.rules.ordering.configure", false, true, true),
+        ("firewall.policies.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("firewall.zones.configure", false, true, true),
         ("firewall.policies.configure", false, true, true),
@@ -14414,6 +14852,7 @@ mod tests {
         ("vouchers.create", false, false, true),
         // Revoking the same voucher again leaves it absent.
         ("vouchers.revoke", true, false, true),
+        ("vouchers.revoke_matching", false, true, true),
     ];
 
     /// The catalog text is what a model reads before choosing arguments, so
