@@ -568,6 +568,67 @@ async fn large_and_unrecognized_traffic_sources_remain_complete() {
 }
 
 #[tokio::test]
+async fn traffic_refresh_failures_keep_both_complete_upstream_responses() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (source, route) in [("activity", TRAFFIC), ("graph", GRAPH), ("wan", WAN)] {
+        for refresh_status in [429, 503] {
+            let server = MockServer::start().await;
+            let original = format!("{}original-report-tail", "o".repeat(60_000));
+            let refresh = format!("{}refresh-response-tail", "r".repeat(60_000));
+            let logins = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&logins);
+            let refresh_body = refresh.clone();
+            Mock::given(method("POST"))
+                .and(path("/api/auth/login"))
+                .respond_with(move |_: &wiremock::Request| {
+                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                        ResponseTemplate::new(200)
+                            .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                            .set_body_json(json!({}))
+                    } else {
+                        ResponseTemplate::new(refresh_status).set_body_string(&refresh_body)
+                    }
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            Mock::given(method(if source == "activity" { "GET" } else { "POST" }))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(401).set_body_string(&original))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = handler_for(&server)
+                .call(
+                    &call(
+                        "traffic.read",
+                        &json!({"source":source,"startMs":START,"endMs":END}),
+                    ),
+                    None,
+                )
+                .await
+                .expect("failed source result");
+            let output = result.structured_content.expect("structured");
+            assert_eq!(output["status"], "failed");
+            assert_eq!(output["errorInContent"], true);
+            assert_eq!(result.is_error, Some(true));
+            let text = result
+                .content
+                .iter()
+                .filter_map(|block| block.as_text())
+                .find_map(|text| text.text.strip_prefix("error: "))
+                .expect("complete errors");
+            assert!(text.contains(&original));
+            assert!(text.contains(&refresh));
+            assert!(text.contains("HTTP 401"));
+            assert!(text.contains(&format!("HTTP {refresh_status}")));
+            assert_eq!(server.received_requests().await.expect("requests").len(), 3);
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn traffic_source_errors_preserve_original_bodies_and_unsupported_status() {
     for (status, source, route) in [
         (403, "activity", TRAFFIC),

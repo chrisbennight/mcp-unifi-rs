@@ -94,7 +94,9 @@ impl LegacyClient {
         let generation = self.ensure_session().await?;
         match self.execute_activity(site, window, graph).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_activity(site, window, graph).await
             }
             other => other,

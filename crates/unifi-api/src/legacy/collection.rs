@@ -113,7 +113,9 @@ impl LegacyClient {
         let read = self.collect_wan_bytes(site, &body).await;
         let read = match read {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.collect_wan_bytes(site, &body).await
             }
             other => other,

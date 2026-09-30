@@ -387,6 +387,8 @@ HTTP responses retain their complete controller error. Authentication,
 transport and other upstream failures set `status: "failed"` and the MCP error
 flag, with the original controller body when available. Large data or errors
 remain in labeled MCP content with `dataInContent` or `errorInContent`.
+If session refresh also fails, the result retains both the original report
+failure and the refresh failure, including their complete upstream bodies.
 The existing transport bounds apply. Use `stats.query` for compact summaries.
 
 ### Protect cameras, streams, talkback, overview, and events
