@@ -731,7 +731,8 @@ response budget that stops later reads is named in `readbackStopReason`; those
 vouchers remain reachable through `vouchers.status` or `vouchers.search`
 without minting the batch again.
 Large errors move to a separate text content block, signaled by
-`readbackErrorsInContent`, while issued codes remain in the structured result.
+`readbackErrorsInContent`. Issued codes remain in the structured result or,
+for a large voucher view, in content marked by `vouchersInContent`.
 
 **Every code the controller supplied comes back whether or not those checks
 pass.** A row with no code keeps that field absent rather than inventing an
@@ -751,9 +752,9 @@ full batch of real vouchers and is what keeps a hostile upstream from
 exhausting this process; trading that away would not make delivery certain, it
 would only move the failure.
 
-The standard response budget applies to creation too. If a controller returns
-an unusually large batch that exceeds it, the call fails loudly and the codes
-can be retrieved through the bounded voucher reads.
+Complete large creation responses remain available. An oversized voucher
+view is returned intact in labeled content with `vouchersInContent`, including
+issued codes. Voucher list and detail reads can also retrieve the codes.
 
 For the same reason, everything that can refuse a batch refuses it before
 minting: the count and validity bounds and the label's length are decided from

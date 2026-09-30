@@ -60,10 +60,8 @@ use unifi_api::system_log::{SystemLogQuery, SystemLogSeverity};
 const ACTION_METADATA_KEY: &str = "io.modelcontextprotocol/action-metadata";
 const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 
-/// Hard ceiling on one structured result's serialized size. A result over
-/// budget is a caller-recoverable error, never a truncated or unbounded dump.
-/// A tool whose result carries credentials this call created is exempt, since
-/// there is nothing for the caller to recover by narrowing.
+/// Formatting threshold for moving complete large fields to labeled MCP content.
+/// Structured values may exceed this threshold without losing the result.
 pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
 const MAXIMUM_POLICY_REQUEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
@@ -4648,9 +4646,8 @@ impl UnifiMcp {
     ///
     /// # Errors
     ///
-    /// Returns a caller error for unknown names, schema-violating arguments,
-    /// or over-budget results, and a bounded internal error for upstream
-    /// faults.
+    /// Returns a caller error for unknown names or schema-violating arguments.
+    /// Upstream faults preserve the complete accepted controller error body.
     pub async fn call(
         &self,
         params: &CallToolRequestParams,
@@ -4741,7 +4738,7 @@ impl UnifiMcp {
             ToolKind::VouchersRevoke => self.vouchers_revoke(params).await,
             ToolKind::VouchersCreate => self.vouchers_create(params).await,
         };
-        result.and_then(|result| finalize(result, spec.behavior))
+        result.map(|result| trust_annotated(result, spec.behavior))
     }
 
     async fn network_overview(
@@ -9080,17 +9077,6 @@ impl UnifiMcp {
         if !input.confirm {
             return firewall_delete_result(output);
         }
-        // Check the confirmed result shape before the irreversible call.
-        let mut final_shape = output.clone();
-        final_shape.applied = true;
-        final_shape.verified_absent = Some(false);
-        final_shape.warnings.push(
-            "the delete request was accepted, but policy absence was not verified".to_owned(),
-        );
-        finalize(
-            firewall_delete_result(final_shape)?,
-            ToolBehavior::write(false),
-        )?;
         let (status, body) = self
             .integration()
             .delete_firewall_policy(&site_id, &input.policy)
@@ -12534,26 +12520,6 @@ fn structured_with_mutation_readback_errors<T: Serialize>(
     Ok(result)
 }
 
-/// Enforce the response budget on the values returned by the tool, then
-/// attach the gateway's sensitivity and trust labels.
-fn finalize(result: CallToolResult, behavior: ToolBehavior) -> Result<CallToolResult, McpError> {
-    let Some(value) = result.structured_content else {
-        return Ok(trust_annotated(result, behavior));
-    };
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES {
-        return Err(McpError::invalid_params(
-            "result exceeds the response budget; narrow the query or lower the limit",
-            None,
-        ));
-    }
-    let mut finalized = CallToolResult::structured(value);
-    // The library supplies the first text block from structuredContent.
-    // Regenerating it above avoids a duplicate while preserving any additional
-    // controller content the tool attached after that block.
-    finalized.content.extend(result.content.into_iter().skip(1));
-    Ok(trust_annotated(finalized, behavior))
-}
-
 fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
     let trust = serde_json::json!({
         "sensitive": behavior.result_sensitive,
@@ -13650,7 +13616,7 @@ mod tests {
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
         FirewallPolicyChanges, JSON_SCHEMA_TYPES, MAXIMUM_RESULT_BYTES, POLICY_WIRE_NAMES,
         PORT_FORWARD_CHANGE_FIELDS, PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges,
-        PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView, finalize,
+        PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView,
         normalize_portable_schema, parse, schema_object, structured,
         structured_with_upstream_error, trust_annotated,
     };
@@ -13914,17 +13880,6 @@ mod tests {
     }
 
     #[test]
-    fn over_budget_results_return_the_recovery_error_not_a_dump() {
-        // The budget applies to the values returned by the tool.
-        let oversized = structured(vec!["x".repeat(1024); MAXIMUM_RESULT_BYTES / 1024 + 2])
-            .expect("built result");
-        let error = finalize(oversized, ToolBehavior::read()).expect_err("over budget");
-        assert!(error.message.contains("narrow the query"));
-        let small = structured(vec!["small"]).expect("built result");
-        assert!(finalize(small, ToolBehavior::read()).is_ok());
-    }
-
-    #[test]
     fn secondary_controller_error_survives_the_structured_result_budget() {
         let body = format!("{}controller-error-tail", "x".repeat(MAXIMUM_RESULT_BYTES));
         let error = ApiError::Status {
@@ -13955,13 +13910,14 @@ mod tests {
     }
 
     #[test]
-    fn finalizer_preserves_controller_values_and_property_names() {
+    fn trust_metadata_preserves_complete_large_results() {
         let supplied = serde_json::json!({
             "nested": {"controller-key": "controller-value"},
             "code": "controller-code",
+            "large":"x".repeat(60000),
         });
         let result = structured(supplied.clone()).expect("built result");
-        let returned = finalize(result, ToolBehavior::read()).expect("returned result");
+        let returned = trust_annotated(result, ToolBehavior::read());
         assert_eq!(returned.structured_content, Some(supplied));
     }
 

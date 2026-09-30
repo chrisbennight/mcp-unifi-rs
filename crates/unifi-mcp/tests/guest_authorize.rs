@@ -154,13 +154,15 @@ async fn accepted_guest_grant_keeps_controller_readback_error() {
         .expect(1)
         .mount(&server)
         .await;
+    let mut authorization = grant("2026-09-28T00:00:00Z");
+    authorization["authorizationMethod"] = serde_json::json!("x".repeat(50000));
     Mock::given(method("POST"))
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/clients/{CLIENT_ID}/actions"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "action": "AUTHORIZE_GUEST_ACCESS",
-            "grantedAuthorization": grant("2026-09-28T00:00:00Z"),
+            "grantedAuthorization": authorization.clone(),
             "controllerExtension":format!("{}accepted-guest-tail", "y".repeat(50_000))
         })))
         .expect(1)
@@ -180,9 +182,11 @@ async fn accepted_guest_grant_keeps_controller_readback_error() {
     assert_eq!(output["responseBodyInContent"], true);
     assert!(content.to_string().contains("accepted-guest-tail"));
     assert_eq!(output["applied"], true);
-    assert_eq!(output["grantedAuthorization"]["dataUsageLimitMBytes"], 500);
+    assert_eq!(output["grantedAuthorization"], authorization);
+    assert_eq!(output["readbackErrorInContent"], true);
+    let readback_text = result_content_text(&content, "readbackError: ");
     assert_eq!(
-        output["readbackError"],
+        readback_text,
         format!("controller returned HTTP 503: {failure}")
     );
 }
@@ -584,4 +588,15 @@ async fn a_scan_that_stopped_short_does_not_claim_the_client_is_unknown() {
         "{}",
         error.message
     );
+}
+
+fn result_content_text(content: &serde_json::Value, prefix: &str) -> String {
+    content
+        .as_array()
+        .expect("content array")
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .find_map(|text| text.strip_prefix(prefix))
+        .expect("complete labeled content")
+        .to_owned()
 }
