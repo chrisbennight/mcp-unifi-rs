@@ -146,7 +146,13 @@ async fn create_and_update_forward_all_fields_and_preserve_full_acceptance_and_o
 
 #[tokio::test]
 async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
-    for missing in [false, true] {
+    for missing in [
+        None,
+        Some("complete upstream absence"),
+        Some(
+            r#" {"meta":{"rc":"error","msg":"api.err.InvalidObject"},"data":[],"unknown":"original-404-envelope"} "#,
+        ),
+    ] {
         let server = MockServer::start().await;
         login(&server).await;
         let accepted = "{\"meta\":{\"rc\":\"ok\",\"extra\":\"upstream\"},\"data\":[]}";
@@ -156,11 +162,10 @@ async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
             .expect(1)
             .mount(&server)
             .await;
-        let template = if missing {
-            ResponseTemplate::new(404).set_body_string("complete upstream absence")
-        } else {
-            ResponseTemplate::new(200).set_body_json(envelope(json!([])))
-        };
+        let template = missing.map_or_else(
+            || ResponseTemplate::new(200).set_body_json(envelope(json!([]))),
+            |body| ResponseTemplate::new(404).set_body_string(body),
+        );
         Mock::given(method("GET"))
             .and(path(format!("{PREFIX}/pf-1")))
             .respond_with(template)
@@ -180,13 +185,10 @@ async fn deletion_preserves_acceptance_and_observed_empty_envelope_or_404() {
         let output = result.structured_content.expect("structured");
         assert_eq!(output["responseBody"], accepted);
         assert_eq!(output["verifiedAbsent"], true);
-        if missing {
-            assert!(
-                output["readbackError"]
-                    .as_str()
-                    .expect("error")
-                    .contains("complete upstream absence")
-            );
+        if let Some(body) = missing {
+            let error = output["readbackError"].as_str().expect("error");
+            assert!(error.contains(body));
+            assert!(error.contains("404"));
         } else {
             assert_eq!(output["after"], envelope(json!([])));
         }
