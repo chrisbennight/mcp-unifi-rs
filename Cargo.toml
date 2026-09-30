@@ -19,6 +19,7 @@ axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 http = "1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
@@ -44,6 +45,7 @@ subtle = "2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tower = { version = "0.5", features = ["limit", "util"] }
 tower-http = { version = "0.7", features = ["timeout", "trace"] }
 tracing = "0.1"
