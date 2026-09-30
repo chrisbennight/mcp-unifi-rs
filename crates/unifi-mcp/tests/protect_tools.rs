@@ -175,8 +175,9 @@ async fn stream_creation_keeps_its_handle_and_complete_large_readback_error() {
     let failure = format!("{}stream-readback-tail", "x".repeat(50_000));
     Mock::given(method("POST"))
         .and(path(&route))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
+        .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+            "high": "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp",
+            "controllerExtension": format!("{}accepted-stream-tail", "y".repeat(50_000))
         })))
         .expect(1)
         .mount(&server)
@@ -204,6 +205,9 @@ async fn stream_creation_keeps_its_handle_and_complete_large_readback_error() {
     let content = serde_json::to_value(&result.content).expect("content");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["applied"], true);
+    assert_eq!(output["responseStatus"], 202);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert!(content.to_string().contains("accepted-stream-tail"));
     assert_eq!(
         output["streams"][0]["url"],
         "rtsps://192.0.2.1:7441/synthetic-high?enableSrtp"
@@ -374,7 +378,7 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "url": "rtp://192.0.2.1:7004", "codec": "opus",
-            "samplingRate": 24000, "bitsPerSample": 16
+            "samplingRate": 24000, "bitsPerSample": 16, "controllerExtension":"talkback accepted"
         })))
         .expect(1)
         .mount(&server)
@@ -425,6 +429,13 @@ async fn stream_removal_and_talkback_session_keep_their_observed_outcomes() {
         .structured_content
         .expect("structured");
     assert_eq!(started["applied"], true);
+    assert_eq!(started["responseStatus"], 200);
+    assert!(
+        started["responseBody"]
+            .as_str()
+            .expect("body")
+            .contains("talkback accepted")
+    );
     assert_eq!(started["session"]["codec"], "opus");
     assert_eq!(started["session"]["samplingRate"], 24000);
 }

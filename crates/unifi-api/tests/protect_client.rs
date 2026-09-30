@@ -446,7 +446,7 @@ async fn stream_lifecycle_and_talkback_use_the_documented_typed_routes() {
     let existing = client.camera_streams("cam-1").await.expect("streams");
     assert!(existing.high.is_some());
     assert!(existing.medium.is_none());
-    let created = client
+    let (created, status, body) = client
         .camera_streams_create(
             "cam-1",
             &[ProtectStreamQuality::High, ProtectStreamQuality::Medium],
@@ -454,6 +454,12 @@ async fn stream_lifecycle_and_talkback_use_the_documented_typed_routes() {
         .await
         .expect("create streams");
     assert!(created.medium.is_some());
+    assert_eq!(status, 200);
+    assert!(
+        String::from_utf8(body)
+            .expect("body")
+            .contains("synthetic-medium")
+    );
     client
         .camera_streams_delete(
             "cam-1",
@@ -461,10 +467,12 @@ async fn stream_lifecycle_and_talkback_use_the_documented_typed_routes() {
         )
         .await
         .expect("delete streams");
-    let session = client
+    let (session, status, body) = client
         .camera_talkback_session("cam-1")
         .await
         .expect("talkback session");
+    assert_eq!(status, 200);
+    assert!(String::from_utf8(body).expect("body").contains("opus"));
     assert_eq!(session.codec, "opus");
     assert_eq!(session.sampling_rate, 24000);
     assert!(client.camera_streams_create("cam-1", &[]).await.is_err());
