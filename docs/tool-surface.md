@@ -1,9 +1,8 @@
 # Tool surface
 
-A small set of reads and writes, listed below. That it stays small is the
-point — this is a workflow surface, not an endpoint mirror, and a tool exists
-here because an operator reaches for it, not because the controller exposes
-it.
+Typed UniFi workflows group related capabilities into useful reads and
+configuration actions. Compact summaries help discovery; complete requested
+controller records and error bodies remain available within explicit bounds.
 
 Every tool rejects unknown parameters, returns a bounded result, and carries
 MCP behavior annotations the gateway uses for authorization. Common views
@@ -16,7 +15,7 @@ these names, descriptions, and classifications; this page explains them.
 
 Every read is annotated read-only, idempotent, and non-destructive, and is
 classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read`, `networks.read`, `radius_profiles.list`,
+`firewall.read`, `networks.read`, `networks.list`, `networks.status`, `radius_profiles.list`,
 `devices.pending.list`, the Network inventory, switching detail, and policy
 reads, the official Wi-Fi broadcast reads, and Protect reads.
 The gateway decides who can receive these controller values.
@@ -109,6 +108,41 @@ scan with `sectionOffset` taken from `nextSectionOffset`.
 
 Configured networks and wireless networks: VLANs, subnets, DHCP scopes, SSIDs,
 security modes, and passphrases. The gateway controls access to these values.
+
+### `networks.list`, `networks.status`, and `networks.configure`
+
+These workflows use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
+`networks.list` accepts `offset` (0-2147483647), `limit` (1-200, default 50),
+and the controller's documented `filter` query (at most 2048 bytes). `response`
+retains the entire page, including additional controller metadata and fields.
+Use `nextOffset` to continue. An empty page beyond the total is valid; an
+inconsistent page returns its complete body with a separate diagnostic.
+
+`networks.status` takes an official network `id` and returns its complete
+configuration in `response`. `includeReferences: true` also returns the
+controller's complete reference report. A reference lookup failure preserves
+the network record and the full upstream error in `readbackError`.
+
+`networks.configure` takes `operation` (`create`, `update`, or `delete`),
+`id` for update/delete, and a typed `network` for create/update. Management
+variants are `GATEWAY`, `SWITCH`, and `UNMANAGED`. Configuration covers VLANs,
+DHCP guarding, IPv4 server or relay settings, IPv6 static or prefix delegation,
+SLAAC, DHCPv6, router advertisements, outbound NAT, isolation, and zone membership.
+The controller decides configuration validity and support. Updates replace the
+complete typed configuration. Deletion exposes the controller's `force` option
+(default false), including networks with references.
+
+Calls preview by default and submit once with `confirm: true`. The complete
+accepted HTTP status and original body appear in `responseStatus` and
+`responseBody`, even if readback fails or acceptance is not JSON. Readback
+reports `verified` for a matching configuration or `verifiedAbsent` after a
+confirmed 404. A surviving record or the full upstream readback error remains
+available. Ambiguous writes are never retried.
+
+When structured output exceeds 48 KiB, complete requested records, bodies,
+and errors move to labeled MCP text content with explicit `...InContent`
+markers. Each upstream response remains bounded by the transport's 4 MiB limit;
+an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
 
@@ -665,6 +699,7 @@ it.
 | `acl.rules.ordering.configure` | no | yes | yes |
 | `firewall.policies.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
+| `networks.configure` | no | yes | yes |
 | `firewall.zones.configure` | no | yes | yes |
 | `firewall.policies.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |

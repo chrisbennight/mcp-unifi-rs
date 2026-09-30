@@ -39,6 +39,9 @@ pub enum ToolKind {
     DevicesRemove,
     FirewallRead,
     NetworksRead,
+    NetworksList,
+    NetworksStatus,
+    NetworksConfigure,
     RadiusProfilesList,
     NetworkInventoryList,
     NetworkSwitchingDetail,
@@ -111,6 +114,7 @@ impl ToolKind {
     pub const fn requires_write_access(self) -> bool {
         match self {
             Self::WlansUpdate
+            | Self::NetworksConfigure
             | Self::ClientsControl
             | Self::DevicesControl
             | Self::DevicesAdopt
@@ -152,6 +156,8 @@ impl ToolKind {
             | Self::GuestsStatus
             | Self::FirewallRead
             | Self::NetworksRead
+            | Self::NetworksList
+            | Self::NetworksStatus
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
@@ -231,6 +237,9 @@ impl ToolKind {
             | Self::DevicesRemove
             | Self::FirewallRead
             | Self::NetworksRead
+            | Self::NetworksList
+            | Self::NetworksStatus
+            | Self::NetworksConfigure
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
@@ -694,6 +703,24 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          The result is sensitive and the gateway decides who can read it.",
     ),
     sensitive_read_spec(
+        ToolKind::NetworksList,
+        "networks.list",
+        "Page through complete official network records and controller page metadata. Supports the documented filter query and nextOffset continuation.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworksStatus,
+        "networks.status",
+        "Read a complete official network configuration by id. includeReferences adds the controller's complete reference report.",
+    ),
+    write_spec(
+        ToolKind::NetworksConfigure,
+        "networks.configure",
+        "Preview or create, replace, or delete a gateway, switch, or unmanaged network. Typed configuration includes DHCP, IPv6, outbound NAT, isolation, and zone membership. Deletion supports the controller's force option. Returns the full accepted status and body with bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    sensitive_read_spec(
         ToolKind::RadiusProfilesList,
         "radius_profiles.list",
         "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
@@ -953,6 +980,9 @@ mod tests {
         ToolKind::DevicesRemove,
         ToolKind::FirewallRead,
         ToolKind::NetworksRead,
+        ToolKind::NetworksList,
+        ToolKind::NetworksStatus,
+        ToolKind::NetworksConfigure,
         ToolKind::RadiusProfilesList,
         ToolKind::NetworkInventoryList,
         ToolKind::NetworkSwitchingDetail,
@@ -1086,6 +1116,9 @@ mod tests {
                 | ToolKind::DevicesRemove
                 | ToolKind::FirewallRead
                 | ToolKind::NetworksRead
+                | ToolKind::NetworksList
+                | ToolKind::NetworksStatus
+                | ToolKind::NetworksConfigure
                 | ToolKind::RadiusProfilesList
                 | ToolKind::NetworkInventoryList
                 | ToolKind::NetworkSwitchingDetail

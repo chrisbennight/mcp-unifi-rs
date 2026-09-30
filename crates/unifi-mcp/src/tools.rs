@@ -50,6 +50,11 @@ use crate::{
 
 mod activity;
 mod firewall_policy_request;
+mod network_configuration;
+mod network_request;
+use network_configuration::{
+    NetworksConfigureInput, NetworksListInput, NetworksResult, NetworksStatusInput,
+};
 mod system_log;
 mod traffic;
 use firewall_policy_request::FirewallPolicyRequest;
@@ -4440,6 +4445,9 @@ impl ToolSpec {
             ToolKind::DevicesRemove => tool::<DevicesRemoveInput, DevicesRemoveOutput>(self),
             ToolKind::FirewallRead => tool::<FirewallReadInput, FirewallReadOutput>(self),
             ToolKind::NetworksRead => tool::<NetworksReadInput, NetworksReadOutput>(self),
+            ToolKind::NetworksList => tool::<NetworksListInput, NetworksResult>(self),
+            ToolKind::NetworksStatus => tool::<NetworksStatusInput, NetworksResult>(self),
+            ToolKind::NetworksConfigure => tool::<NetworksConfigureInput, NetworksResult>(self),
             ToolKind::RadiusProfilesList => {
                 tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
             }
@@ -4812,6 +4820,9 @@ impl UnifiMcp {
             ToolKind::DevicesRemove => self.devices_remove(params).await,
             ToolKind::FirewallRead => self.firewall_read(params).await,
             ToolKind::NetworksRead => self.networks_read(params).await,
+            ToolKind::NetworksList => self.networks_list(params).await,
+            ToolKind::NetworksStatus => self.networks_status(params).await,
+            ToolKind::NetworksConfigure => self.networks_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
@@ -14659,6 +14670,7 @@ mod tests {
         // Applying the same settings twice leaves the same state; the input
         // carries a passphrase and the result reports configuration.
         ("wlans.update", true, true, true),
+        ("networks.configure", false, true, true),
         // Disconnecting twice disconnects twice; no secret is involved.
         ("clients.control", false, false, true),
         // Each restart restarts; no secret is involved.
