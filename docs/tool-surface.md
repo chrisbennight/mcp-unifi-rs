@@ -86,6 +86,9 @@ returned by the controller, including its MAC address and support state.
 `nextOffset` identifies the next page. Large pages carry their records in MCP
 content and set `devicesInContent`. An unsupported endpoint is reported as an
 upstream error, not an empty pending inventory.
+`pageMetadata` retains all original page fields except the data array, which
+is returned as `devices`; large metadata moves to MCP content with
+`pageMetadataInContent`.
 
 ### `firewall.read`
 
@@ -146,13 +149,15 @@ an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
 
-`offset` and `limit` (1-200, default 50) page through the official Network
+`offset`, `limit` (1-200, default 50), and the documented `filter` page through the official Network
 API's [RADIUS profiles](https://developer.ui.com/network/v10.4.57/getradiusprofileoverviewpage)
 for the selected site. Each profile preserves the fields
 the controller returned, including the id needed for enterprise Wi-Fi setup.
 The result includes the controller's page metadata and `nextOffset` until the
-list is complete. An over-budget result fails explicitly; lower `limit` to
-continue with smaller pages. Contradictory page metadata returns the complete
+list is complete. `pageMetadata` preserves all original page fields except
+the data array, returned as `profiles`. Large values remain in MCP content,
+marked by `profilesInContent` and `pageMetadataInContent`.
+Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
 
 ### `network.inventory.list` and `network.switching.detail`
@@ -189,7 +194,9 @@ from the official Network Integration API. Choose `kind` as `aclRules`,
 `firewallZones`, `firewallPolicies`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
 (1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
-`recordsInContent`. Invalid page metadata returns the complete controller
+`recordsInContent`. `pageMetadata` retains all original page fields except
+the data array, returned as `records`; large metadata moves to MCP content
+with `pageMetadataInContent`. Invalid page metadata returns the complete controller
 response with a separate diagnostic. The detail tool accepts `kind` and the
 official `id`, returning the complete record. A large record is carried in
 MCP content and marked by `recordInContent`.

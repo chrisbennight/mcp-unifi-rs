@@ -741,7 +741,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::RadiusProfilesList,
         "radius_profiles.list",
-        "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
+        "Page through the official Network API's RADIUS profiles for this site, with its documented filter. Returns complete profile fields and original page metadata. Large values remain available in MCP content. Continue with nextOffset.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkInventoryList,

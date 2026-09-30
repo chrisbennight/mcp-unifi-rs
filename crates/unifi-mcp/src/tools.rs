@@ -259,6 +259,10 @@ struct PendingDevicesListOutput {
     devices: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     devices_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -2465,13 +2469,22 @@ struct RadiusProfilesListInput {
     /// Profiles per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
+    /// Documented controller filter expression.
+    filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RadiusProfilesListOutput {
     /// Complete fields for the profiles returned on this page.
-    profiles: Vec<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles: Option<Vec<Map<String, Value>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -2626,6 +2639,10 @@ struct NetworkPolicyListOutput {
     records: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     records_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -5195,7 +5212,9 @@ impl UnifiMcp {
             .offset
             .checked_add(count)
             .ok_or_else(|| page_validation_error(&response, "pending device offset overflow"))?;
-        if next > page.total_count || (next < page.total_count && page.data.is_empty()) {
+        if (count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -5207,6 +5226,8 @@ impl UnifiMcp {
         pending_devices_list_result(PendingDevicesListOutput {
             devices: Some(page.data),
             devices_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -7853,7 +7874,9 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "policy offset overflow"))?;
-        if next > page.total_count || (next < page.total_count && page.data.is_empty()) {
+        if (row_count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7866,6 +7889,8 @@ impl UnifiMcp {
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -8270,15 +8295,26 @@ impl UnifiMcp {
         if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
             return Err(McpError::invalid_params("limit must be 1-200", None));
         }
+        if input
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.len() > 2048)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be at most 2048 bytes",
+                None,
+            ));
+        }
         let site_id = self.site_id().await?;
         let (page, response) = self
             .integration()
-            .radius_profiles_with_response(
+            .radius_profile_records(
                 &site_id,
                 PageRequest {
                     offset: input.offset,
                     limit: u32::from(input.limit),
                 },
+                input.filter.as_deref(),
             )
             .await
             .map_err(api_error)?;
@@ -8301,17 +8337,22 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "RADIUS profile offset overflow"))?;
-        if next < page.total_count && page.data.is_empty() {
+        if (row_count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
-                    "RADIUS profile page at offset {} returned no rows before reported total {}",
-                    input.offset, page.total_count
+                    "RADIUS profile page through offset {next} conflicts with reported total {}",
+                    page.total_count
                 ),
             ));
         }
-        structured(RadiusProfilesListOutput {
-            profiles: page.data,
+        radius_profiles_list_result(RadiusProfilesListOutput {
+            profiles: Some(page.data),
+            profiles_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -12941,6 +12982,13 @@ fn page_validation_error(
     })
 }
 
+fn controller_page_metadata(response: &BoundedMessage) -> Result<Map<String, Value>, McpError> {
+    let mut metadata = serde_json::from_str::<Map<String, Value>>(response.as_str())
+        .map_err(|error| page_validation_error(response, error.to_string()))?;
+    metadata.remove("data");
+    Ok(metadata)
+}
+
 fn viewer_settings_match(changes: &ProtectViewerSettingsChanges, after: &Value) -> bool {
     changes
         .name
@@ -13538,22 +13586,32 @@ fn network_policy_detail_result(
 fn network_policy_list_result(
     mut output: NetworkPolicyListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
+    let mut content = Vec::new();
+    if structured(&output)?
         .structured_content
-        .as_ref()
         .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(records) = output.records.take()
     {
-        let records = output.records.take().expect("policy page records exist");
         output.records_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "records: {}",
             Value::Array(records)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
 fn network_policy_write_result(
@@ -13673,22 +13731,63 @@ fn firewall_delete_result(
 fn pending_devices_list_result(
     mut output: PendingDevicesListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
+    let mut content = Vec::new();
+    if structured(&output)?
         .structured_content
-        .as_ref()
         .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(devices) = output.devices.take()
     {
-        let devices = output.devices.take().expect("page records exist");
         output.devices_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "devices: {}",
             Value::Array(devices)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn radius_profiles_list_result(
+    mut output: RadiusProfilesListOutput,
+) -> Result<CallToolResult, McpError> {
+    let mut content = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(profiles) = output.profiles.take()
+    {
+        output.profiles_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "profiles: {}",
+            serde_json::to_value(profiles).expect("controller JSON records")
+        )));
+    }
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
 fn network_record_result(mut output: NetworkRecordOutput) -> Result<CallToolResult, McpError> {
