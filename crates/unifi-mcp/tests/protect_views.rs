@@ -427,6 +427,28 @@ async fn viewer_patch_readback_error_keeps_the_controller_failure() {
 }
 
 #[tokio::test]
+async fn exact_liveview_layout_outside_the_documented_range_sends_no_request() {
+    for layout in ["26.0000000000000000001", "0.9999999999999999999"] {
+        let server = MockServer::start().await;
+        let arguments = serde_json::from_str(&format!(
+            r#"{{"operation":"create","changes":{{"name":"Lobby","layout":{layout}}},"confirm":true}}"#
+        )).expect("exact layout");
+        let error = handler_for(&server)
+            .call(&call("protect.liveviews.configure", &arguments), None)
+            .await
+            .expect_err("outside documented layout range");
+        assert!(error.message.contains("layout must be between 1 and 26"));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn liveview_create_previews_a_typed_layout_without_an_upstream_call() {
     let server = MockServer::start().await;
     let changes = serde_json::json!({

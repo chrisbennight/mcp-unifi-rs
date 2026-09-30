@@ -13913,11 +13913,11 @@ fn liveview_changes_match(changes: &Value, after: &Value) -> bool {
 }
 
 fn liveview_configuration_request(changes: &LiveviewChanges) -> Result<Value, McpError> {
-    if changes.layout.as_ref().is_some_and(|layout| {
-        layout
-            .as_f64()
-            .is_none_or(|value| !(1.0..=26.0).contains(&value))
-    }) {
+    if changes
+        .layout
+        .as_ref()
+        .is_some_and(|layout| !number_in_range(layout, 1, 26))
+    {
         return Err(McpError::invalid_params(
             "layout must be between 1 and 26",
             None,
