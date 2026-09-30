@@ -11556,8 +11556,8 @@ fn policy_preview_coverage(record: &Map<String, Value>) -> PolicyPreviewCoverage
                 && match name.as_str() {
                     "enabled" => !value.is_boolean(),
                     "index" => value
-                        .as_u64()
-                        .is_none_or(|index| u32::try_from(index).is_err()),
+                        .as_i64()
+                        .is_none_or(|index| i32::try_from(index).is_err()),
                     _ => !value.is_string(),
                 })
         {
