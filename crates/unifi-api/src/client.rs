@@ -692,6 +692,85 @@ impl IntegrationClient {
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
+    /// Read a Wi-Fi broadcast page with its documented filter and complete metadata.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn wifi_broadcast_records(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Value, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites", site_id, "wifi", "broadcasts"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Create a Wi-Fi broadcast and retain its complete accepted response.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request fails. Writes are never retried.
+    pub async fn create_wifi_broadcast(
+        &self,
+        site_id: &str,
+        body: &Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(
+                self.request(Method::POST, &["sites", site_id, "wifi", "broadcasts"])?
+                    .json(body),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
+    /// Replace a Wi-Fi broadcast and retain its complete accepted response.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request fails. Writes are never retried.
+    pub async fn replace_wifi_broadcast(
+        &self,
+        site_id: &str,
+        id: &str,
+        body: &Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(
+                self.request(Method::PUT, &["sites", site_id, "wifi", "broadcasts", id])?
+                    .json(body),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
+    /// Delete a Wi-Fi broadcast with the documented force option and retain its complete response.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request fails. Writes are never retried.
+    pub async fn delete_wifi_broadcast(
+        &self,
+        site_id: &str,
+        id: &str,
+        force: bool,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(self.request_with_query(
+                Method::DELETE,
+                &["sites", site_id, "wifi", "broadcasts", id],
+                &[("force", force.to_string())],
+            )?)
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
     /// Complete fields for one Wi-Fi broadcast from the official Network API.
     ///
     /// # Errors

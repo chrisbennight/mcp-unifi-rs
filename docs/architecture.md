@@ -57,6 +57,9 @@ Reads: `network.overview`, `clients.search`, `clients.context`,
 
 `networks.configure` creates, replaces, or deletes complete typed official
 network configurations, including the controller's force deletion option.
+`wifi.broadcasts.configure` provides the official Wi-Fi broadcast lifecycle,
+including standard and IoT settings, enterprise RADIUS, multiple keys, and
+the controller's force deletion option.
 
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).

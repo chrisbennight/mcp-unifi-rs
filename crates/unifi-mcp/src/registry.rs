@@ -58,6 +58,7 @@ pub enum ToolKind {
     TrafficListsConfigure,
     WifiBroadcastsList,
     WifiBroadcastsStatus,
+    WifiBroadcastsConfigure,
     CamerasSearch,
     CamerasStatus,
     ProtectDevicesList,
@@ -115,6 +116,7 @@ impl ToolKind {
         match self {
             Self::WlansUpdate
             | Self::NetworksConfigure
+            | Self::WifiBroadcastsConfigure
             | Self::ClientsControl
             | Self::DevicesControl
             | Self::DevicesAdopt
@@ -240,6 +242,7 @@ impl ToolKind {
             | Self::NetworksList
             | Self::NetworksStatus
             | Self::NetworksConfigure
+            | Self::WifiBroadcastsConfigure
             | Self::RadiusProfilesList
             | Self::NetworkInventoryList
             | Self::NetworkSwitchingDetail
@@ -811,10 +814,18 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .input_sensitive()
             .result_sensitive(),
     ),
+    write_spec(
+        ToolKind::WifiBroadcastsConfigure,
+        "wifi.broadcasts.configure",
+        "Preview or create, replace, or delete a typed official Wi-Fi broadcast. Supports standard and IoT configurations, personal and enterprise security, RADIUS, multiple keys, network and device assignment, multicast controls, and blackout schedules. Deletion exposes force. Returns complete accepted status and body with bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     sensitive_read_spec(
         ToolKind::WifiBroadcastsList,
         "wifi.broadcasts.list",
-        "Page through Wi-Fi broadcasts from the official Network API. Returns every controller field in each selected row with page metadata and a continuation offset.",
+        "Page through Wi-Fi broadcasts from the official Network API with the documented filter query. Returns every controller field, additional page metadata, and a continuation offset. Large records remain available in labeled MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::WifiBroadcastsStatus,
@@ -983,6 +994,7 @@ mod tests {
         ToolKind::NetworksList,
         ToolKind::NetworksStatus,
         ToolKind::NetworksConfigure,
+        ToolKind::WifiBroadcastsConfigure,
         ToolKind::RadiusProfilesList,
         ToolKind::NetworkInventoryList,
         ToolKind::NetworkSwitchingDetail,
@@ -1119,6 +1131,7 @@ mod tests {
                 | ToolKind::NetworksList
                 | ToolKind::NetworksStatus
                 | ToolKind::NetworksConfigure
+                | ToolKind::WifiBroadcastsConfigure
                 | ToolKind::RadiusProfilesList
                 | ToolKind::NetworkInventoryList
                 | ToolKind::NetworkSwitchingDetail
