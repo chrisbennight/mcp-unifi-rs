@@ -187,7 +187,8 @@ belongs to the controller.
 Complete accepted records and readback errors use the shared policy response
 contract. Read full records with `network.policy.list/detail` and
 `kind: "firewallPolicies"`. The existing `firewall.policies.update` remains a
-shortcut for changing `enabled` while preserving other fields.
+shortcut for changing `enabled` and/or `loggingEnabled` while preserving other
+fields. Logging-only changes use the documented PATCH route.
 
 `acl.rules.ordering.read` returns the complete priority ordering from the
 official ACL ordering endpoint. `acl.rules.ordering.configure` previews a full
@@ -786,14 +787,17 @@ not minting at all.
 
 Not idempotent, and says so — each call mints another batch.
 
-### The zone-based policy write is the exception
+### Firewall policy flag changes
 
-`firewall.policies.update` takes `policy` and `changes: {enabled}` to change
-the evaluation flag while preserving the other controller fields.
+`firewall.policies.update` takes `policy` and `changes` containing `enabled`,
+`loggingEnabled`, or both. A logging change uses PATCH when the requested
+`enabled` value is absent or already present. That sends only `loggingEnabled`
+and leaves the other controller fields to the controller.
 
 There is no partial update that can flip a policy's switch: the API's `PATCH`
 accepts only the policy's logging flag, and its `PUT` requires the whole
-policy. So this reads the policy, alters that one field, and sends every other
+policy. When `enabled` needs to change, this reads the policy, alters the
+requested flags, and sends every other
 property back exactly as it arrived — including properties this server does not
 model, which is the point. A write that sent back only what it understood would
 drop the rest, on the object that decides what the network permits.

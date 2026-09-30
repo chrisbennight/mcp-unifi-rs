@@ -265,6 +265,7 @@ pub struct FirewallPolicy {
     pub id: String,
     pub name: Option<String>,
     pub enabled: Option<bool>,
+    pub logging_enabled: Option<bool>,
     pub action: Option<String>,
     /// Evaluation order.
     pub index: Option<u32>,

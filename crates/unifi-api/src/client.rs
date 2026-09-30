@@ -1025,6 +1025,33 @@ impl IntegrationClient {
         ))
     }
 
+    /// Change only a firewall policy's logging flag through its documented
+    /// partial-update route. The accepted status and body are returned and an
+    /// ambiguous transport result is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request fails or the controller rejects it.
+    pub async fn patch_firewall_policy_logging(
+        &self,
+        site_id: &str,
+        policy_id: &str,
+        logging_enabled: bool,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(
+                self.request(
+                    Method::PATCH,
+                    &["sites", site_id, "firewall", "policies", policy_id],
+                )?
+                .json(&serde_json::json!({"loggingEnabled": logging_enabled})),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
+    }
+
     /// Replace one zone-based policy with the record given.
     ///
     /// The upstream interface offers no partial update that can enable or

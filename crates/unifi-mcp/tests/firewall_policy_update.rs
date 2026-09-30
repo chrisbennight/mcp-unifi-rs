@@ -1,8 +1,7 @@
 //! End-to-end tests for the zone-based policy write against loopback fakes.
 //!
-//! The write resends the whole policy, so the assertion that matters most is
-//! the request body: every property the read returned must come back
-//! untouched, including ones this server does not model.
+//! An enable change resends the whole policy, preserving unrequested fields.
+//! A logging change uses the documented partial update without a full resend.
 
 use std::{sync::Arc, time::Duration};
 
@@ -1063,7 +1062,7 @@ async fn confirming_a_change_the_policy_already_holds_sends_nothing() {
 }
 
 #[tokio::test]
-async fn every_write_that_happens_says_the_whole_policy_is_resent() {
+async fn every_enable_write_says_the_whole_policy_is_resent() {
     // The disclosure belongs to how this tool writes, not to which direction
     // the switch moves, so it must appear on every preview that precedes a
     // write.
@@ -1095,6 +1094,209 @@ async fn every_write_that_happens_says_the_whole_policy_is_resent() {
             "{action}/{enabled}: {output}"
         );
     }
+}
+
+#[tokio::test]
+async fn logging_preview_reports_the_flag_without_sending_a_patch() {
+    let server = MockServer::start().await;
+    let before = stored(true, "ALLOW");
+    reads(&server, &before, &before).await;
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"loggingEnabled":true}
+            })),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], false);
+    assert!(output["changes"].to_string().contains("loggingEnabled"));
+    assert!(!output["warnings"].to_string().contains("whole policy"));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+}
+
+#[tokio::test]
+async fn logging_changes_use_patch_and_keep_complete_accepted_and_observed_records() {
+    for include_unchanged_enabled in [false, true] {
+        let server = MockServer::start().await;
+        let mut before = stored(true, "ALLOW");
+        before["controllerExtension"] = serde_json::json!({"credential":"fixture-value"});
+        let mut after = before.clone();
+        after["loggingEnabled"] = serde_json::json!(true);
+        reads(&server, &before, &after).await;
+        Mock::given(method("PATCH"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}"
+            )))
+            .and(body_json(serde_json::json!({"loggingEnabled":true})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&after))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut changes = serde_json::json!({"loggingEnabled":true});
+        if include_unchanged_enabled {
+            changes["enabled"] = serde_json::json!(true);
+        }
+        let output = handler_for(&server)
+            .call(
+                &update(&serde_json::json!({
+                    "policy":POLICY,"changes":changes,"confirm":true
+                })),
+                None,
+            )
+            .await
+            .expect("patch")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["applied"], true);
+        assert_eq!(output["verified"], true);
+        assert_eq!(output["responseStatus"], 200);
+        assert_eq!(output["policy"]["loggingEnabled"], true);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                output["responseBody"].as_str().expect("body")
+            )
+            .expect("JSON"),
+            after
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                output["afterResponse"].as_str().expect("after")
+            )
+            .expect("JSON"),
+            after
+        );
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .expect("requests")
+                .iter()
+                .any(|request| request.method == "PUT")
+        );
+    }
+}
+
+#[tokio::test]
+async fn changing_enabled_and_logging_uses_one_full_replacement_preserving_other_fields() {
+    let server = MockServer::start().await;
+    let mut before = stored(true, "ALLOW");
+    before["extension"] = serde_json::json!({"counter":9_007_199_254_740_993_u64});
+    let mut after = before.clone();
+    after["enabled"] = serde_json::json!(false);
+    after["loggingEnabled"] = serde_json::json!(true);
+    reads(&server, &before, &after).await;
+    accepts_the_write(&server, &after).await;
+    let output = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"enabled":false,"loggingEnabled":true},"confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("replace")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["verified"], true);
+    assert_eq!(output["fields"].as_array().expect("fields").len(), 2);
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .any(|request| request.method == "PATCH")
+    );
+}
+
+#[tokio::test]
+async fn logging_acceptance_survives_failed_readback_and_upstream_rejection_stays_complete() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let route = format!("{INTEGRATION}/sites/{SITE_ID}/firewall/policies/{POLICY}");
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stored(true, "ALLOW")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_string("logging readback controller detail"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(&route))
+        .and(body_json(serde_json::json!({"loggingEnabled":true})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!("{}logging-acceptance-tail", "x".repeat(50_000))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"loggingEnabled":true},"confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("accepted");
+    let content = serde_json::to_value(result.content)
+        .expect("content")
+        .to_string();
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["applied"], true);
+    assert_eq!(output["responseBodyInContent"], true);
+    assert!(content.contains("logging-acceptance-tail"));
+    assert!(
+        output["readbackError"]
+            .as_str()
+            .expect("error")
+            .contains("logging readback controller detail")
+    );
+    let rejected_server = MockServer::start().await;
+    let before = stored(true, "ALLOW");
+    reads(&rejected_server, &before, &before).await;
+    Mock::given(method("PATCH"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .set_body_string("upstream logging rejection with controller detail"),
+        )
+        .expect(1)
+        .mount(&rejected_server)
+        .await;
+    let error = handler_for(&rejected_server)
+        .call(
+            &update(&serde_json::json!({
+                "policy":POLICY,"changes":{"loggingEnabled":true},"confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect_err("rejected");
+    assert!(
+        error
+            .message
+            .contains("upstream logging rejection with controller detail")
+    );
 }
 
 #[tokio::test]

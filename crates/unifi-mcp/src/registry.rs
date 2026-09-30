@@ -853,13 +853,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::FirewallPoliciesUpdate,
         "firewall.policies.update",
-        "Enable or disable one zone-based firewall policy by id, as \
-         firewall.read reports it under policies. Previews the change and \
-         what it permits or blocks unless confirm is true; a confirmed change \
-         is read back and verified. The upstream interface has no partial \
-         update for this, so the whole policy is resent exactly as read with \
-         only the switch altered, and an edit made elsewhere in between is \
-         overwritten. Use firewall.policies.configure for full policy authoring.",
+        "Change enabled and/or loggingEnabled on one zone-based firewall policy. \
+         Previews unless confirm is true and checks persistence by reading back. \
+         Logging-only changes use the documented PATCH. Changing enabled sends \
+         the whole policy with only requested flags altered, preserving other \
+         controller fields; a concurrent edit can be overwritten. Use \
+         firewall.policies.configure for full policy authoring.",
         // Setting a policy to the state it already holds leaves the same
         // state. The result reports the zones and ports a policy governs.
         ToolBehavior::write(true).result_sensitive(),
