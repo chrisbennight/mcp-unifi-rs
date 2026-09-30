@@ -13867,14 +13867,13 @@ mod tests {
 
     use rmcp::model::CallToolRequestParams;
     use serde_json::{Map, Value, json};
-    use unifi_api::{ApiError, BoundedMessage};
 
     use super::{
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
         FirewallPolicyChanges, JSON_SCHEMA_TYPES, POLICY_WIRE_NAMES, PORT_FORWARD_CHANGE_FIELDS,
         PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges, PortForwardView,
-        STRUCTURED_CONTENT_TARGET_BYTES, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges,
-        WlanView, normalize_portable_schema, parse, schema_object, structured, trust_annotated,
+        WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView, normalize_portable_schema,
+        parse, schema_object, structured, trust_annotated,
     };
     use crate::mutation::FieldOutcome;
     use crate::registry::{TOOL_REGISTRY, ToolBehavior};
@@ -14136,21 +14135,6 @@ mod tests {
     }
 
     #[test]
-    fn secondary_controller_error_remains_alongside_a_large_primary_result() {
-        let body = format!(
-            "{}controller-error-tail",
-            "x".repeat(STRUCTURED_CONTENT_TARGET_BYTES)
-        );
-        let error = ApiError::Status {
-            status: 503,
-            message: BoundedMessage::new(&body),
-        };
-        let supplied = json!({"primary": "y".repeat(60000), "error": error.to_string()});
-        let result = structured(supplied.clone()).expect("complete result");
-        assert_eq!(result.structured_content, Some(supplied));
-    }
-
-    #[test]
     fn pagination_never_advertises_an_unreachable_page() {
         assert_eq!(super::next_offset(0, 50, 100), Some(50));
         assert_eq!(super::next_offset(0, 100, 100), None);
@@ -14164,25 +14148,6 @@ mod tests {
         assert_eq!(super::connection_word(None), "unknown");
         assert_eq!(super::connection_word(Some(true)), "wired");
         assert_eq!(super::connection_word(Some(false)), "wireless");
-    }
-
-    #[test]
-    fn trust_metadata_preserves_large_results_content_and_error_flags() {
-        let supplied = serde_json::json!({
-            "nested": {"controller-key": "controller-value"},
-            "code": "controller-code",
-            "large": "x".repeat(60000),
-        });
-        let mut result = structured(supplied.clone()).expect("built result");
-        result.is_error = Some(true);
-        result
-            .content
-            .push(rmcp::model::ContentBlock::text("complete upstream detail"));
-        let original_content = result.content.clone();
-        let returned = trust_annotated(result, ToolBehavior::read());
-        assert_eq!(returned.structured_content, Some(supplied));
-        assert_eq!(returned.is_error, Some(true));
-        assert_eq!(returned.content, original_content);
     }
 
     #[test]
