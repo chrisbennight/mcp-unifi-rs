@@ -64,8 +64,6 @@ const PROTECT_DETECTION_TYPES: &[&str] = &[
     "smartAudioDetect",
     "smartDetectLoiterZone",
 ];
-/// Longest hourly-report window; hourly buckets keep the row count bounded.
-const MAXIMUM_REPORT_WINDOW_MILLISECONDS: u64 = 7 * 24 * 60 * 60 * 1000;
 const LOGIN_REQUIRED_CODE: &str = "api.err.LoginRequired";
 
 /// Connection settings for one controller's legacy API session.
@@ -815,17 +813,16 @@ impl LegacyClient {
     /// One caller-pageable slice of historical Protect events, newest first.
     ///
     /// The official Protect integration API exposes only a live WebSocket;
-    /// this bounded read is the deliberately isolated exception that uses
-    /// the console's undocumented application route. It reuses the same
-    /// `UniFi` OS cookie session and reauthentication rules as Network reads.
+    /// this bounded read uses the console's application route. It reuses the
+    /// local cookie session and reauthentication rules as Network reads.
     /// The continuation is a time key rather than an upstream offset, so
     /// insertions and deletions among newer events cannot shift unread rows.
     ///
     /// # Errors
     ///
-    /// Returns an [`ApiError`] when the range or continuation is invalid, the
-    /// console is not `UniFi` OS, a page would split an equal-timestamp
-    /// group, or the session, request, or decoding fails.
+    /// Returns an [`ApiError`] when the range or continuation is invalid,
+    /// a page would split an equal-timestamp group, or the session, request,
+    /// or decoding fails.
     pub async fn protect_events(
         &self,
         start: u64,
@@ -1059,12 +1056,11 @@ impl LegacyClient {
         .await
     }
 
-    /// Hourly WAN throughput samples for a bounded window (epoch
-    /// milliseconds, at most seven days so the hourly rows stay bounded).
+    /// Hourly WAN throughput samples for an ordered window in epoch milliseconds.
     ///
     /// # Errors
     ///
-    /// Returns [`ApiError::Config`] for an empty or over-wide window, and an
+    /// Returns [`ApiError::Config`] for an empty or inverted window, and an
     /// [`ApiError`] when the session, request, or decoding fails.
     pub async fn hourly_wan_report(
         &self,
@@ -1091,11 +1087,6 @@ impl LegacyClient {
         if end_ms <= start_ms {
             return Err(ApiError::Config(
                 "report window end must be after its start".to_owned(),
-            ));
-        }
-        if end_ms - start_ms > MAXIMUM_REPORT_WINDOW_MILLISECONDS {
-            return Err(ApiError::Config(
-                "report window exceeds the seven-day bound".to_owned(),
             ));
         }
         let body = serde_json::json!({
@@ -1212,17 +1203,6 @@ impl LegacyClient {
         end: u64,
         limit: u32,
     ) -> Result<(Vec<ProtectEvent>, Vec<u8>), ApiError> {
-        let kind = {
-            let session = self.session.lock().await;
-            session.kind.ok_or_else(|| {
-                ApiError::Config("session used before console detection".to_owned())
-            })?
-        };
-        if kind != ConsoleKind::UnifiOs {
-            return Err(ApiError::Config(
-                "Protect application events require a UniFi OS console".to_owned(),
-            ));
-        }
         let mut query = vec![
             ("start", start.to_string()),
             ("end", end.to_string()),
@@ -1257,17 +1237,6 @@ impl LegacyClient {
     }
 
     async fn execute_protect_event_thumbnail(&self, event_id: &str) -> Result<Vec<u8>, ApiError> {
-        let kind = {
-            let session = self.session.lock().await;
-            session.kind.ok_or_else(|| {
-                ApiError::Config("session used before console detection".to_owned())
-            })?
-        };
-        if kind != ConsoleKind::UnifiOs {
-            return Err(ApiError::Config(
-                "Protect event images require a UniFi OS console".to_owned(),
-            ));
-        }
         let url = http::build_url(
             &self.base,
             &["proxy", "protect", "api", "events", event_id, "thumbnail"],
@@ -1301,17 +1270,6 @@ impl LegacyClient {
     async fn execute_protect_bootstrap<T: DeserializeOwned>(
         &self,
     ) -> Result<(T, Vec<u8>), ApiError> {
-        let kind = {
-            let session = self.session.lock().await;
-            session.kind.ok_or_else(|| {
-                ApiError::Config("session used before console detection".to_owned())
-            })?
-        };
-        if kind != ConsoleKind::UnifiOs {
-            return Err(ApiError::Config(
-                "Protect inventory requires a UniFi OS console".to_owned(),
-            ));
-        }
         let url = http::build_url(&self.base, &["proxy", "protect", "api", "bootstrap"], &[])?;
         let response = self
             .http
