@@ -628,12 +628,31 @@ it.
 | `firewall.policies.delete` | yes | no | yes |
 | `vouchers.create` | **no** | no | yes |
 | `vouchers.revoke` | yes | no | yes |
+| `vouchers.revoke_matching` | no | yes | yes |
 | `cameras.ptz.control` | **no** | no | yes |
 | `cameras.microphone.disable` | yes | no | yes |
 | `protect.assets.upload` | **no** | yes | yes |
 | `cameras.settings.update` | yes | no | yes |
 | `cameras.streams.update` | **no** | no | yes |
 | `cameras.talkback.start` | **no** | no | yes |
+
+### Bulk voucher revocation
+
+`vouchers.revoke_matching` accepts the documented Network API `filter`
+(nonempty, at most 2048 bytes), optional `previewOffset` and `previewLimit`
+(1-100, default 25), and `confirm` (default false). Filters are sent unchanged,
+including case and whitespace. Supported predicates are defined by the
+[controller catalog](https://developer.ui.com/network/v10.4.57/openapi.json).
+
+The preview returns the complete controller page in `beforeResponse`, the total
+`matchesBefore`, and `previewComplete`. Confirmation deletes **every filter
+match**, regardless of the preview page. The accepted status and body, including
+`vouchersDeleted` when present, remain available if bounded readback fails.
+A subsequent filtered page reports `matchesAfter` and whether no matches were
+observed in `verifiedAbsent`; another editor can create new matching vouchers.
+Large controller responses and errors move to labeled content with explicit
+`InContent` markers. This action is classified as non-idempotent because a
+repeated filter can delete newly matching vouchers. The mutation is sent once.
 
 ### What every write does
 
