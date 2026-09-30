@@ -831,6 +831,49 @@ impl IntegrationClient {
         .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
+    /// Read one filtered voucher page with every controller record field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn voucher_records(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites", site_id, "hotspot", "vouchers"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Delete all vouchers matching the documented controller filter. Retains
+    /// the complete accepted status and body and never retries the mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] when the request fails or the controller rejects it.
+    pub async fn delete_matching_vouchers(
+        &self,
+        site_id: &str,
+        filter: &str,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(self.request_with_query(
+                Method::DELETE,
+                &["sites", site_id, "hotspot", "vouchers"],
+                &[("filter", filter.to_owned())],
+            )?)
+            .await?;
+        let status = response.status().as_u16();
+        let body = http::read_bounded_body(response).await?;
+        Ok((status, body))
+    }
+
     /// One persisted hotspot voucher, including its retrievable code.
     ///
     /// # Errors
