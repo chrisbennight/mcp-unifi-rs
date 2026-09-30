@@ -2851,10 +2851,25 @@ struct AclRulesOrderingConfigureInput {
     confirm: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrdering {
+    before_system_defined: Vec<String>,
+    after_system_defined: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FirewallPolicyOrderingConfigureInput {
+    ordered_firewall_policy_ids: FirewallPolicyOrdering,
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkPolicyWriteOutput {
-    kind: NetworkPolicyKind,
+struct NetworkPolicyWriteOutput<K = NetworkPolicyKind> {
+    kind: K,
     operation: NetworkPolicyWriteOperation,
     consequence: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4342,6 +4357,13 @@ impl ToolSpec {
             ToolKind::AclRulesConfigure => {
                 tool::<AclRulesConfigureInput, NetworkPolicyWriteOutput>(self)
             }
+            ToolKind::FirewallPoliciesOrderingRead => {
+                tool::<EmptyInput, NetworkPolicyDetailOutput>(self)
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => tool::<
+                FirewallPolicyOrderingConfigureInput,
+                NetworkPolicyWriteOutput<&'static str>,
+            >(self),
             ToolKind::AclRulesOrderingRead => {
                 tool::<AclRulesOrderingReadInput, NetworkPolicyDetailOutput>(self)
             }
@@ -4687,6 +4709,12 @@ impl UnifiMcp {
             ToolKind::NetworkPolicyList => self.network_policy_list(params).await,
             ToolKind::NetworkPolicyDetail => self.network_policy_detail(params).await,
             ToolKind::AclRulesConfigure => self.acl_rules_configure(params).await,
+            ToolKind::FirewallPoliciesOrderingRead => {
+                self.firewall_policies_ordering_read(params).await
+            }
+            ToolKind::FirewallPoliciesOrderingConfigure => {
+                self.firewall_policies_ordering_configure(params).await
+            }
             ToolKind::AclRulesOrderingRead => self.acl_rules_ordering_read(params).await,
             ToolKind::AclRulesOrderingConfigure => self.acl_rules_ordering_configure(params).await,
             ToolKind::DnsPoliciesConfigure => self.dns_policies_configure(params).await,
@@ -7748,6 +7776,115 @@ impl UnifiMcp {
             input.confirm,
         )?;
         self.network_policy_write(plan).await
+    }
+
+    async fn firewall_policies_ordering_read(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let _: EmptyInput = parse(params)?;
+        let site_id = self.site_id().await?;
+        let record = self
+            .integration()
+            .firewall_policy_ordering(&site_id)
+            .await
+            .map_err(api_error)?;
+        network_policy_detail_result(NetworkPolicyDetailOutput {
+            record: Some(record),
+            record_in_content: None,
+        })
+    }
+
+    async fn firewall_policies_ordering_configure(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let started = tokio::time::Instant::now();
+        let input = parse::<FirewallPolicyOrderingConfigureInput>(params)?;
+        let requested = serde_json::json!({"orderedFirewallPolicyIds": {
+            "beforeSystemDefined": input.ordered_firewall_policy_ids.before_system_defined,
+            "afterSystemDefined": input.ordered_firewall_policy_ids.after_system_defined,
+        }});
+        if requested.to_string().len() > MAXIMUM_POLICY_REQUEST_BYTES {
+            return Err(McpError::invalid_params(
+                "firewall policy ordering request exceeds the 1 MiB request bound",
+                None,
+            ));
+        }
+        let mut output = NetworkPolicyWriteOutput {
+            kind: "firewallPolicies",
+            operation: NetworkPolicyWriteOperation::Update,
+            consequence: "replace the priority order of the site's user-defined firewall policies",
+            id: None,
+            requested: Some(requested),
+            requested_in_content: None,
+            submitted: false,
+            response_status: None,
+            response_body: None,
+            response_body_in_content: None,
+            accepted: None,
+            accepted_in_content: None,
+            after: None,
+            after_in_content: None,
+            verified: None,
+            verified_absent: None,
+            readback_error: None,
+            readback_error_in_content: None,
+        };
+        if !input.confirm {
+            return network_policy_write_result(output);
+        }
+        let site_id = self.site_id().await?;
+        let (status, accepted) = self
+            .integration()
+            .replace_firewall_policy_ordering(
+                &site_id,
+                &input.ordered_firewall_policy_ids.before_system_defined,
+                &input.ordered_firewall_policy_ids.after_system_defined,
+            )
+            .await
+            .map_err(api_error)?;
+        output.submitted = true;
+        output.response_status = Some(status);
+        output.accepted = Some(accepted);
+        let budget = self
+            .request_timeout()
+            .saturating_sub(started.elapsed())
+            .saturating_sub(NETWORK_POLICY_RESPONSE_RESERVE)
+            .min(NETWORK_POLICY_READBACK_BUDGET);
+        if budget.is_zero() {
+            output.readback_error =
+                Some("firewall policy ordering readback skipped near request deadline".to_owned());
+        } else {
+            match tokio::time::timeout(
+                budget,
+                self.integration().firewall_policy_ordering(&site_id),
+            )
+            .await
+            {
+                Ok(Ok(after)) => {
+                    let requested_ids = output
+                        .requested
+                        .as_ref()
+                        .and_then(|body| body.get("orderedFirewallPolicyIds"));
+                    output.verified = Some(
+                        after.get("orderedFirewallPolicyIds") == requested_ids
+                            && output
+                                .accepted
+                                .as_ref()
+                                .and_then(|body| body.get("orderedFirewallPolicyIds"))
+                                == requested_ids,
+                    );
+                    output.after = Some(after);
+                }
+                Ok(Err(error)) => output.readback_error = Some(error.to_string()),
+                Err(_) => {
+                    output.readback_error =
+                        Some("firewall policy ordering readback timed out".to_owned());
+                }
+            }
+        }
+        network_policy_write_result(output)
     }
 
     async fn acl_rules_ordering_read(
@@ -13217,10 +13354,10 @@ fn network_policy_list_result(
     Ok(full)
 }
 
-fn network_policy_write_result(
-    mut output: NetworkPolicyWriteOutput,
+fn network_policy_write_result<K: Serialize>(
+    mut output: NetworkPolicyWriteOutput<K>,
 ) -> Result<CallToolResult, McpError> {
-    let exceeds = |output: &NetworkPolicyWriteOutput| -> Result<bool, McpError> {
+    let exceeds = |output: &NetworkPolicyWriteOutput<K>| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
             .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
@@ -14147,6 +14284,7 @@ mod tests {
         ("devices.remove", false, false, true),
         ("acl.rules.configure", false, true, true),
         ("acl.rules.ordering.configure", false, true, true),
+        ("firewall.policies.ordering.configure", false, true, true),
         ("dns.policies.configure", false, true, true),
         ("traffic.matching_lists.configure", false, true, true),
         // Reauthorization replaces the grant and resets traffic counters.
