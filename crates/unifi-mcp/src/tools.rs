@@ -10845,10 +10845,65 @@ fn number_is_negative(value: &Number) -> bool {
             .is_some_and(|mantissa| mantissa.bytes().any(|digit| matches!(digit, b'1'..=b'9')))
 }
 
-fn number_in_range(value: &Number, minimum: f64, maximum: f64) -> bool {
-    value
-        .as_f64()
-        .is_some_and(|value| (minimum..=maximum).contains(&value))
+fn number_in_range(value: &Number, minimum: i64, maximum: i64) -> bool {
+    fn compare(value: &Number, bound: i64) -> std::cmp::Ordering {
+        let text = value.as_str();
+        let negative = number_is_negative(value);
+        let bound_negative = bound < 0;
+        if negative != bound_negative {
+            return if negative {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let unsigned = text.strip_prefix('-').unwrap_or(text);
+        let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+        let digits = mantissa.replace('.', "");
+        let digits = digits.trim_start_matches('0');
+        let bound_digits = bound.unsigned_abs().to_string();
+        let magnitude = if digits.is_empty() {
+            0_u64.cmp(&bound.unsigned_abs())
+        } else if bound == 0 {
+            std::cmp::Ordering::Greater
+        } else {
+            // Saturation only affects exponents far beyond an integer bound;
+            // their magnitude still compares exactly with that bound.
+            let exponent = exponent.parse::<i128>().unwrap_or_else(|_| {
+                if exponent.starts_with('-') {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            });
+            let fractional_digits = mantissa
+                .split_once('.')
+                .map_or(0, |(_, fraction)| fraction.len());
+            let order = exponent
+                .saturating_sub(fractional_digits as i128)
+                .saturating_add(digits.len() as i128);
+            order.cmp(&(bound_digits.len() as i128)).then_with(|| {
+                let length = digits.len().max(bound_digits.len());
+                digits
+                    .bytes()
+                    .chain(std::iter::repeat(b'0'))
+                    .take(length)
+                    .cmp(
+                        bound_digits
+                            .bytes()
+                            .chain(std::iter::repeat(b'0'))
+                            .take(length),
+                    )
+            })
+        };
+        if negative {
+            magnitude.reverse()
+        } else {
+            magnitude
+        }
+    }
+    compare(value, minimum) != std::cmp::Ordering::Less
+        && compare(value, maximum) != std::cmp::Ordering::Greater
 }
 
 fn validate_pos_transaction(transaction: &PosTransaction) -> Result<(), McpError> {
@@ -13025,11 +13080,11 @@ fn device_settings_request(
                     || settings
                         .pir_sensitivity
                         .as_ref()
-                        .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                     || settings
                         .led_level
                         .as_ref()
-                        .is_some_and(|value| !number_in_range(value, 1.0, 6.0))
+                        .is_some_and(|value| !number_in_range(value, 1, 6))
             }) {
                 return Err(McpError::invalid_params(
                     "light pirDuration must be nonnegative, pirSensitivity 0-100, and ledLevel 1-6",
@@ -13048,13 +13103,13 @@ fn device_settings_request(
             ..
         } => {
             for (field, settings, minimum, maximum) in [
-                ("lightSettings", light_settings.as_ref(), 1.0, 503_192.0),
-                ("humiditySettings", humidity_settings.as_ref(), 1.0, 99.0),
+                ("lightSettings", light_settings.as_ref(), 1, 503_192),
+                ("humiditySettings", humidity_settings.as_ref(), 1, 99),
                 (
                     "temperatureSettings",
                     temperature_settings.as_ref(),
-                    -39.0,
-                    124.0,
+                    -39,
+                    124,
                 ),
             ] {
                 if settings.is_some_and(|settings| {
@@ -13074,11 +13129,11 @@ fn device_settings_request(
                     settings
                         .sensitivity
                         .as_ref()
-                        .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
+                        .is_some_and(|value| !number_in_range(value, 0, 100))
                         || settings
                             .sensitivity_when_armed
                             .as_ref()
-                            .is_some_and(|value| !number_in_range(value, 0.0, 100.0))
+                            .is_some_and(|value| !number_in_range(value, 0, 100))
                 }) {
                     return Err(McpError::invalid_params(
                         format!("{field} sensitivity must be 0-100"),
@@ -13098,8 +13153,8 @@ fn device_settings_request(
         ProtectDeviceSettingsChanges::Chime { ring_settings, .. } => {
             if ring_settings.as_ref().is_some_and(|rows| {
                 rows.iter().any(|row| {
-                    !number_in_range(&row.repeat_times, 1.0, 10.0)
-                        || !number_in_range(&row.volume, 0.0, 100.0)
+                    !number_in_range(&row.repeat_times, 1, 10)
+                        || !number_in_range(&row.volume, 0, 100)
                 })
             }) {
                 return Err(McpError::invalid_params(

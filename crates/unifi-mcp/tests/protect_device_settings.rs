@@ -44,6 +44,28 @@ fn call(arguments: Value) -> CallToolRequestParams {
 }
 
 #[tokio::test]
+async fn exact_settings_outside_the_documented_range_send_no_requests() {
+    for value in ["100.0000000000000000001", "-1e-400", "1e400", "-1e400"] {
+        let server = MockServer::start().await;
+        let arguments = serde_json::from_str(&format!(
+            r#"{{"deviceId":"device-1","changes":{{"kind":"light","lightDeviceSettings":{{"pirSensitivity":{value}}}}},"confirm":true}}"#
+        )).expect("exact numeric arguments");
+        let error = handler_for(&server)
+            .call(&call(arguments), None)
+            .await
+            .expect_err("outside range");
+        assert!(error.message.contains("pirSensitivity 0-100"));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn settings_preserve_exact_numbers_in_requests_and_readback() {
     for (family, changes) in [
         (
