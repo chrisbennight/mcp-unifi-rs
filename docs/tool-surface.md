@@ -674,7 +674,10 @@ fields it discards. Each requested field is reported `persisted`, `dropped`, or
 `coerced`; properties that moved without being requested are named separately,
 compared over the controller's whole record rather than the modeled subset;
 and `verified` is true only when every requested field persisted and nothing
-else moved.
+else moved. The confirmed result also returns the accepted HTTP status and
+complete legacy controller envelope. A failed or stalled readback is reported
+alongside that accepted response. Large controller bodies and readback errors
+move to labeled MCP content with explicit markers.
 
 If a wireless network or port forward snapshot cannot be decoded into its
 typed record, the error includes the controller's complete accepted response
