@@ -499,6 +499,7 @@ async fn accepted_policy_update_survives_a_stalled_readback() {
 async fn policy_delete_previews_scope_without_sending_delete() {
     let server = MockServer::start().await;
     let mut record = stored(true, "BLOCK");
+    record["index"] = serde_json::json!(-10);
     record["ipProtocolScope"] = serde_json::json!({
         "ipVersion": "IPV4", "protocolFilter": {"type": "PRESET", "name": "TCP_UDP"}
     });
@@ -514,6 +515,13 @@ async fn policy_delete_previews_scope_without_sending_delete() {
         .expect("structured");
     assert_eq!(output["applied"], false);
     assert_eq!(output["policy"]["sourceZoneId"], "zone-iot");
+    assert_eq!(output["policy"]["index"], -10);
+    assert!(
+        !output["preview"]["omittedFields"]
+            .as_array()
+            .expect("omitted fields")
+            .contains(&serde_json::json!("index"))
+    );
     assert_eq!(output["preview"]["details"]["schedule"], record["schedule"]);
     assert_eq!(
         output["preview"]["details"]["ipsecFilter"],

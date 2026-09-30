@@ -49,7 +49,9 @@ pub enum ToolKind {
     NetworkPolicyDetail,
     AclRulesConfigure,
     AclRulesOrderingRead,
+    FirewallPoliciesOrderingRead,
     AclRulesOrderingConfigure,
+    FirewallPoliciesOrderingConfigure,
     DnsPoliciesConfigure,
     FirewallZonesConfigure,
     FirewallPoliciesConfigure,
@@ -102,6 +104,7 @@ pub enum ToolKind {
     VouchersSearch,
     VouchersStatus,
     VouchersRevoke,
+    VouchersRevokeMatching,
     VouchersCreate,
 }
 
@@ -118,6 +121,7 @@ impl ToolKind {
             | Self::DevicesRemove
             | Self::AclRulesConfigure
             | Self::AclRulesOrderingConfigure
+            | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
             | Self::FirewallPoliciesConfigure
@@ -128,6 +132,7 @@ impl ToolKind {
             | Self::FirewallPoliciesUpdate
             | Self::FirewallPoliciesDelete
             | Self::VouchersRevoke
+            | Self::VouchersRevokeMatching
             | Self::CamerasPtzControl
             | Self::CamerasMicrophoneDisable
             | Self::ProtectAssetsUpload
@@ -159,6 +164,7 @@ impl ToolKind {
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
             | Self::AclRulesOrderingRead
+            | Self::FirewallPoliciesOrderingRead
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
@@ -241,7 +247,9 @@ impl ToolKind {
             | Self::NetworkPolicyDetail
             | Self::AclRulesConfigure
             | Self::AclRulesOrderingRead
+            | Self::FirewallPoliciesOrderingRead
             | Self::AclRulesOrderingConfigure
+            | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
             | Self::FirewallPoliciesConfigure
@@ -263,6 +271,7 @@ impl ToolKind {
             | Self::VouchersSearch
             | Self::VouchersStatus
             | Self::VouchersRevoke
+            | Self::VouchersRevokeMatching
             | Self::VouchersCreate => ToolSurface::Network,
         }
     }
@@ -757,6 +766,19 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .input_sensitive()
             .result_sensitive(),
     ),
+    sensitive_read_spec(
+        ToolKind::FirewallPoliciesOrderingRead,
+        "firewall.policies.ordering.read",
+        "Read the complete user-defined firewall policy ordering before and after system-defined policies.",
+    ),
+    write_spec(
+        ToolKind::FirewallPoliciesOrderingConfigure,
+        "firewall.policies.ordering.configure",
+        "Preview or replace user-defined firewall policy ordering before and after system-defined policies. Returns the complete accepted record and bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     write_spec(
         ToolKind::FirewallZonesConfigure,
         "firewall.zones.configure",
@@ -913,6 +935,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolBehavior::write(true).result_sensitive(),
     ),
     write_spec(
+        ToolKind::VouchersRevokeMatching,
+        "vouchers.revoke_matching",
+        "Preview a bounded page or revoke all hotspot vouchers matching the documented controller filter. Confirmation applies to every filter match, independent of preview pagination. Returns complete accepted status/body and bounded observation of remaining matches. Repeated filters can include newly created vouchers.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
+    write_spec(
         ToolKind::VouchersCreate,
         "vouchers.create",
         "Mint hotspot vouchers for the guest network. Previews the batch and \
@@ -961,6 +991,8 @@ mod tests {
         ToolKind::AclRulesConfigure,
         ToolKind::AclRulesOrderingRead,
         ToolKind::AclRulesOrderingConfigure,
+        ToolKind::FirewallPoliciesOrderingRead,
+        ToolKind::FirewallPoliciesOrderingConfigure,
         ToolKind::DnsPoliciesConfigure,
         ToolKind::FirewallZonesConfigure,
         ToolKind::FirewallPoliciesConfigure,
@@ -1013,6 +1045,7 @@ mod tests {
         ToolKind::VouchersSearch,
         ToolKind::VouchersStatus,
         ToolKind::VouchersRevoke,
+        ToolKind::VouchersRevokeMatching,
         ToolKind::VouchersCreate,
     ];
 
@@ -1093,7 +1126,9 @@ mod tests {
                 | ToolKind::NetworkPolicyDetail
                 | ToolKind::AclRulesConfigure
                 | ToolKind::AclRulesOrderingRead
+                | ToolKind::FirewallPoliciesOrderingRead
                 | ToolKind::AclRulesOrderingConfigure
+                | ToolKind::FirewallPoliciesOrderingConfigure
                 | ToolKind::DnsPoliciesConfigure
                 | ToolKind::FirewallZonesConfigure
                 | ToolKind::FirewallPoliciesConfigure
@@ -1146,6 +1181,7 @@ mod tests {
                 | ToolKind::VouchersSearch
                 | ToolKind::VouchersStatus
                 | ToolKind::VouchersRevoke
+                | ToolKind::VouchersRevokeMatching
                 | ToolKind::VouchersCreate => {}
             }
             assert_eq!(
