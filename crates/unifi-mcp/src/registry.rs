@@ -46,7 +46,9 @@ pub enum ToolKind {
     NetworkPolicyDetail,
     AclRulesConfigure,
     AclRulesOrderingRead,
+    FirewallPoliciesOrderingRead,
     AclRulesOrderingConfigure,
+    FirewallPoliciesOrderingConfigure,
     DnsPoliciesConfigure,
     FirewallZonesConfigure,
     TrafficListsConfigure,
@@ -113,6 +115,7 @@ impl ToolKind {
             | Self::DevicesRemove
             | Self::AclRulesConfigure
             | Self::AclRulesOrderingConfigure
+            | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
             | Self::TrafficListsConfigure
@@ -151,6 +154,7 @@ impl ToolKind {
             | Self::NetworkPolicyList
             | Self::NetworkPolicyDetail
             | Self::AclRulesOrderingRead
+            | Self::FirewallPoliciesOrderingRead
             | Self::WifiBroadcastsList
             | Self::WifiBroadcastsStatus
             | Self::CamerasSearch
@@ -230,7 +234,9 @@ impl ToolKind {
             | Self::NetworkPolicyDetail
             | Self::AclRulesConfigure
             | Self::AclRulesOrderingRead
+            | Self::FirewallPoliciesOrderingRead
             | Self::AclRulesOrderingConfigure
+            | Self::FirewallPoliciesOrderingConfigure
             | Self::DnsPoliciesConfigure
             | Self::FirewallZonesConfigure
             | Self::TrafficListsConfigure
@@ -727,6 +733,19 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .input_sensitive()
             .result_sensitive(),
     ),
+    sensitive_read_spec(
+        ToolKind::FirewallPoliciesOrderingRead,
+        "firewall.policies.ordering.read",
+        "Read the complete user-defined firewall policy ordering before and after system-defined policies.",
+    ),
+    write_spec(
+        ToolKind::FirewallPoliciesOrderingConfigure,
+        "firewall.policies.ordering.configure",
+        "Preview or replace user-defined firewall policy ordering before and after system-defined policies. Returns the complete accepted record and bounded readback.",
+        ToolBehavior::write(false)
+            .input_sensitive()
+            .result_sensitive(),
+    ),
     write_spec(
         ToolKind::FirewallZonesConfigure,
         "firewall.zones.configure",
@@ -921,6 +940,8 @@ mod tests {
         ToolKind::AclRulesConfigure,
         ToolKind::AclRulesOrderingRead,
         ToolKind::AclRulesOrderingConfigure,
+        ToolKind::FirewallPoliciesOrderingRead,
+        ToolKind::FirewallPoliciesOrderingConfigure,
         ToolKind::DnsPoliciesConfigure,
         ToolKind::FirewallZonesConfigure,
         ToolKind::TrafficListsConfigure,
@@ -1049,7 +1070,9 @@ mod tests {
                 | ToolKind::NetworkPolicyDetail
                 | ToolKind::AclRulesConfigure
                 | ToolKind::AclRulesOrderingRead
+                | ToolKind::FirewallPoliciesOrderingRead
                 | ToolKind::AclRulesOrderingConfigure
+                | ToolKind::FirewallPoliciesOrderingConfigure
                 | ToolKind::DnsPoliciesConfigure
                 | ToolKind::FirewallZonesConfigure
                 | ToolKind::TrafficListsConfigure

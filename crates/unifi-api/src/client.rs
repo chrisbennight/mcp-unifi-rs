@@ -466,6 +466,48 @@ impl IntegrationClient {
         Ok((status, record))
     }
 
+    /// Read the complete user-defined firewall policy ordering, including its
+    /// positions before and after system-defined policies.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn firewall_policy_ordering(&self, site_id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "firewall", "policies", "ordering"], &[])
+            .await
+    }
+
+    /// Replace the user-defined firewall policy ordering. Returns the complete
+    /// accepted record and status without retrying ambiguous writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the upstream error when the request or response fails.
+    pub async fn replace_firewall_policy_ordering(
+        &self,
+        site_id: &str,
+        before_system_defined: &[String],
+        after_system_defined: &[String],
+    ) -> Result<(u16, Value), ApiError> {
+        let response = self
+            .send(
+                self.request(
+                    Method::PUT,
+                    &["sites", site_id, "firewall", "policies", "ordering"],
+                )?
+                .json(&serde_json::json!({"orderedFirewallPolicyIds": {
+                    "beforeSystemDefined": before_system_defined,
+                    "afterSystemDefined": after_system_defined,
+                }})),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = http::read_bounded_body(response).await?;
+        let record = serde_json::from_slice(&bytes)
+            .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
+        Ok((status, record))
+    }
+
     async fn network_policy_record_write(
         &self,
         method: Method,

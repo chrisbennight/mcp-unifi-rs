@@ -175,6 +175,17 @@ Read complete zone records through `network.policy.list` and
 `network.policy.detail` with `kind: "firewallZones"`. The controller decides
 which zones and memberships can be changed; its rejection text is returned.
 
+`firewall.policies.ordering.read` returns the complete user-defined policy
+ordering. `firewall.policies.ordering.configure` accepts
+`orderedFirewallPolicyIds: {beforeSystemDefined, afterSystemDefined}` to place
+user-defined policies before or after the system-defined policies. It previews
+by default, and sends the replacement ordering with `confirm: true`. The
+confirmed result retains the accepted status and complete controller record,
+then performs bounded readback. `verified` requires both acceptance and
+readback to match the requested groups. Large records and readback errors move
+to labeled MCP content with explicit markers. The upstream controller decides
+whether policy ids and placements are valid.
+
 `acl.rules.ordering.read` returns the complete priority ordering from the
 official ACL ordering endpoint. `acl.rules.ordering.configure` previews a full
 replacement `orderedAclRuleIds` list and sends it only with `confirm: true`. It
@@ -630,6 +641,7 @@ it.
 | `devices.remove` | no | no | yes |
 | `acl.rules.configure` | no | yes | yes |
 | `acl.rules.ordering.configure` | no | yes | yes |
+| `firewall.policies.ordering.configure` | no | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `firewall.zones.configure` | no | yes | yes |
 | `traffic.matching_lists.configure` | no | yes | yes |
