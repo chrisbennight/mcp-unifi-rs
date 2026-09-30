@@ -3990,6 +3990,8 @@ struct VouchersCreateOutput {
     /// Complete accepted creation body, including fields outside the voucher summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// The vouchers, present only on a confirmed call. These are returned
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -9713,6 +9715,7 @@ impl UnifiMcp {
                 requested: input.count,
                 response_status: None,
                 response_body: None,
+                response_body_in_content: None,
                 vouchers: None,
                 checks: None,
                 well_formed: None,
@@ -9780,6 +9783,7 @@ impl UnifiMcp {
                     .as_str()
                     .to_owned(),
             ),
+            response_body_in_content: None,
             vouchers: Some(vouchers),
             checks: Some(checks),
             well_formed: Some(well_formed),
