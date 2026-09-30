@@ -774,7 +774,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::AclRulesOrderingConfigure,
         "acl.rules.ordering.configure",
         "Preview or replace the selected site's complete ACL rule priority ordering. Returns the accepted controller record and bounded readback.",
-        ToolBehavior::write(false)
+        ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
     ),
@@ -787,7 +787,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::FirewallPoliciesOrderingConfigure,
         "firewall.policies.ordering.configure",
         "Preview or replace user-defined firewall policy ordering before and after system-defined policies. Returns the complete accepted record and bounded readback.",
-        ToolBehavior::write(false)
+        ToolBehavior::write(true)
             .input_sensitive()
             .result_sensitive(),
     ),
