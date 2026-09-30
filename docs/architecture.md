@@ -45,7 +45,7 @@ The local account is required for Network and optional for Protect enrichment.
 
 Reads: `network.overview`, `clients.search`, `clients.context`,
 `devices.search`, `devices.status`, `devices.pending.list`, `wifi.diagnose`,
-`firewall.read`, `networks.read`, `radius_profiles.list`,
+`firewall.read`, `networks.read`, `networks.list`, `networks.status`, `radius_profiles.list`,
 `network.inventory.list`, `network.switching.detail`, `network.policy.list`,
 `network.policy.detail`, `wifi.broadcasts.list`,
 `wifi.broadcasts.status`, `events.search`, `stats.query`, `cameras.search`,
@@ -54,6 +54,9 @@ Reads: `network.overview`, `clients.search`, `clients.context`,
 `protect.devices.list`, `protect.devices.status`, `protect.users.list`,
 `protect.users.status`, `protect.viewers.list`, `protect.viewers.status`,
 `protect.liveviews.list`, `protect.liveviews.status`.
+
+`networks.configure` creates, replaces, or deletes complete typed official
+network configurations, including the controller's force deletion option.
 
 Mutations (preview-then-confirm; verified by read-back where the write
 changes fields, by observation where it does not — see Write safety).

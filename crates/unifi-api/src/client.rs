@@ -323,6 +323,103 @@ impl IntegrationClient {
         Ok((status, body))
     }
 
+    /// Read a complete official network page, including controller metadata.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn network_records(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Value, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites", site_id, "networks"], &query)
+            .await
+            .map(|(value, body)| (value, BoundedMessage::from_controller_bytes(&body)))
+    }
+
+    /// Read one complete official network configuration.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn network_record(&self, site_id: &str, id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "networks", id], &[])
+            .await
+    }
+
+    /// Read the controller's complete network reference report.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn network_references(&self, site_id: &str, id: &str) -> Result<Value, ApiError> {
+        self.get_json(&["sites", site_id, "networks", id, "references"], &[])
+            .await
+    }
+
+    /// Create a network and retain the complete accepted status and body.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or response fails. Writes are never retried.
+    pub async fn create_network(
+        &self,
+        site_id: &str,
+        body: &Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(
+                self.request(Method::POST, &["sites", site_id, "networks"])?
+                    .json(body),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
+    /// Replace a network and retain the complete accepted status and body.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or response fails. Writes are never retried.
+    pub async fn replace_network(
+        &self,
+        site_id: &str,
+        id: &str,
+        body: &Value,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(
+                self.request(Method::PUT, &["sites", site_id, "networks", id])?
+                    .json(body),
+            )
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
+    /// Delete a network with the documented force option and retain its complete response.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or response fails. Writes are never retried.
+    pub async fn delete_network(
+        &self,
+        site_id: &str,
+        id: &str,
+        force: bool,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let response = self
+            .send(self.request_with_query(
+                Method::DELETE,
+                &["sites", site_id, "networks", id],
+                &[("force", force.to_string())],
+            )?)
+            .await?;
+        let status = response.status().as_u16();
+        Ok((status, http::read_bounded_body(response).await?))
+    }
+
     /// Read one page of ACL rules, firewall zones, firewall policies, DNS policies, or traffic matching lists, retaining
     /// every field in each controller record.
     ///
