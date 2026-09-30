@@ -714,7 +714,7 @@ impl LegacyClient {
     /// # Errors
     ///
     /// Returns an [`ApiError`] for invalid ids, session or controller failures,
-    /// or a response that is not a bounded decodable JPEG.
+    /// or a response that exceeds the body bound or has another media type.
     pub async fn protect_event_thumbnail(&self, event_id: &str) -> Result<Vec<u8>, ApiError> {
         if event_id.is_empty()
             || event_id.len() > MAXIMUM_EVENT_IDENTIFIER_BYTES

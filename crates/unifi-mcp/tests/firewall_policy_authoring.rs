@@ -83,6 +83,71 @@ async fn preview(handler: &UnifiMcp, requested: Value) {
 }
 
 #[tokio::test]
+async fn replacement_verification_detects_retained_optional_constraints() {
+    for retained in ["none", "schedule", "source", "nestedPort", "icmpType"] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let mut requested = policy();
+        if retained == "nestedPort" {
+            requested["source"]["trafficFilter"] = json!({"type":"NETWORK","networkFilter":{"networkIds":[SITE_ID],"matchOpposite":false}});
+        }
+        if retained == "icmpType" {
+            requested["ipProtocolScope"]["protocolFilter"] =
+                json!({"type":"NAMED_PROTOCOL","matchOpposite":false,"protocol":{"name":"icmp"}});
+        }
+        let mut observed = requested.clone();
+        observed["id"] = json!(POLICY_ID);
+        observed["controllerExtension"] = json!({"unknown":"retained"});
+        match retained {
+            "schedule" => {
+                observed["schedule"] = json!({"mode":"EVERY_WEEK","repeatOnDays":["MONDAY"]});
+            }
+            "source" => {
+                observed["source"]["trafficFilter"] = json!({"type":"NETWORK","networkFilter":{"networkIds":[SITE_ID],"matchOpposite":false}});
+            }
+            "nestedPort" => {
+                observed["source"]["trafficFilter"]["portFilter"] = json!({"type":"PORTS","matchOpposite":false,"items":[{"type":"PORT_NUMBER","value":443}]});
+            }
+            "icmpType" => {
+                observed["ipProtocolScope"]["protocolFilter"]["protocol"]["typenameFilter"] =
+                    json!("ECHO_REQUEST");
+            }
+            _ => {}
+        }
+        let route = format!("{PREFIX}/sites/{SITE_ID}/firewall/policies/{POLICY_ID}");
+        Mock::given(method("PUT"))
+            .and(path(&route))
+            .and(body_json(requested.clone()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&observed))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&observed))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &call(
+                    json!({"operation":"update","id":POLICY_ID,"policy":requested,"confirm":true}),
+                ),
+                None,
+            )
+            .await
+            .expect("accepted replacement")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["submitted"], true);
+        assert_eq!(output["verified"], retained == "none", "{retained}");
+        assert_eq!(output["accepted"], observed);
+        assert_eq!(output["after"], observed);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn previews_cover_source_and_destination_filter_families_without_upstream_calls() {
     let server = MockServer::start().await;
     let handler = handler_for(&server);

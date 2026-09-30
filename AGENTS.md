@@ -39,8 +39,8 @@ trade the capability away to satisfy a stylistic or speculative concern.
   the upstream call, and are never retried after an ambiguous transport
   result. They verify persistence by reading back, because the controller
   acknowledges writes it silently drops. A mutation whose effect no read
-  reproduces — a voucher's code exists only in the response that created it —
-  says what it could establish instead of claiming verification, and returns
+  reproduces says what it could establish instead of claiming verification,
+  and returns
   the unrepeatable value even when those checks fail.
 - Capability detection is a correctness boundary: an empty result must be
   distinguishable from "this console does not support that API generation"

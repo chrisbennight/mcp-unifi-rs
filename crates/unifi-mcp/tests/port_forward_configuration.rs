@@ -240,6 +240,53 @@ async fn surviving_rule_and_coerced_fields_do_not_claim_verification() {
 }
 
 #[tokio::test]
+async fn a_large_accepted_identifier_keeps_the_response_when_readback_is_unusable() {
+    let server = MockServer::start().await;
+    login(&server).await;
+    let id = "x".repeat(60_000);
+    let accepted = envelope(json!([{"_id":id,"controllerExtension":"accepted"}])).to_string();
+    Mock::given(method("POST"))
+        .and(path(PREFIX))
+        .respond_with(ResponseTemplate::new(200).set_body_string(&accepted))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler(&server)
+        .call(
+            &call(
+                "port_forwards.configure",
+                json!({"operation":"create","configuration":{"name":"test"},"confirm":true}),
+            ),
+            None,
+        )
+        .await
+        .expect("accepted response");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["id"], id);
+    assert_eq!(output["submitted"], true);
+    assert_eq!(output["responseStatus"], 200);
+    assert!(output["verified"].is_null());
+    assert_eq!(output["readbackErrorInContent"], true);
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.starts_with("readbackError: ")
+                && text.text.contains("at most 256 bytes"))
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.strip_prefix("responseBody: ") == Some(accepted.as_str()))
+    );
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn oversized_acceptance_and_readback_error_are_complete_in_content() {
     let server = MockServer::start().await;
     login(&server).await;
