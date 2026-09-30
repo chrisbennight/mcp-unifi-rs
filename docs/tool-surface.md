@@ -157,20 +157,29 @@ accepted controller response with a separate validation diagnostic.
 ### `network.inventory.list` and `network.switching.detail`
 
 These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
-`network.inventory.list` accepts a `kind` of `countries`, `deviceTags`,
+`network.inventory.list` accepts a `kind` of `countries`, `sites`, `clients`,
+`devices`, `deviceTags`,
 `lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
 `siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
 The documented `filter` query is available except for WAN interfaces, whose
-endpoint has no filter parameter. Countries are controller-wide; other kinds
+endpoint has no filter parameter. Countries and sites are controller-wide; other kinds
 use the selected site. Each page returns complete controller records, page
-counts, and `nextOffset`. Large pages retain their records in MCP content
-and mark `recordsInContent` in the structured result. Invalid page metadata
+counts, and `nextOffset`. `pageMetadata` preserves all original page fields
+except the data array, which is returned as `records`. Large pages retain
+records and metadata in MCP content, marked by `recordsInContent` and
+`pageMetadataInContent`. Invalid page metadata
 returns the complete controller response with a separate diagnostic.
 
 `network.switching.detail` accepts `kind` (`lag`, `mcLagDomain`, or
 `switchStack`) and the official `id`, returning the complete controller
 record. A large record is carried in MCP content and marked by
 `recordInContent`.
+
+`network.inventory.detail` accepts `kind` (`client`, `device`, or
+`deviceStatistics`) and the official record `id`. It returns the complete
+connected client, adopted device, or latest device statistics record,
+including unknown fields and interface details. Large records remain in
+MCP content with `recordInContent`. Controller errors retain their full bodies.
 
 ### `network.policy.list` and `network.policy.detail`
 

@@ -53,6 +53,7 @@ async fn mount_site(server: &MockServer) {
             "offset": 0, "limit": 100, "count": 1, "totalCount": 1,
             "data": [{"id": SITE_ID, "name": "Default", "internalReference": "default"}]
         })))
+        .with_priority(10)
         .mount(server)
         .await;
 }
@@ -63,6 +64,9 @@ async fn every_documented_inventory_route_returns_full_rows_and_a_continuation()
     mount_site(&server).await;
     let cases = [
         ("countries", "countries", true),
+        ("sites", "sites", true),
+        ("clients", "sites/SITE/clients", true),
+        ("devices", "sites/SITE/devices", true),
         ("deviceTags", "sites/SITE/device-tags", true),
         ("lags", "sites/SITE/switching/lags", true),
         ("mcLagDomains", "sites/SITE/switching/mc-lag-domains", true),
@@ -86,7 +90,8 @@ async fn every_documented_inventory_route_returns_full_rows_and_a_continuation()
         }
         mock.respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "offset": 0, "limit": 1, "count": 1, "totalCount": 2,
-            "data": [{"id": kind, "controllerExtension": {"source": "upstream"}}]
+            "data": [{"id": kind, "controllerExtension": {"source": "upstream"}}],
+            "controllerMetadata":{"fixtureCredential":"metadata-fixture"}
         })))
         .expect(1)
         .mount(&server)
@@ -111,6 +116,12 @@ async fn every_documented_inventory_route_returns_full_rows_and_a_continuation()
             "upstream"
         );
         assert_eq!(result["nextOffset"], 1);
+        assert_eq!(
+            result["pageMetadata"]["controllerMetadata"]["fixtureCredential"],
+            "metadata-fixture"
+        );
+        assert_eq!(result["pageMetadata"]["totalCount"], 2);
+        assert!(result["pageMetadata"].get("data").is_none());
     }
 }
 
@@ -171,6 +182,161 @@ async fn switching_details_preserve_controller_fields_and_upstream_errors() {
         .await
         .expect_err("upstream 404");
     assert!(error.message.contains("upstream lag missing: exact body"));
+}
+
+#[tokio::test]
+async fn complete_client_device_and_statistics_details_use_fixed_routes() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    for (kind, route) in [
+        ("client", "clients/client-1"),
+        ("device", "devices/device-1"),
+        ("deviceStatistics", "devices/device-1/statistics/latest"),
+    ] {
+        let body = format!(
+            r#"{{"id":"fixture","unknownFields":{{"credential":"fixture-value","number":184467440737095516170123}},"interfaces":[{{"unknownPortField":true}}],"kind":"{kind}"}}"#
+        );
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}/sites/{SITE_ID}/{route}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let id = if kind == "client" {
+            "client-1"
+        } else {
+            "device-1"
+        };
+        let output = handler_for(&server)
+            .call(
+                &call("network.inventory.detail", json!({"kind":kind,"id":id})),
+                None,
+            )
+            .await
+            .expect("complete record")
+            .structured_content
+            .expect("structured");
+        assert_eq!(
+            output["record"],
+            serde_json::from_str::<Value>(&body).expect("original JSON")
+        );
+        assert_eq!(
+            output["record"]["unknownFields"]["number"].to_string(),
+            "184467440737095516170123"
+        );
+    }
+}
+
+#[tokio::test]
+async fn large_inventory_metadata_remains_complete_in_content() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let metadata = json!({"fixtureCredential":"m".repeat(60000)});
+    Mock::given(method("GET")).and(path(format!("{PREFIX}/sites/{SITE_ID}/clients")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offset":0,"limit":1,"count":1,"totalCount":1,"data":[{"id":"client-1"}],"unknownMetadata":metadata
+        }))).expect(1).mount(&server).await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "network.inventory.list",
+                json!({"kind":"clients","limit":1}),
+            ),
+            None,
+        )
+        .await
+        .expect("complete metadata");
+    let output = result.structured_content.expect("structured");
+    assert_eq!(output["pageMetadataInContent"], true);
+    let text = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_text())
+        .find_map(|text| text.text.strip_prefix("pageMetadata: "))
+        .expect("metadata content");
+    assert_eq!(
+        serde_json::from_str::<Value>(text).expect("metadata JSON")["unknownMetadata"],
+        metadata
+    );
+}
+
+#[tokio::test]
+async fn inventory_paging_accepts_an_empty_page_after_the_collection() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    Mock::given(method("GET")).and(path(format!("{PREFIX}/sites/{SITE_ID}/devices")))
+        .and(query_param("offset","500000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"offset":500_000,"limit":50,"count":0,"totalCount":1,"data":[],"unknownMetadata":"kept"})))
+        .expect(1).mount(&server).await;
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "network.inventory.list",
+                json!({"kind":"devices","offset":500_000}),
+            ),
+            None,
+        )
+        .await
+        .expect("valid empty page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["records"], json!([]));
+    assert_eq!(output["pageMetadata"]["unknownMetadata"], "kept");
+    assert!(output.get("nextOffset").is_none());
+}
+
+#[tokio::test]
+async fn inventory_detail_errors_and_large_records_remain_complete() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let body = format!("{{\"fixtureCredential\":\"{}\"}}", "x".repeat(60000));
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/clients/client-1")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(&body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = handler_for(&server)
+        .call(
+            &call(
+                "network.inventory.detail",
+                json!({"kind":"client","id":"client-1"}),
+            ),
+            None,
+        )
+        .await
+        .expect("large record");
+    assert_eq!(
+        result.structured_content.expect("structured")["recordInContent"],
+        true
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .any(|text| text.text.contains(&body))
+    );
+    let error_body = " {\"unknownError\":\"exact upstream reason\",\"fixtureCredential\":\"controller-fixture\"} ";
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{PREFIX}/sites/{SITE_ID}/devices/device-1/statistics/latest"
+        )))
+        .respond_with(ResponseTemplate::new(403).set_body_string(error_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = handler_for(&server)
+        .call(
+            &call(
+                "network.inventory.detail",
+                json!({"kind":"deviceStatistics","id":"device-1"}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("upstream rejection");
+    assert!(error.message.contains(error_body), "{}", error.message);
 }
 
 #[tokio::test]

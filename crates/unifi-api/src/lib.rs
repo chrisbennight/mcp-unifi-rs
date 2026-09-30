@@ -40,7 +40,8 @@ pub mod system_log;
 pub mod traffic;
 
 pub use client::{
-    IntegrationClient, NetworkPolicyCollection, SiteInventoryKind, SwitchingDetailKind,
+    IntegrationClient, InventoryDetailKind, NetworkPolicyCollection, SiteInventoryKind,
+    SwitchingDetailKind,
 };
 pub use config::{ControllerConfig, TlsMode};
 pub use error::{ApiError, BoundedMessage};
