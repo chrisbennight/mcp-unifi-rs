@@ -733,7 +733,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::EventsRead,
         "events.read",
-        "Read a complete Network system-log page with fixed startMs/endMs, controller page and pageSize (1-1000). Returns every original record and metadata field, including unknown parameters. Follow nextPage for additional pages; large pages remain in labeled MCP content. Use events.search for compact filtered summaries.",
+        "Read a complete Network system-log page with fixed startMs/endMs, controller page and positive pageSize (default 100). Returns every original record and metadata field, including unknown parameters. Follow nextPage for additional pages; large pages remain in labeled MCP content. Use events.search for compact filtered summaries.",
     ),
     read_spec(
         ToolKind::StatsQuery,

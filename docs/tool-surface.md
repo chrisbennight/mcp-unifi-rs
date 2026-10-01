@@ -955,7 +955,7 @@ rule back and report any field the controller dropped or changed.
 ### Legacy WLAN lifecycle and complete reads
 
 `wlans.list` pages complete legacy WLAN records with `offset` and `limit`
-(1–200, default 50). `wlans.status` takes `id` and returns the full detail
+(positive, default 50). `wlans.status` takes `id` and returns the full detail
 envelope. Controller metadata and configuration values remain available,
 including passphrases and fields outside the compact network view. Collection
 reads are bounded by the transport body limit and fail explicitly if exceeded.
@@ -989,7 +989,7 @@ gateway owns caller authorization and disclosure.
 ### Port-forward lifecycle and complete reads
 
 `port_forwards.list` pages complete legacy records with `offset` and `limit`
-(1–200, default 50). The legacy collection is fetched once within the transport
+(positive, default 50). The legacy collection is fetched once within the transport
 body bound, then the selected records are returned under `response.data`.
 `totalCount` and `nextOffset` describe that collection; controller envelope
 metadata is preserved. An oversized collection fails explicitly rather than
