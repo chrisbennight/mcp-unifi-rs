@@ -105,12 +105,9 @@ async fn mount_site(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
-    // A classic console has no policies, so without this the endpoint's
-    // rejection reaches the caller as an unexplained controller failure and
-    // "this console has no such policy" cannot be told from "this console has
-    // no policies at all".
+async fn classic_mode_retains_the_complete_probe_rejection_for_update_and_delete() {
     let server = MockServer::start().await;
+    let original = serde_json::json!({"message":"feature requires the zone based firewall", "detail":format!("{}probe-tail", "x".repeat(60_000))}).to_string();
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -131,9 +128,7 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/firewall/zones"
         )))
-        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "message": "feature requires the zone based firewall"
-        })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(&original))
         .mount(&server)
         .await;
     // No policy endpoint is mounted: reaching one would fail this test.
@@ -149,17 +144,8 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
         )
         .await
         .expect_err("refused");
-    assert!(
-        error.message.contains("classic firewall"),
-        "{}",
-        error.message
-    );
-    assert!(
-        error.message.contains("zone-based firewall only"),
-        "the refusal must say what this server does support, not name a tool \
-         it no longer has: {}",
-        error.message
-    );
+    assert!(error.message.contains(&original));
+    assert!(error.message.contains("HTTP 400"));
     let delete_error = handler_for(&server)
         .call(
             &delete(&serde_json::json!({"policy": POLICY, "confirm": true})),
@@ -167,7 +153,8 @@ async fn a_classic_console_is_refused_by_name_rather_than_by_a_failed_read() {
         )
         .await
         .expect_err("classic firewall cannot delete a zone policy");
-    assert!(delete_error.message.contains("classic firewall"));
+    assert!(delete_error.message.contains(&original));
+    assert!(delete_error.message.contains("HTTP 400"));
 }
 
 #[tokio::test]

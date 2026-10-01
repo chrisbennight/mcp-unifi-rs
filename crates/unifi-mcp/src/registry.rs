@@ -496,10 +496,9 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "firewall.read",
         "The normalized firewall audit view: zone-based zones and policies \
          with their match semantics, plus port forwards, traffic rules, and \
-         traffic routes. Reads the zone-based firewall only; a console running \
-         the classic firewall is refused by name rather than reported as \
-         having no firewall, and the refusal names the sections that read the \
-         same on either generation. Narrow with section, and continue a \
+         traffic routes. An unsupported zone API returns the original \
+         controller rejection. Port forwards, traffic rules and traffic routes \
+         remain readable on either generation. Narrow with section, and continue a \
          truncated zone or policy section with sectionOffset.",
     ),
     sensitive_read_spec(
