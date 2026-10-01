@@ -1,5 +1,5 @@
 //! Client for the legacy controller API, used only for capabilities the
-//! official Integration API lacks.
+//! official Integration API lacks or reports through a different source.
 //!
 //! The legacy API authenticates with a cookie session from a dedicated local
 //! administrator. Accounts with MFA are unsupported by the upstream login
@@ -55,7 +55,7 @@ const MAXIMUM_PROTECT_DEVICE_IDENTIFIER_BYTES: usize = 256;
 /// Supplying `types` is part of the time-bound contract. Protect currently
 /// ignores `start` and `end` on this private route when the parameter is
 /// absent, so the curated detection surface names the camera event families
-/// it is willing to expose.
+/// selected by this historical detection workflow.
 const PROTECT_DETECTION_TYPES: &[&str] = &[
     "motion",
     "ring",
@@ -348,7 +348,7 @@ impl LegacyClient {
         Ok(row)
     }
 
-    /// One wireless network read once, as both the allowlisted projection and
+    /// One wireless network read once, as both the compact projection and
     /// a fingerprint of every property the controller stores.
     ///
     /// The projection covers a fraction of what a console keeps, so comparing

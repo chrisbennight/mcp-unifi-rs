@@ -1,12 +1,8 @@
 //! Bounded client for a `UniFi` Protect console's official integration API.
 //!
-//! Protect runs on its own console with its own certificate and its own
-//! credential, so this is a separate client rather than another controller
-//! inside the Network one. What it is not is a separate *pattern*: the
-//! official Protect API is the same shape as the Network Integration API —
-//! an API-key header over a versioned prefix — so the transport, the bounded
-//! read, the error vocabulary, and the retry class are all shared rather than
-//! reimplemented.
+//! This client uses the configured Protect origin, TLS policy and API key.
+//! Protect and Network use separate application clients with shared bounded
+//! HTTP transport and retry behavior.
 //!
 //! Typed camera and recorder fields support the common operational views. The
 //! bounded local bootstrap also retains its original response so callers can
@@ -257,8 +253,8 @@ impl ProtectStreamQuality {
     }
 }
 
-/// Existing or newly created stream handles. The URLs grant access to a
-/// camera feed and must be disclosed only through the authorized tool result.
+/// Existing or newly created stream handles. The URLs grant camera feed access;
+/// complete values are returned and the gateway controls disclosure.
 #[derive(Deserialize, Serialize)]
 pub struct ProtectStreamUrls {
     pub high: Option<String>,

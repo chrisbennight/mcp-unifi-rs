@@ -40,8 +40,7 @@ trade the capability away to satisfy a stylistic or speculative concern.
   result. They verify persistence by reading back, because the controller
   acknowledges writes it silently drops. A mutation whose effect no read
   reproduces says what it could establish instead of claiming verification,
-  and returns
-  the unrepeatable value even when those checks fail.
+  and returns the unrepeatable value even when those checks fail.
 - Capability detection is a correctness boundary: an empty result must be
   distinguishable from "this console does not support that API generation"
   (zone-based versus classic firewall in particular).
@@ -60,8 +59,8 @@ trade the capability away to satisfy a stylistic or speculative concern.
 ## Crate boundaries
 
 - `unifi-api` owns the bounded HTTP transports (official Integration API and
-  legacy controller API), allowlisted response models, and per-controller
-  capability detection.
+  legacy controller API), compact response models, complete source records,
+  and per-controller capability detection.
 - `unifi-mcp` owns MCP schemas, normalization, dispatch, annotations,
   and the executable tool/classification registry.
 - `unifi-server` owns configuration, bounded environment-injected secrets,

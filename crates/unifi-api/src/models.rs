@@ -1,11 +1,9 @@
-//! Allowlisted response and request models for the controller APIs: the
-//! official Integration API and, where a model notes it, the legacy API.
+//! Typed request models and compact response projections for the controller APIs.
 //!
-//! Response models deliberately omit `deny_unknown_fields`: the controller
-//! adds fields across releases and this crate exposes only the allowlisted
-//! subset. Request models carry the parameter set the tool surface consumes;
-//! optional upstream parameters are added with the tools that need them,
-//! verified against the console-served API contract.
+//! Response projections accept unknown fields so controller extensions do not
+//! break compact workflows. Complete record readers retain the selected source
+//! fields independently. Request models encode the parameter sets advertised by
+//! typed tools and are checked against the published API contracts.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -66,7 +64,7 @@ pub struct DeviceSummary {
     pub firmware_version: Option<String>,
 }
 
-/// Full detail for one adopted device, including port and radio tables.
+/// Compact detail for one adopted device, including port and radio tables.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceDetail {

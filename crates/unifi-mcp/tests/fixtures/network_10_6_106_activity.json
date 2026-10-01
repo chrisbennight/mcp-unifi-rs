@@ -1,6 +1,6 @@
 {
   "client_usage_by_app": [
-    {"client":{"mac":"02:00:00:00:00:01","name":"Synthetic server","fingerprint":{"secret":"excluded"}},"usage_by_app":[{"application":41,"category":3,"bytes_received":400,"bytes_transmitted":20,"total_bytes":420,"activity_seconds":60},{"application":185,"category":20,"bytes_received":200,"bytes_transmitted":30,"total_bytes":230,"activity_seconds":90}]},
+    {"client":{"mac":"02:00:00:00:00:01","name":"Synthetic server","fingerprint":{"model":"synthetic-device-model"}},"usage_by_app":[{"application":41,"category":3,"bytes_received":400,"bytes_transmitted":20,"total_bytes":420,"activity_seconds":60},{"application":185,"category":20,"bytes_received":200,"bytes_transmitted":30,"total_bytes":230,"activity_seconds":90}]},
     {"client":{"mac":"02:00:00:00:00:02","name":"Synthetic desktop"},"usage_by_app":[{"application":185,"category":20,"bytes_received":100,"bytes_transmitted":10,"total_bytes":110,"activity_seconds":30}]}
   ],
   "total_usage_by_app": [

@@ -325,7 +325,7 @@ async fn pagination_coordinates_are_sent_and_the_envelope_is_decoded() {
 }
 
 #[tokio::test]
-async fn devices_clients_and_statistics_expose_allowlisted_fields() {
+async fn devices_clients_and_statistics_decode_compact_fields() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/sites/s1/devices")))
@@ -877,7 +877,7 @@ async fn capability_detection_classifies_both_firewall_generations() {
 }
 
 #[tokio::test]
-async fn firewall_policies_decode_the_allowlisted_projection() {
+async fn firewall_policies_decode_the_compact_projection() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/sites/s1/firewall/policies")))

@@ -1,30 +1,20 @@
-//! Bounded HTTP clients and allowlisted response models for `UniFi` controllers.
+//! Bounded HTTP clients, compact models, and complete controller records.
 //!
-//! This crate owns the upstream transports and nothing model-visible:
+//! [`IntegrationClient`] uses the official Network Integration API with an
+//! environment-supplied API key. [`LegacyClient`] uses a cookie session for
+//! legacy diagnostics and configuration. [`protect::ProtectClient`] implements
+//! the official Protect Integration API.
 //!
-//! - [`IntegrationClient`], a client for the official Network Integration API
-//!   (`X-API-KEY`, stateless), the primary backend;
-//! - per-controller capability detection ([`capability`]), so a consumer can
-//!   distinguish "this console does not support that" from an empty result;
-//! - [`LegacyClient`], a cookie-session client (with CSRF echo) for the
-//!   legacy controller API, used only for capabilities the official API
-//!   lacks.
+//! Compact models support operational summaries and readback verification.
+//! Complete record readers retain controller fields and JSON numeric text.
+//! Controller error bodies and failed decode bodies remain available in full
+//! within the transport bound. Capability detection distinguishes unsupported
+//! API generations from empty results while retaining original rejections.
 //!
-//! Responses decode into typed models that tolerate unknown upstream fields.
-//! Controller error bodies and failed decode bodies remain available as
-//! bounded text.
-//!
-//! The [`collection`] interface preserves complete fixed traffic reports
-//! for direct export to operator-owned storage. It is not currently wired to
-//! an MCP tool.
-//!
-//! Another deliberate exception: a zone-based firewall policy is read and written
-//! as its raw record, because the upstream interface offers no partial update
-//! and a model can only resend what it understands — including a number model,
-//! so each property keeps its original JSON text rather than being parsed and
-//! re-serialized. That record travels back to the controller without being
-//! interpreted. The controller's original response can also be returned to a
-//! caller when the tool needs the full policy record.
+//! The [`collection`] interface exports complete fixed traffic reports to
+//! operator-owned storage. On-demand MCP traffic reads expose the same sources.
+//! Firewall state updates preserve unchanged controller properties before
+//! replacement; authoring operations use typed controller request contracts.
 
 pub mod capability;
 mod client;

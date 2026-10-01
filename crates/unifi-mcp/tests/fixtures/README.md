@@ -19,6 +19,7 @@ Tests serve these fixtures on loopback and never query a live controller.
 preserves the separate client/application tables, numeric classification IDs,
 and directional byte fields. Tests also preserve the graph timestamp shape and
 the official taxonomy's filtered response whose total still names the full
-catalog. Unrelated fingerprints and configuration are excluded from MCP output.
+catalog. Compact attribution uses the modeled fields. Complete traffic source
+reads retain unknown fingerprints and configuration reported by the selected API.
 See [traffic history](../../../../docs/traffic-history.md) for the live source
 evidence and remaining accounting limitations.

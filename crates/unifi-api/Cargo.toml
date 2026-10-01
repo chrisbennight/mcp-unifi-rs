@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Bounded HTTP clients and allowlisted response models for UniFi controllers"
+description = "Bounded HTTP clients with compact models and complete source records for UniFi controllers"
 
 [dependencies]
 base64.workspace = true

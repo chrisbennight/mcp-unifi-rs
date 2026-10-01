@@ -706,10 +706,10 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
 async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
     let observed: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/network_10_6_106_traffic.json"))
-            .expect("sanitized controller fixture");
+            .expect("synthetic controller fixture");
     let cases = [
         (
-            serde_json::json!([{"by_app":[{"app":5,"cat":4,"rx_bytes":0,"tx_bytes":0}],"by_cat":[],"secret":"do-not-return"}]),
+            serde_json::json!([{"by_app":[{"app":5,"cat":4,"rx_bytes":0,"tx_bytes":0}],"by_cat":[],"extension":"additional-controller-field"}]),
             "reported",
             1,
             0,
@@ -775,7 +775,7 @@ async fn dpi_coverage_distinguishes_wrapped_missing_empty_and_zero_data() {
                 .expect("window")
                 .contains("Not supplied")
         );
-        assert!(!output.to_string().contains("do-not-return"));
+        assert!(!output.to_string().contains("additional-controller-field"));
         if status == "reported" {
             assert_eq!(output["topApplications"][0]["rxBytes"], 0);
             assert_eq!(output["topApplications"][0]["txBytes"], 0);

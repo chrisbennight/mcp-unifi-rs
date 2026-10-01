@@ -757,7 +757,7 @@ async fn wired_counter_selection_preserves_missing_values_and_pagination() {
 async fn observed_network_traffic_fields_preserve_large_wired_and_wireless_counters() {
     let observed: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/network_10_6_106_traffic.json"))
-            .expect("sanitized controller fixture");
+            .expect("synthetic controller fixture");
     let server = console_fixture().await;
     Mock::given(method("GET"))
         .and(path("/proxy/network/api/s/default/stat/sta"))

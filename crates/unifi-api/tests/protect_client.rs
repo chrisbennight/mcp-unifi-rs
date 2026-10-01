@@ -350,7 +350,7 @@ async fn cameras_decode_the_complete_v7_1_87_official_shape() {
 }
 
 #[tokio::test]
-async fn cameras_tolerate_and_decode_allowlisted_version_extensions() {
+async fn cameras_tolerate_and_decode_version_extensions() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PREFIX}/cameras")))

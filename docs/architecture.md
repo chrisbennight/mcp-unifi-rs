@@ -34,30 +34,25 @@ quiet windows, closure, failure, and count or byte limits separately.
 ## Crates
 
 - **`unifi-api`** — bounded HTTP clients for both UniFi API generations,
-  allowlisted response models, and per-controller capability detection
+  compact response models, complete source records, and per-controller
+  capability detection
   (application version, and whether the firewall is zone-based). Consumers can
   always distinguish "unsupported on this console" from an empty result.
 - **`unifi-mcp`** — everything model-visible: typed flat parameter structs
   rejecting unknown fields, normalized bounded responses, the executable tool
-  registry with MCP annotations, dispatch, and the mutation
-  safety pipeline (preview/confirm, read-back verification).
+  registry with MCP annotations, dispatch, and mutation
+  handling (preview/confirm, read-back verification).
 - **`unifi-server`** — environment configuration, gateway or direct bearer
   authentication, bounded stdio, the stateless Streamable HTTP mount, `/healthz`, the
   `--healthcheck` probe, and gateway manifest emission.
 
 ## Tool surface
 
-Reads: `network.overview`, `clients.search`, `clients.context`,
-`devices.search`, `devices.status`, `devices.pending.list`, `wifi.diagnose`,
-`firewall.read`, `networks.read`, `networks.list`, `networks.status`, `radius_profiles.list`,
-`network.inventory.list`, `network.switching.detail`, `network.policy.list`,
-`network.policy.detail`, `wifi.broadcasts.list`,
-`wifi.broadcasts.status`, `events.search`, `stats.query`, `cameras.search`,
-`cameras.status`, `cameras.settings.read`, `cameras.snapshot`,
-`protect.overview`, `protect.events`, `protect.event.thumbnail`,
-`protect.devices.list`, `protect.devices.status`, `protect.users.list`,
-`protect.users.status`, `protect.viewers.list`, `protect.viewers.status`,
-`protect.liveviews.list`, `protect.liveviews.status`.
+The executable `TOOL_REGISTRY` in `unifi-mcp` defines tool names, schemas,
+annotations and classifications. [Tool contracts](tool-surface.md) describe the
+workflows. Compact searches and diagnostics provide summaries; inventory,
+policy and source reads provide complete selected controller records and
+original metadata. Large fields remain available in labeled MCP content.
 
 `networks.configure` creates, replaces, or deletes complete typed official
 network configurations, including the controller's force deletion option.
@@ -75,27 +70,10 @@ with complete accepted responses and bounded observation.
 including security, private keys, RADIUS, filtering, schedules, and radio
 settings. It retains accepted responses and bounded controller observation.
 
-Mutations (preview-then-confirm; verified by read-back where the write
-changes fields, by observation where it does not — see Write safety).
-`wlans.update`, `clients.control` (block, unblock, reconnect),
-`devices.control` (restart, locate, port cycle), `devices.adopt`,
-`devices.remove`, `guests.authorize`,
-`dns.policies.configure`, `traffic.matching_lists.configure`,
-`port_forwards.update` (name, state, source, target, ports, protocol), `firewall.policies.update`
-(enable, disable; zone-based consoles), `firewall.policies.delete`,
-`cameras.pos.transaction` (camera event ingestion),
-`protect.viewers.settings.update` (viewer name and live-view assignment),
-`protect.liveviews.configure` (create or update a live-view layout),
-`protect.devices.action` (documented siren, relay, speaker, and alarm-hub actions),
-`protect.devices.settings.update` (documented non-camera device settings),
-`protect.arm_profiles.configure` (arm-profile lifecycle and selection),
-`protect.alarms.action` (enable, disable, and alarm-manager webhook),
-`vouchers.create` (mint hotspot
-vouchers).
-
-The device actions are one tool for the reason the client actions are: they
-are one decision at one risk level about one device, and a curated surface
-prefers a narrow typed action over three tools differing by a verb.
+Mutations preview by default and execute when the caller confirms. Typed
+lifecycle tools group creation, update and deletion of related resources.
+Action tools describe effects and return accepted responses plus bounded
+readback or observation. The gateway decides who may call them.
 
 `port_forwards.update` sends only the fields the caller names. A preview names
 the requested changes, and a confirmed update reads the rule back to show
@@ -107,15 +85,11 @@ Some writes send a partial update: a request naming `enabled` changes
 `enabled` and leaves every other property alone. Other official Network
 resources use complete replacement bodies.
 
-The zone-based firewall has no equivalent. Its Integration API offers a `PATCH`
-that accepts only the policy's logging flag — not the operation an operator
-needs — and a `PUT` whose required body spans the policy's action, source,
-destination, protocol scope, logging, name, and enabled state together.
-
-So `firewall.policies.update` resends the policy exactly as it was just read,
-altering only the switch. Nothing interprets the record in between, which is
-the point: a write that sent back only what this server models would drop the
-rest, on the object that decides what the network permits.
+The zone-based firewall Integration API supports a logging-only `PATCH` and
+requires a complete policy for `PUT`. `firewall.policies.update` uses `PATCH`
+for logging-only changes and resends the original policy for evaluation changes,
+changing only requested flags. `firewall.policies.configure` provides full
+creation and replacement through the published typed policy contract.
 
 Each property travels as the bytes the controller sent. Complete response
 values preserve numeric precision, but parsing and serializing can still change
@@ -125,39 +99,32 @@ property text; parsed values are used only to inspect the properties it changes.
 Two consequences follow, and the tool states both rather than leaving them to
 be discovered. It cannot merge, so an edit made elsewhere between the read and
 the write is overwritten. And a confirmed call that would change nothing does
-not write at all, because a resend that cannot move the switch is only a
-chance to clobber.
+not write at all, because no upstream change is needed.
 
 Names, parameters, and response contracts are recorded in
 `docs/tool-surface.md` as each tool lands.
 
 ## Write safety
 
-A controller acknowledges writes whose fields it silently discards, so an
-accepted write proves nothing. Every write tool shares one path:
+Controllers can acknowledge writes whose fields they discard. Acceptance and
+observed persistence are reported separately. Mutation workflows use these
+contracts:
 
 - **Preview by default.** A call without `confirm` reaches no write endpoint
   and reports the fields that would move, with the consequences worth knowing
   first. A field already holding the requested value is not listed.
-- **Read-back verification, for a write that changes fields.** After writing,
-  the resource is re-read and each requested field reported as `persisted`,
-  `dropped`, or `coerced`. Fields that moved without being requested are
-  listed separately, compared over the controller's whole record rather than
-  the modeled subset, so a write that clears an unmodeled property is visible.
-  `verified` is true only when every requested field persisted and nothing
-  else moved.
-- **One identity across two APIs.** Guest tools take the hardware
-  address the legacy client reads report and finds the Integration API client
-  carrying the same address, because the authorization endpoint addresses a
-  client by the Integration id and no read on this surface emits one. That a
-  client has the same hardware address in both APIs is an assumption about
-  the controller, not something either API states; it is the only place the
-  two client identities are joined, and a mismatch surfaces as an address the
-  controller does not know rather than as a wrong client being authorized.
-- **Silence where there is nothing to observe.** Guest authorization changes
-  no field the controller exposes, so the result says the effect cannot be
-  read back rather than presenting an accepted request as a verified outcome.
-  A tool that cannot check its own work says so.
+- **Read-back verification.** Field update tools re-read the resource and
+  classify requested fields as `persisted`, `dropped`, or `coerced`. Their
+  complete-record comparison also identifies unrequested changes. Lifecycle
+  tools compare the requested configuration and resource identity, or observe
+  absence after deletion. Their results retain accepted responses and readback
+  records or errors, so callers can distinguish acceptance from persistence.
+- **Guest identity and readback.** Guest workflows take a hardware address and
+  resolve the controller's Integration API client ID. They retain accepted
+  authorization responses and read back the client access state and limits.
+  A missing or mismatched identity, failed read or incomplete observation is
+  reported without claiming verification. Complete client inventory readers
+  also expose Integration API IDs.
 - **Observation, for an action that changes no field.** Blocking or
   disconnecting a client changes nothing this server models, so there is
   nothing to classify and no `verified` flag to earn. Such a tool reports what
@@ -166,7 +133,7 @@ accepted write proves nothing. Every write tool shares one path:
   action succeeded. Claiming field-level verification where none exists would
   be the same false confidence the classification exists to prevent.
 - **Response fidelity.** Selected controller values and complete accepted
-  controller error bodies reach the caller without credential substitution. The
+  controller error bodies reach the caller faithfully. The
   gateway controls caller access. A non-UTF-8 error body is labeled and encoded
   as base64 so its original bytes can be recovered.
 - **Stable selection.** A write addresses a resource by its controller id or
@@ -186,44 +153,44 @@ reads each identified voucher back to compare its id and code. A failed
 readback is reported alongside the creation response. `vouchers.search` and
 `vouchers.status` let callers retrieve codes later without minting again.
 
-The creation response preserves rows even when a batch check fails.
-Input
-bounds are checked before minting. Complete creation responses remain
-available, including unusually large records. Voucher reads also recover
-codes in caller-selected pages.
+The creation response preserves rows even when a batch check fails. Input
+bounds are checked before minting. Complete accepted creation responses
+remain available, including unusually large records. Voucher reads also
+recover codes in caller-selected pages.
 
 ## Response bounds
 
 Every bound on data a caller asked for is caller-pageable, fail-loud, or
 explicitly signaled in the result; a silent subset is a defect (see the
-security boundary in `AGENTS.md`). The table records each bound's contract
-and why its value was chosen, so changing one is a one-line reviewed edit.
+security boundary in `AGENTS.md`). The table records observable bounds and
+recovery paths. Resource bounds do not establish upstream retention or
+capability limits.
 
 | Bound | Value | Applies to | Contract | Signal / recovery | Rationale |
 |---|---|---|---|---|---|
 | Search page limit | 1-200, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset` | one page stays well under the response budget |
-| Filter length | 128 UTF-8 bytes | compact search filters | fail-loud | input error; surrounding whitespace normalized | bounds local matching work; complete source reads remain available |
+| Search filter length | 128 UTF-8 bytes | compact search filters | fail-loud | input error; surrounding whitespace normalized | bounds local matching work; complete inventory reads have their own typed filters |
 | Voucher creation request | native API field ranges; complete serialized body at most 1 MiB | vouchers.create | fail-loud before controller access | error names the invalid native field or request bound | labels are forwarded unchanged; count and bandwidth fields match the upstream contract |
 | Structured content formatting target | 48 KiB | formatters that move large fields to labeled MCP content | complete values preserved | `...InContent` flags locate moved fields; structured results may exceed the target | avoids repeating large values in structured and text content |
-| Device inventory scan | 1000 rows | devices.*, AP name joins | signaled | `inventoryTruncated`; status selector error names the ceiling | order of magnitude above any home site |
+| Device inventory scan | 1000 rows | compact device searches and AP name joins | signaled | `inventoryTruncated`; complete inventory reads remain caller-pageable | bounds diagnostic scans and joining work |
 | Firewall zone scan | 400 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: zones` and `sectionOffset` from `nextSectionOffset` | ceiling-limited section still fits the budget |
 | Firewall policy scan | 200 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: policies` and `sectionOffset` from `nextSectionOffset` | full policy rows near the budget at this count |
-| AP detail scan | 16 devices | wifi.diagnose | signaled | `accessPointsTruncated`; client-carrying devices scanned first | one upstream call per device makes this the fan-out bound of the whole surface. Devices inside the inventory scan are reachable through `devices.search` and `devices.status`; devices beyond that scan are reachable through neither, which the inventory bound's own signal reports |
-| Rogue AP list | 100 rows | wifi.diagnose | signaled | `rogueApsTruncated` | dense neighborhoods exceed useful review length |
+| AP detail scan | 16 devices | wifi.diagnose | signaled | `accessPointsTruncated`; client-carrying devices scanned first | one upstream call per device makes this the fan-out bound of the whole surface. Complete adopted-device inventory pages remain available through `network.inventory.list` |
+| Rogue AP list | 100 rows | wifi.diagnose | signaled | `rogueApsTruncated`; `network.source.read` pages complete neighboring AP records | bounds diagnostic output; omissions are explicitly signaled |
 | Weak-client list | 50 rows | wifi.diagnose | declared top-N | "the 50 weakest, worst first" is the contract | diagnosis needs the worst cases, not a census |
-| Port table | 128 rows | devices.status, per device | signaled | `portsTruncated` | largest real switches are 52 ports |
-| Radio table | 16 rows | devices.status, wifi.diagnose | signaled | `radiosTruncated` | real access points carry 2-4 radios |
+| Port table | 128 rows | devices.status, per device | signaled | `portsTruncated` | bounds the compact status table; complete device statistics remain available |
+| Radio table | 16 rows | devices.status, wifi.diagnose | signaled | `radiosTruncated` | bounds the compact diagnostic table; complete source records remain available |
 | Recent client events | 20 rows | clients.context | signaled | `recentEventsTruncated` when more matches were omitted | context summarizes the bounded site-wide scan |
 | Client-event scan | 200 rows over 24 hours | clients.context | signaled | `recentEventsTruncated` when controller totals exceed the scan | one bounded system-log page balances freshness against fan-out |
 | AP-name join | inherits device inventory scan | clients.search, clients.context | signaled | `apLookupTruncated`; wifi.diagnose folds it into `accessPointsTruncated` | a join can only be as complete as its scan |
-| Event fetch window | 1000 system logs | events.search | signaled | `fetchWindowTruncated` when controller totals exceed the scan | narrow time or severity to reduce the upstream result |
+| Event fetch window | 1000 system logs | events.search | signaled | `fetchWindowTruncated`; `events.read` pages complete source records | bounds compact search work |
 | Protect event page | 1-200 rows plus one lookahead, default 50 | protect.events | caller-paged | `nextCursor` freezes the window and filters, then advances by a time key without splitting an equal-timestamp group; an oversized group fails loudly | each call stays within the response budget and never presents a bounded prefix as complete |
-| Protect event window | ordered, default latest 24 h | protect.events | caller-chosen | explicit `start`/`end` and continuation | page and transport bounds apply independently of history duration |
+| Protect event window | positive relative hours or ordered fixed bounds, default latest 24 h | protect.events | caller-windowed | invalid bounds fail before login; controller responses determine retained history | row and transport bounds limit each call |
 | Event message text | 256 chars | events.search, clients.context | marked | `…` appended only when cut | one line of context, never a silent excerpt |
 | Overview event counts | two one-row queries over 24 hours | network.overview | controller totals | `recentEvents` gives the window, total, and HIGH/VERY_HIGH count | response totals avoid count saturation; the two reads are not atomic |
-| Network event window | positive hours, default 24 | events.search | caller-chosen | ordered timestamps | system-log pages have a separate row bound |
-| WAN report window | positive hours, default 24 | stats.query, traffic.read | caller-chosen | ordered timestamps | transport bounds report oversized responses explicitly |
-| Top applications | 1-50, default 10 | stats.query | caller-chosen | validated | ranking beyond 50 stops being "top" |
+| Network event window | positive hours, default 24 | events.search | caller-chosen | ordered bounds; events.read provides complete controller pages | page and transport bounds limit each call |
+| WAN report window | positive hours or ordered hourly bounds, default 24 h | stats.query, traffic.read | caller-chosen | controller responses determine supported history | transport bounds limit each response |
+| Top applications | 1-50, default 10 | stats.query | caller-chosen | validated; `traffic.read` and `network.source.read` provide complete Activity and DPI source records | bounds ranking output |
 | Weak-signal floor | -100..-30 dBm, default -75 | wifi.diagnose | caller-chosen | validated | -75 dBm is the usual roaming threshold |
 | Transport response | 4 MiB | every upstream read | fail-loud | bounded-read error | protects the process from a hostile upstream |
 | Client id resolution scan | 1000 rows | guests.authorize | fail-loud | a scan that ended at its ceiling says the address may exist beyond it, rather than reporting it unknown | the client reads address clients by hardware address while the authorization endpoint needs the controller's own id |
