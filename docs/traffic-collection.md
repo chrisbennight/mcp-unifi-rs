@@ -67,7 +67,7 @@ sink requests have timeouts; cancellation interrupts pending network work.
 | `UNIFI_MCP_COLLECTION_STATE_DIR` | required when enabled | Persistent service-owned state directory |
 | `UNIFI_MCP_COLLECTION_CADENCE_SECONDS` | `300` | Delay between cycles, 60–3600 seconds |
 | `UNIFI_MCP_COLLECTION_DELAY_SECONDS` | `600` | Settlement delay after an hour ends, 0–86400 seconds |
-| `UNIFI_MCP_COLLECTION_HISTORY_HOURS` | `24` | Requested recovery window, 1–168 hours; does not assert that the controller retains it |
+| `UNIFI_MCP_COLLECTION_HISTORY_HOURS` | `24` | Recovery window, 1–168 hours; bounds the worker's in-memory hourly scheduling state, independently of API history windows |
 | `UNIFI_MCP_COLLECTION_CORRECTION_HOURS` | `3` | Re-read recent hours, 1–history hours |
 | `UNIFI_MCP_COLLECTION_INTERVALS_PER_CYCLE` | `4` | Maximum intervals per cycle, 1–24 |
 
@@ -162,8 +162,8 @@ also stored in `unifi_interval` for dashboard use.
 
 Traffic records and credentials are excluded from this status file. Protect the
 state directory nevertheless: `pending.json` holds the complete report. Reading
-the destination or interactive MCP reports remains governed by downstream access
-policy; collection does not introduce privacy modes or alter MCP authorization.
+the destination is governed by the storage service; the gateway governs
+interactive MCP reads.
 
 ## Grafana queries
 

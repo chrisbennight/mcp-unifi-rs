@@ -515,8 +515,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          local device, connection, recording, audio, and feature state when a \
          local session is configured. Paged and bounded. Hardware-model and \
          class filters fail explicitly when their source is unavailable. A \
-         console with no Protect integration API is \
-         refused rather than reported as having no cameras.",
+         missing Protect integration API returns the original controller error.",
     ),
     sensitive_read_spec(
         ToolKind::CamerasStatus,

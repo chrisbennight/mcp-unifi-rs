@@ -3610,10 +3610,8 @@ struct PortForwardsUpdateOutput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct GuestsAuthorizeInput {
-    /// MAC address of the client, as `clients.search` reports it. The
-    /// controller's own client id is not accepted because no tool on this
-    /// surface reports one: the client reads come from the legacy API, which
-    /// addresses clients by hardware address.
+    /// MAC address of the client, as `clients.search` reports it. This workflow
+    /// resolves the corresponding Integration API client id before authorizing.
     client: String,
     time_limit_minutes: Option<u64>,
     data_usage_limit_m_bytes: Option<u64>,
@@ -4096,9 +4094,7 @@ struct VoucherChecks {
     all_identified: bool,
     /// Whether every code differs from every other.
     all_distinct: bool,
-    /// Character length of the codes, or the differing lengths when they are
-    /// not uniform. Reported rather than judged: the controller decides the
-    /// format, and this server should not refuse a batch for being unfamiliar.
+    /// Character lengths of the returned codes. The controller defines their format.
     code_lengths: Vec<usize>,
 }
 
@@ -12370,11 +12366,7 @@ fn voucher_id(raw: &str) -> Result<&str, McpError> {
     Ok(id)
 }
 
-/// The batch a request describes, or the reason it cannot be minted.
-///
-/// Everything decidable from the request alone is decided here, before any
-/// controller call. A batch refused after minting is credentials nobody can
-/// reach, which is the one outcome worse than not minting at all.
+/// Validate native voucher fields before controller access.
 fn voucher_batch(input: &VouchersCreateInput) -> Result<VoucherBatch, McpError> {
     if !(1..=VOUCHER_BATCH_CEILING).contains(&input.count) {
         return Err(McpError::invalid_params(

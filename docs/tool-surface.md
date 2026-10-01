@@ -13,12 +13,11 @@ these names, descriptions, and classifications; this page explains them.
 
 ## Reads
 
-Every read is annotated read-only, idempotent, and non-destructive, and is
-classified `low` risk. Some additionally carry a sensitive-result label:
-`firewall.read`, `networks.read`, `networks.list`, `networks.status`, `radius_profiles.list`,
-`devices.pending.list`, the Network inventory, switching detail, and policy
-reads, the official Wi-Fi broadcast reads, and Protect reads.
-The gateway decides who can receive these controller values.
+Reads are annotated read-only, idempotent, and non-destructive. Most are
+classified `low` risk. `cameras.streams.list`, `vouchers.search`, and
+`vouchers.status` carry `high` risk metadata because they return usable access
+credentials. Configuration, source and Protect records also carry sensitivity
+metadata in the executable registry. The gateway decides caller access.
 
 ### `network.overview`
 
@@ -835,8 +834,8 @@ it.
 | `devices.adopt` | no | yes | yes |
 | `devices.remove` | no | no | yes |
 | `acl.rules.configure` | no | yes | yes |
-| `acl.rules.ordering.configure` | no | yes | yes |
-| `firewall.policies.ordering.configure` | no | yes | yes |
+| `acl.rules.ordering.configure` | yes | yes | yes |
+| `firewall.policies.ordering.configure` | yes | yes | yes |
 | `dns.policies.configure` | no | yes | yes |
 | `networks.configure` | no | yes | yes |
 | `wifi.broadcasts.configure` | no | yes | yes |
@@ -1032,45 +1031,19 @@ to labeled MCP content with `responseBodyInContent`. An oversized voucher view
 also moves intact to content with `vouchersInContent`; issued codes remain
 available without repeating creation.
 
-Creation checks report whether the returned count matches, whether each voucher
-carries a nonempty ID and code, and whether codes are distinct. Code lengths
-are observations; the controller defines the format. Creation also reads each
-identified voucher back and sets `verified`
-only when the count matches and every id and code matches. A failed readback is
-reported with the creation response in `readbackErrors`, with the voucher id
-and complete controller response or error. `readbackComplete` says whether verification
-reached the end of the returned batch. A deadline that stops later reads is
-named in `readbackStopReason`; those
-vouchers remain reachable through `vouchers.status` or `vouchers.search`
-without minting the batch again.
-Large errors move to a separate text content block, signaled by
-`readbackErrorsInContent`. Issued codes remain in the structured result or,
-for a large voucher view, in content marked by `vouchersInContent`.
+Creation reports count, presence of identities and codes, distinctness, and
+code lengths. Code strings are returned unchanged; the controller defines their
+format. Each identified voucher is read back. `verified` requires the requested
+count and matching identities and codes. `readbackErrors` retains complete
+failures. `readbackComplete` reports whether verification reached every row;
+`readbackStopReason` names a deadline that interrupted it. Large errors use
+labeled content with `readbackErrorsInContent`.
 
-**Every code the controller supplied comes back whether or not those checks
-pass.** A row with no code keeps that field absent rather than inventing an
-empty code. From the moment the request succeeds the vouchers exist on the
-controller, and withholding their
-codes because something looked wrong would create guest access nobody can use
-and nobody can find. A failed check is reported alongside the codes, never
-instead of them. A row the controller returned without an identity is reported
-the same way — the identity check exists to say so, which it can only do if
-that row survives to be reported.
-
-The guarantee is about what this server receives. A response that never
-arrives — a timeout, a reset connection, a body past the transport's read
-ceiling — cannot be delivered by any design, and the vouchers it described
-exist on the controller regardless. The ceiling is orders of magnitude above a
-full batch of real vouchers and is what keeps a hostile upstream from
-exhausting this process; trading that away would not make delivery certain, it
-would only move the failure.
-
-Complete accepted creation responses remain available, including unusually
-large batches. `responseStatus` and `responseBody` retain the accepted status
-and original body, including names, timestamps and unknown fields. Large bodies
-use labeled MCP content with `responseBodyInContent`; the voucher summary and
-verification results remain available. Voucher list and detail reads can also
-retrieve their codes.
+The complete accepted creation response and issued codes remain available when
+readback fails. Missing fields stay absent. A transport failure or an exceeded
+body bound is reported explicitly; creation is never replayed after an
+ambiguous outcome. Callers can inspect identified vouchers through
+`vouchers.status` or `vouchers.search`.
 
 Native field ranges and the complete request body bound are checked before
 minting. The controller decides whether the requested combination is supported;
@@ -1211,7 +1184,8 @@ fields. A confirmed deletion returns the accepted `responseStatus` and
 explicit `InContent` markers. The gateway governs caller access to sensitive
 results.
 
-## Remaining rule workflows
+## Rule workflow selection
 
-Creation, ordering, and the remaining rule lifecycle operations are tracked
-in the Network rule issue.
+Use `network.policy.list/detail` for complete policy records. The typed
+configuration tools above provide lifecycle and ordering operations; narrow
+flag updates remain available for changes that preserve the existing record.

@@ -135,7 +135,7 @@ async fn client_totals_are_useful_paginated_and_reconciled_over_identical_window
         false
     );
     assert!(!output.to_string().contains("fingerprint"));
-    assert!(!output.to_string().contains("excluded"));
+    assert!(!output.to_string().contains("synthetic-device-model"));
     input["offset"] = json!(1);
     let page = query(&server, input.clone()).await;
     assert_eq!(page["activity"]["clients"][0]["rxBytes"], 100);

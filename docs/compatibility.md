@@ -28,12 +28,14 @@ succeed.
 
 ## Supported versions
 
-The compatibility target is deliberately limited to these application versions
-on UniFi OS consoles. Other versions and standalone Network deployments are
-not supported targets. We do not maintain fallbacks for retired event and alarm
-APIs.
+The published route and request-schema baseline is Network v10.4.57 and Protect
+v7.3.70. Loopback fixtures cover those Integration API contracts and the fixed
+legacy routes. The table records earlier live read checks separately; it does
+not establish that every current tool is available on those installed versions.
+Standalone end-to-end deployment remains unverified. Retired event and alarm
+routes are not used as fallbacks.
 
-| Application | Supported target | Live evidence |
+| Application | Version observed | Live evidence |
 | --- | --- | --- |
 | UniFi Network | 10.6.106 | Application version, local login, subsystem health, connected-client reads, and system-log reads/count filters checked on 2026-09-25 |
 | UniFi Protect | 7.2.105 | `protect.overview` with public inventory and local-session enrichment checked on 2026-09-25 |
@@ -50,7 +52,7 @@ and the Network API catalog are references for public endpoints. Local-session
 routes require separate testing when a console upgrade changes them.
 
 The server reports application versions and checks capabilities such as the
-firewall generation. Those checks do not extend the supported version range.
+firewall generation. The upstream response determines route availability.
 An absent endpoint, authentication failure, malformed response, and an empty
 inventory are different outcomes; failures are not converted into an empty
 list. File a compatibility issue with the application version, tool, and
@@ -65,7 +67,7 @@ and [aiounifi's client model](https://github.com/Kane610/aiounifi/blob/master/ai
 Bounded read-only checks on Network 10.6.106 on 2026-09-27 confirmed that
 wired clients supplied `wired-tx_bytes` and `wired-rx_bytes` without the generic
 byte fields. Wireless clients supplied `tx_bytes` and `rx_bytes`. A
-[sanitized fixture](../crates/unifi-mcp/tests/fixtures/README.md) preserves these
+[synthetic fixture](../crates/unifi-mcp/tests/fixtures/README.md) preserves these
 field shapes with synthetic identifiers and numeric values.
 
 The same controller returned `{"meta":{"rc":"ok"},"data":[{}]}` from
@@ -118,11 +120,12 @@ accounting. No controller configuration was changed during discovery.
 | Guest authorization and its client ID resolution | Network Integration API |
 | Device restart and port power cycle | Network Integration API |
 | Zone-based firewall zones/policies and hotspot vouchers | Network Integration API |
-| Health, connected-client inventory/context, networks and wireless networks | Network legacy API |
+| Official client and device inventory, networks, Wi-Fi broadcasts, ACL/DNS/traffic lists and lifecycle | Network Integration API |
+| Health, connected-client context and complete diagnostic source records | Network legacy API |
 | Wireless updates, client block/unblock/reconnect, device locate | Network legacy API |
 | Port forwards, traffic rules/routes, historical statistics, neighboring APs | Network legacy API |
 | Network event search, recent client events, overview event counts | Network v2 system-log API, using the local session |
-| Protect camera and recorder identity, snapshots, PTZ, RTSPS streams, and talkback sessions | Protect Integration API |
+| Protect application/recorder, cameras, other devices, users, live views, settings, actions and live updates | Protect Integration API |
 | Protect hardware/firmware/recording and recorder/storage enrichment | Optional Protect local session |
 | Historical Protect detections | Protect local session |
 
@@ -190,12 +193,12 @@ rules as an empty zone-based policy list.
 
 ## Firewall writes and concurrent edits
 
-The implemented policy update sends the full policy as read, changing only the
-enabled flag, because the applicable replacement endpoint requires the full
-record. Unknown properties survive the round trip. An external edit between
-that read and write can be overwritten; the controller interface supplies no
-conditional update used by this implementation. The preview warns about this.
-After the write, the server reads back and reports what persisted.
+Logging-only changes use the official PATCH route. Changing policy evaluation
+uses PUT with the full policy as read and only the requested flags changed.
+Unknown properties survive that round trip. An external edit between the read
+and replacement can be overwritten; this implementation uses no conditional
+update. The preview warns about that window. Readback reports what persisted.
+Full policy authoring is available through `firewall.policies.configure`.
 
 ## Sites
 

@@ -1105,7 +1105,7 @@ async fn activity_counter_errors_keep_the_exact_controller_body() {
 }
 
 #[tokio::test]
-async fn resource_reads_decode_their_allowlisted_projections() {
+async fn resource_reads_decode_their_compact_projections() {
     let server = logged_in_server().await;
     let prefix = "/proxy/network/api/s/default";
     Mock::given(method("GET"))
@@ -1216,7 +1216,7 @@ async fn active_clients_decode_association_and_addressing_fields() {
 }
 
 #[tokio::test]
-async fn network_and_wlan_configuration_reads_decode_allowlisted_fields() {
+async fn network_and_wlan_configuration_reads_decode_compact_fields() {
     let server = logged_in_server().await;
     Mock::given(method("GET"))
         .and(path("/proxy/network/api/s/default/rest/networkconf"))
