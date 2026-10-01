@@ -26,6 +26,8 @@ pub(crate) const MAXIMUM_RETRY_AFTER: Duration = Duration::from_secs(10);
 /// Documented site inventory families in the Network Integration API.
 #[derive(Debug, Clone, Copy)]
 pub enum SiteInventoryKind {
+    Clients,
+    Devices,
     DeviceTags,
     Lags,
     McLagDomains,
@@ -41,6 +43,21 @@ pub enum SwitchingDetailKind {
     Lag,
     McLagDomain,
     SwitchStack,
+}
+
+/// Complete operational records in the site's device and client inventory.
+#[derive(Debug, Clone, Copy)]
+pub enum InventoryDetailKind {
+    Client,
+    Device,
+    DeviceStatistics,
+}
+
+/// Official controller-wide DPI dictionaries.
+#[derive(Debug, Clone, Copy)]
+pub enum DpiCatalogKind {
+    Applications,
+    Categories,
 }
 
 /// Network policy collections documented by the Integration API.
@@ -110,6 +127,35 @@ impl IntegrationClient {
     /// Returns an [`ApiError`] when the request or decoding fails.
     pub async fn info(&self) -> Result<ApplicationInfo, ApiError> {
         self.get_json(&["info"], &[]).await
+    }
+
+    /// Complete Network application information, including unknown fields.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn info_record(&self) -> Result<Value, ApiError> {
+        self.get_json(&["info"], &[]).await
+    }
+
+    /// Page a complete DPI application or category dictionary with its documented filter.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn dpi_catalog(
+        &self,
+        kind: DpiCatalogKind,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let collection = match kind {
+            DpiCatalogKind::Applications => "applications",
+            DpiCatalogKind::Categories => "categories",
+        };
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["dpi", collection], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Resolve a bounded set of official application IDs to display names.
@@ -184,6 +230,8 @@ impl IntegrationClient {
     ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
         let mut segments = vec!["sites", site_id];
         match kind {
+            SiteInventoryKind::Clients => segments.push("clients"),
+            SiteInventoryKind::Devices => segments.push("devices"),
             SiteInventoryKind::DeviceTags => segments.push("device-tags"),
             SiteInventoryKind::Lags => segments.extend(["switching", "lags"]),
             SiteInventoryKind::McLagDomains => {
@@ -224,6 +272,49 @@ impl IntegrationClient {
         self.get_json_with_response(&["countries"], &query)
             .await
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Page complete site records with the documented filter expression.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn site_records(
+        &self,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites"], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
+    }
+
+    /// Read a complete client, device, or latest device statistics record.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn inventory_detail(
+        &self,
+        site_id: &str,
+        kind: InventoryDetailKind,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        match kind {
+            InventoryDetailKind::Client => {
+                self.get_json(&["sites", site_id, "clients", id], &[]).await
+            }
+            InventoryDetailKind::Device => self.device_detail_raw(site_id, id).await,
+            InventoryDetailKind::DeviceStatistics => {
+                self.get_json(
+                    &["sites", site_id, "devices", id, "statistics", "latest"],
+                    &[],
+                )
+                .await
+            }
+        }
     }
 
     /// Read one complete LAG, MC-LAG domain, or switch stack record.
@@ -656,7 +747,24 @@ impl IntegrationClient {
         site_id: &str,
         page: PageRequest,
     ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
-        self.get_json_with_response(&["sites", site_id, "radius", "profiles"], &page_query(page))
+        self.radius_profile_records(site_id, page, None).await
+    }
+
+    /// Page complete RADIUS profiles with the documented filter expression.
+    ///
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn radius_profile_records(
+        &self,
+        site_id: &str,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Map<String, Value>>, BoundedMessage), ApiError> {
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["sites", site_id, "radius", "profiles"], &query)
             .await
             .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }

@@ -86,6 +86,9 @@ returned by the controller, including its MAC address and support state.
 `nextOffset` identifies the next page. Large pages carry their records in MCP
 content and set `devicesInContent`. An unsupported endpoint is reported as an
 upstream error, not an empty pending inventory.
+`pageMetadata` retains all original page fields except the data array, which
+is returned as `devices`; large metadata moves to MCP content with
+`pageMetadataInContent`.
 
 ### `firewall.read`
 
@@ -94,13 +97,11 @@ upstream error, not an empty pending inventory.
 The normalized firewall audit view: zone-based zones and policies with their
 match semantics, plus port forwards, traffic rules, and traffic routes.
 
-This server reads the zone-based firewall only. A console still running the
-classic firewall is **refused by name**, because returning the sections it does
-have with the firewall silently absent would read as an open network to a
-caller auditing one. The refusal names `portForwards`, `trafficRules`, and
-`trafficRoutes`, which read identically on either generation and stay available
-by narrowing. Narrow with `section`; continue a truncated `zones` or `policies`
-scan with `sectionOffset` taken from `nextSectionOffset`.
+Zone-based sections use a capability probe. When the controller rejects that API,
+the complete original rejection is returned instead of an empty policy list.
+`portForwards`, `trafficRules` and `trafficRoutes` remain available by narrowing
+on either generation. Narrow with `section`; continue a truncated `zones` or
+`policies` scan with `sectionOffset` from `nextSectionOffset`.
 
 ### `networks.read`
 
@@ -147,31 +148,69 @@ an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
 
-`offset` and `limit` (1-200, default 50) page through the official Network
+`offset`, `limit` (1-200, default 50), and the documented `filter` page through the official Network
 API's [RADIUS profiles](https://developer.ui.com/network/v10.4.57/getradiusprofileoverviewpage)
 for the selected site. Each profile preserves the fields
 the controller returned, including the id needed for enterprise Wi-Fi setup.
 The result includes the controller's page metadata and `nextOffset` until the
-list is complete. Complete large results remain available. Contradictory page metadata returns the complete
+list is complete. `pageMetadata` preserves all original page fields except
+the data array, returned as `profiles`. Large values remain in MCP content,
+marked by `profilesInContent` and `pageMetadataInContent`.
+Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
 
-### `network.inventory.list` and `network.switching.detail`
+### `network.source.read`
+
+`source`, `offset`, `limit` (1-200, default 50).
+
+Complete records behind legacy diagnostic views. Sources are `activeClients`,
+`siteHealth`, `networkConfiguration`, `neighborAccessPoints`, and `dpiCounters`.
+They read the same fixed controller routes used by client, health, network,
+wireless and DPI summaries. DPI uses the existing read-only `by_app` POST.
+
+`records` preserves every field of each selected row. `controllerMetadata`
+preserves every original envelope field other than `data`. Large values move
+intact to labeled content with `recordsInContent` or
+`controllerMetadataInContent`. Errors preserve the original controller response.
+
+The upstream routes return a collection in one bounded response; pagination is
+local to that response. `totalCount` counts its rows, and `nextOffset` continues
+through them. Each call fetches a new response, so changing rows can affect
+later pages. Deep offsets return an empty page. The transport body bound fails
+explicitly instead of returning a partial response.
+
+### `network.inventory.list/detail` and `network.switching.detail`
 
 These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
-`network.inventory.list` accepts a `kind` of `countries`, `deviceTags`,
+`network.inventory.list` accepts a `kind` of `countries`, `sites`, `clients`,
+`devices`, `dpiApplications`, `dpiCategories`, `deviceTags`,
 `lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
 `siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
 The documented `filter` query is available except for WAN interfaces, whose
-endpoint has no filter parameter. Countries are controller-wide; other kinds
+endpoint has no filter parameter. Countries, sites and DPI dictionaries are controller-wide; other kinds
 use the selected site. Each page returns complete controller records, page
-counts, and `nextOffset`. Large pages retain their records in MCP content
-and mark `recordsInContent` in the structured result. Invalid page metadata
+counts, and `nextOffset`. `pageMetadata` preserves all original page fields
+except the data array, which is returned as `records`. Large pages retain
+records and metadata in MCP content, marked by `recordsInContent` and
+`pageMetadataInContent`. Invalid page metadata
 returns the complete controller response with a separate diagnostic.
+Filtered DPI dictionaries continue according to returned rows and mark
+`paginationBasis: "returnedRows"`, because controller totals can describe the
+unfiltered catalog. A full final page can require one additional empty page;
+its absence of `nextOffset` ends the scan. Original totals remain available.
 
 `network.switching.detail` accepts `kind` (`lag`, `mcLagDomain`, or
 `switchStack`) and the official `id`, returning the complete controller
 record. A large record is carried in MCP content and marked by
 `recordInContent`.
+
+`network.inventory.detail` accepts `kind` (`client`, `device`, or
+`deviceStatistics`) and the official record `id`. It returns the complete
+connected client, adopted device, or latest device statistics record,
+including unknown fields and interface details. Large records remain in
+MCP content with `recordInContent`. Controller errors retain their full bodies.
+`kind: "applicationInfo"` requires no `id` and returns complete Network
+application information without a site lookup.
 
 ### `network.policy.list` and `network.policy.detail`
 
@@ -180,7 +219,9 @@ from the official Network Integration API. Choose `kind` as `aclRules`,
 `firewallZones`, `firewallPolicies`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
 (1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
-`recordsInContent`. Invalid page metadata returns the complete controller
+`recordsInContent`. `pageMetadata` retains all original page fields except
+the data array, returned as `records`; large metadata moves to MCP content
+with `pageMetadataInContent`. Invalid page metadata returns the complete controller
 response with a separate diagnostic. The detail tool accepts `kind` and the
 official `id`, returning the complete record. A large record is carried in
 MCP content and marked by `recordInContent`.
@@ -301,17 +342,31 @@ points. The place to start on a slow-wifi question.
 `severity`, `lastHours`, `category`, `client`, `offset`, `limit`.
 
 Network system logs, newest first. `severity` accepts `low`, `medium`, `high`,
-or `veryHigh` and filters upstream. `lastHours` defaults to 24 and accepts
-1-168. The tool scans one page of up to 1000 rows, then applies case-insensitive
+or `veryHigh` and filters upstream. `lastHours` defaults to 24 and must be
+positive. The tool scans one page of up to 1000 rows, then applies case-insensitive
 category/key substring and client MAC filters and paginates those matches.
 `totalMatches` counts matches in that scan; `fetchWindowTruncated` signals
-additional upstream rows. Narrow the time window or severity when it is set.
+additional upstream rows. Use `events.read` to page through the original source.
 Rows include `time` in epoch milliseconds, `key`, `message`, `category`,
 `severity`, and `clientMac` when available. Missing timestamps fail decoding.
 If a received page violates its pagination contract, the error includes the
 complete accepted controller response and the validation diagnostic.
 Known entity placeholders in messages are replaced literally; messages are
 limited to 256 characters with a visible ellipsis when shortened.
+
+### `events.read`
+
+Read a complete Network system-log page using `startMs`, `endMs`, `page`
+(zero-based, default zero), `pageSize` (1-1000, default 100), and optional
+`severity`. Time windows must be ordered; the controller decides supported
+ranges. `response` retains every original JSON field, including parameters,
+credentials and unknown page metadata. Follow `nextPage` for additional pages.
+`paginationIncomplete` signals a terminal first page containing fewer rows
+than the controller's element count; the original page remains available.
+Large pages use labeled `response` content with `responseInContent: true`.
+Empty pages beyond the reported page count are valid. Network application
+routing follows the authenticated console type; upstream unsupported responses
+remain errors with their complete bodies. The gateway owns disclosure.
 
 ### `stats.query`
 
@@ -331,8 +386,8 @@ limited to 256 characters with a visible ellipsis when shortened.
   counters remain unknown. Returned timestamps are restricted to the requested
   window; the bucket at `endMs` is excluded.
 
-Use both `startMs` and `endMs` for a fixed interval of whole UTC hours, at most
-seven days, ending in the past. Alternatively, `hours` (1-168, default 24)
+Use both `startMs` and `endMs` for an ordered interval of whole UTC hours
+ending in the past. Alternatively, positive `hours` (default 24)
 selects a relative window. Activity reports end at the latest completed hour;
 `wanHourly` retains its relative window ending now. Reuse the returned fixed
 boundaries for subsequent pages and comparisons; these reads are not atomic
@@ -352,8 +407,8 @@ only, an absent Activity endpoint permits the original legacy DPI fallback
 when no explicit time window was requested;
 its `counterSemantics` explicitly retain the unverified interval, direction,
 and scope. Authentication failures never trigger that fallback. An unrecognized
-Activity response is reported as such. Record/string/body bounds fail loudly;
-there is no silent scan truncation. Activity record, string, graph, identity,
+Activity response is reported as such. Transport body bounds fail loudly;
+there is no silent scan truncation. Activity schema, graph interval, identity,
 counter, and arithmetic validation errors return the complete accepted
 controller body with the local diagnostic.
 A malformed or duplicate WAN comparison hour returns the complete accepted
@@ -371,6 +426,26 @@ block; the structured result keeps coverage and source information.
 
 See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 [traffic source evidence](traffic-history.md) for source limitations and examples.
+
+### `traffic.read`
+
+Read one complete fixed source with `source` set to `activity`, `graph`, or
+`wan`. Supply `startMs` and `endMs` on whole UTC hour boundaries for a fixed
+ordered interval ending in the past. Alternatively,
+positive `hours` (default 24) ends at the latest completed UTC hour.
+
+The tool returns all original JSON fields as `data`, including client
+fingerprints, graph rates, unknown metadata and precise numeric values.
+It reads only the selected source and performs no aggregation or follow-up
+catalog reads. `status` distinguishes collected, unsupported, unrecognized and
+failed results; unrecognized JSON is still returned completely. Unsupported
+HTTP responses retain their complete controller error. Authentication,
+transport and other upstream failures set `status: "failed"` and the MCP error
+flag, with the original controller body when available. Large data or errors
+remain in labeled MCP content with `dataInContent` or `errorInContent`.
+If session refresh also fails, the result retains both the original report
+failure and the refresh failure, including their complete upstream bodies.
+The existing transport bounds apply. Use `stats.query` for compact summaries.
 
 ### Protect cameras, streams, talkback, overview, and events
 
@@ -410,6 +485,12 @@ from the original local bootstrap, including recorder, account, and user
 records. These fields are returned completely as the console reports them,
 including when the selected fields exceed the structured content formatting
 target.
+Select `view: "applicationInfo"` or `view: "recorder"` on `protect.overview`
+for the complete official application or single recorder record. These views
+use only the Integration API key and require no local session or camera
+inventory reads. All fields remain available as `record`; large records move
+to labeled content with `recordInContent`. `detailFields` applies to the
+default `summary` view.
 If the optional local inventory read fails, `cameras.search` and
 `protect.overview` include the controller error in
 `capabilities.localUnavailableReason`, and `cameras.status` includes it in
@@ -537,7 +618,9 @@ Protect 7.3.53. Consoles without this route return their upstream error. The
 `transaction` object accepts the documented `type` (`sale` or `refund`),
 `externalId`, and nonnegative `amount`, plus optional `currency`, `lineItems`,
 `location`, `paymentTypes`, and `timestamp`. Preview returns the complete
-request without posting it. If that request exceeds the structured-result
+request without posting it. Amounts retain the caller's exact JSON number in
+previews and upstream requests, including decimal precision and large integers.
+If that request exceeds the structured-result
 budget, the complete transaction is returned in content with
 `transactionInContent: true`. A confirmed call returns the complete accepted
 controller result in `response`,
@@ -720,8 +803,8 @@ that event.
 The first call accepts `lastHours` (default 24), or an explicit `start` and
 `end` in epoch milliseconds for an older window, plus optional `camera` and
 `detection` filters. The camera filter accepts an id, exact reported name, or
-display name from camera inventory. A window may span at most seven days;
-adjacent explicit windows keep older retained history reachable. Each page
+display name from camera inventory. The window must be ordered; the controller
+decides how much history is available. Each page
 returns `nextCursor` until it has proved the frozen window complete. The
 cursor moves the next request's upper time key strictly before the last
 complete timestamp group, so insertions and removals among newer rows cannot
@@ -949,12 +1032,10 @@ to labeled MCP content with `responseBodyInContent`. An oversized voucher view
 also moves intact to content with `vouchersInContent`; issued codes remain
 available without repeating creation.
 
-Creation checks the returned batch — whether as many came back as
-were asked for, whether each carries an id and a code, whether the codes are
-distinct, and whether each is free of whitespace and within a plausible length.
-Code lengths are reported rather than judged: the controller decides the
-format, and refusing a batch for being unfamiliar would condemn vouchers that
-already exist. It also reads each identified voucher back and sets `verified`
+Creation checks report whether the returned count matches, whether each voucher
+carries a nonempty ID and code, and whether codes are distinct. Code lengths
+are observations; the controller defines the format. Creation also reads each
+identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
 and complete controller response or error. `readbackComplete` says whether verification
@@ -1017,10 +1098,9 @@ accepted but read-back identifies another policy, the result says `applied`
 and carries that complete response in `readbackError` without claiming
 verification.
 
-A classic console is refused by name before anything is read, the same line
-`firewall.read` holds. Without that, the missing endpoint arrives as a generic
-controller failure and "this console has no such policy" cannot be told from
-"this console has no policies at all".
+Before update or delete, the zone capability probe verifies the API generation.
+An unsupported zone API returns the original controller status and complete
+rejection body. Other probe failures remain their original errors.
 
 Two consequences a caller should know, and which the preview states:
 

@@ -117,11 +117,10 @@ altering only the switch. Nothing interprets the record in between, which is
 the point: a write that sent back only what this server models would drop the
 rest, on the object that decides what the network permits.
 
-Each property travels as the bytes the controller sent. Parsing them into a
-value model and serializing them again would be the same mistake in smaller
-form — a number outside what `f64` distinguishes comes back changed — so the
-parsed form exists only for the few properties this server reads, and is never
-what is written.
+Each property travels as the bytes the controller sent. Complete response
+values preserve numeric precision, but parsing and serializing can still change
+whitespace and other JSON formatting. This write path retains the original
+property text; parsed values are used only to inspect the properties it changes.
 
 Two consequences follow, and the tool states both rather than leaving them to
 be discovered. It cannot merge, so an edit made elsewhere between the read and
@@ -182,7 +181,7 @@ accepted write proves nothing. Every write tool shares one path:
 ### Voucher readback
 
 The official voucher list and detail endpoints return codes. `vouchers.create`
-checks the returned batch's count, identity, distinctness, and code form, then
+reports the returned batch's count, identity, distinctness and code lengths, then
 reads each identified voucher back to compare its id and code. A failed
 readback is reported alongside the creation response. `vouchers.search` and
 `vouchers.status` let callers retrieve codes later without minting again.
@@ -203,14 +202,12 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | Bound | Value | Applies to | Contract | Signal / recovery | Rationale |
 |---|---|---|---|---|---|
 | Search page limit | 1-200, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset` | one page stays well under the response budget |
-| Search offset cap | 10 000 | same | fail-loud | error names the cap | deep offsets signal a wrong query, not paging |
-| Filter length | 128 UTF-8 bytes | compact search filters | fail-loud | error; surrounding whitespace trimmed before the check, content never cut | bounds compact filter parsing |
+| Filter length | 128 UTF-8 bytes | compact search filters | fail-loud | input error; surrounding whitespace normalized | bounds local matching work; complete source reads remain available |
 | Voucher creation request | native API field ranges; complete serialized body at most 1 MiB | vouchers.create | fail-loud before controller access | error names the invalid native field or request bound | labels are forwarded unchanged; count and bandwidth fields match the upstream contract |
 | Structured content formatting target | 48 KiB | formatters that move large fields to labeled MCP content | complete values preserved | `...InContent` flags locate moved fields; structured results may exceed the target | avoids repeating large values in structured and text content |
 | Device inventory scan | 1000 rows | devices.*, AP name joins | signaled | `inventoryTruncated`; status selector error names the ceiling | order of magnitude above any home site |
 | Firewall zone scan | 400 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: zones` and `sectionOffset` from `nextSectionOffset` | ceiling-limited section still fits the budget |
 | Firewall policy scan | 200 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: policies` and `sectionOffset` from `nextSectionOffset` | full policy rows near the budget at this count |
-| Section continuation offset | 100 000 | firewall.read | fail-loud | error names the cap; at the boundary the result carries `truncationNote` instead of an unusable offset | deeper offsets mean a query that should be narrowed instead |
 | AP detail scan | 16 devices | wifi.diagnose | signaled | `accessPointsTruncated`; client-carrying devices scanned first | one upstream call per device makes this the fan-out bound of the whole surface. Devices inside the inventory scan are reachable through `devices.search` and `devices.status`; devices beyond that scan are reachable through neither, which the inventory bound's own signal reports |
 | Rogue AP list | 100 rows | wifi.diagnose | signaled | `rogueApsTruncated` | dense neighborhoods exceed useful review length |
 | Weak-client list | 50 rows | wifi.diagnose | declared top-N | "the 50 weakest, worst first" is the contract | diagnosis needs the worst cases, not a census |
@@ -221,13 +218,12 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | AP-name join | inherits device inventory scan | clients.search, clients.context | signaled | `apLookupTruncated`; wifi.diagnose folds it into `accessPointsTruncated` | a join can only be as complete as its scan |
 | Event fetch window | 1000 system logs | events.search | signaled | `fetchWindowTruncated` when controller totals exceed the scan | narrow time or severity to reduce the upstream result |
 | Protect event page | 1-200 rows plus one lookahead, default 50 | protect.events | caller-paged | `nextCursor` freezes the window and filters, then advances by a time key without splitting an equal-timestamp group; an oversized group fails loudly | each call stays within the response budget and never presents a bounded prefix as complete |
-| Protect event window | at most 168 h per window, default latest 24 h | protect.events | caller-windowed | explicit `start`/`end` accept older adjacent windows; invalid spans fail before login | the undocumented route is bounded per request while all console-retained history remains addressable |
+| Protect event window | ordered, default latest 24 h | protect.events | caller-chosen | explicit `start`/`end` and continuation | page and transport bounds apply independently of history duration |
 | Event message text | 256 chars | events.search, clients.context | marked | `…` appended only when cut | one line of context, never a silent excerpt |
 | Overview event counts | two one-row queries over 24 hours | network.overview | controller totals | `recentEvents` gives the window, total, and HIGH/VERY_HIGH count | response totals avoid count saturation; the two reads are not atomic |
-| Network event window | 1-168 h, default 24 | events.search | caller-chosen | validated, two-edged | keeps system-log queries bounded |
-| WAN report window | 1-168 h, default 24 | stats.query | caller-chosen | validated | the upstream report rejects longer windows |
+| Network event window | positive hours, default 24 | events.search | caller-chosen | ordered timestamps | system-log pages have a separate row bound |
+| WAN report window | positive hours, default 24 | stats.query, traffic.read | caller-chosen | ordered timestamps | transport bounds report oversized responses explicitly |
 | Top applications | 1-50, default 10 | stats.query | caller-chosen | validated | ranking beyond 50 stops being "top" |
 | Weak-signal floor | -100..-30 dBm, default -75 | wifi.diagnose | caller-chosen | validated | -75 dBm is the usual roaming threshold |
 | Transport response | 4 MiB | every upstream read | fail-loud | bounded-read error | protects the process from a hostile upstream |
-| Report window bound | 7 days | legacy hourly report | fail-loud | error before the request | keeps hourly rows bounded upstream |
 | Client id resolution scan | 1000 rows | guests.authorize | fail-loud | a scan that ended at its ceiling says the address may exist beyond it, rather than reporting it unknown | the client reads address clients by hardware address while the authorization endpoint needs the controller's own id |

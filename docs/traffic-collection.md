@@ -108,7 +108,7 @@ Immutable records also carry a SHA-256 `revision` tag of the archived snapshot.
 | --- | --- |
 | `unifi_publication` | One `revision` string field selects the fully written revision for an hour |
 | `unifi_interval` | Requested boundaries, schema, archive chunk count, collection result, each source status, available totals and signed differences |
-| `unifi_client` | Client MAC tag, unsigned `rx_bytes` and `tx_bytes`, full `name_json` string field |
+| `unifi_client` | Client MAC tag, unsigned `rx_bytes` and `tx_bytes`, and `name_json`; `name_in_archive=true` indicates a name stored in the complete archive because its encoded projection exceeds the sink line size |
 | `unifi_archive` | `part` tag and base64 `data` string field; decode parts separately and concatenate in numeric part order to reconstruct the snapshot JSON |
 
 `name_json` contains a JSON string or `null` inside an InfluxDB string, preserving

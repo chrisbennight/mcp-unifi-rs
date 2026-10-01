@@ -216,7 +216,6 @@ async fn a_confirmed_call_sends_the_batch_and_returns_every_code() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
-    assert_eq!(output["wellFormed"], true);
     assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 3);
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert_eq!(output["checks"]["countMatches"], true);
@@ -236,11 +235,6 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             "a duplicate code",
             vec!["1234567890", "1234567890", "3456789012"],
             "allDistinct",
-        ),
-        (
-            "a code with whitespace",
-            vec!["1234567890", "2345 78901", "3456789012"],
-            "allWellFormed",
         ),
         (
             "a missing code",
@@ -266,7 +260,6 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             .structured_content
             .expect("structured");
 
-        assert_eq!(output["wellFormed"], false, "{label}: {output}");
         assert_eq!(output["checks"][failed], false, "{label}: {output}");
         // Every code in the creation response remains available to the caller.
         let returned: Vec<&str> = output["vouchers"]
@@ -277,6 +270,37 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             .collect();
         assert_eq!(returned, minted, "{label}: {output}");
     }
+}
+
+#[tokio::test]
+async fn controller_code_strings_have_observations_without_format_verdicts() {
+    let server = MockServer::start().await;
+    let long_code = "λ".repeat(80);
+    let minted = [" leading and trailing ", long_code.as_str()];
+    mints(&server, &batch(&minted)).await;
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name":"guests", "count":2, "timeLimitMinutes":60, "confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("complete controller strings")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["vouchers"][0]["code"], minted[0]);
+    assert_eq!(output["vouchers"][1]["code"], minted[1]);
+    assert_eq!(output["checks"]["countMatches"], true);
+    assert_eq!(output["checks"]["allIdentified"], true);
+    assert_eq!(output["checks"]["allDistinct"], true);
+    assert_eq!(output["checks"]["codeLengths"], serde_json::json!([22, 80]));
+    assert!(output.get("wellFormed").is_none());
+    assert!(output["checks"].get("allWellFormed").is_none());
+    let body: serde_json::Value =
+        serde_json::from_str(output["responseBody"].as_str().expect("original body"))
+            .expect("JSON");
+    assert_eq!(body["vouchers"][1]["code"], minted[1]);
 }
 
 #[tokio::test]
@@ -454,8 +478,6 @@ async fn controller_generated_codes_are_returned_exactly() {
     assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 2);
     assert_eq!(output["vouchers"][0]["code"], "1234567890", "{output}");
     assert_eq!(output["vouchers"][1]["code"], PASSWORD, "{output}");
-    assert_eq!(output["checks"]["allWellFormed"], true, "{output}");
-    assert_eq!(output["wellFormed"], true, "{output}");
     assert_eq!(output["vouchers"][1]["id"], "voucher-1", "{output}");
 }
 
@@ -635,7 +657,7 @@ async fn failed_readback_is_reported_without_hiding_created_codes() {
         .expect("structured");
     assert_eq!(output["verified"], false, "{output}");
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
-    assert!(output.get("wellFormed").is_some(), "{output}");
+    assert!(output.get("checks").is_some(), "{output}");
     assert_eq!(output["readbackErrors"][0]["voucherId"], "voucher-0");
     assert!(
         output["readbackErrors"][0]["error"]

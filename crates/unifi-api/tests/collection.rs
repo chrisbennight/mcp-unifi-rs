@@ -218,7 +218,7 @@ async fn unrecognized_data_is_retained_but_never_claimed_as_collected_report() {
 }
 
 #[tokio::test]
-async fn report_bounds_fail_explicitly_instead_of_accepting_a_subset() {
+async fn reports_preserve_large_client_collections() {
     let (server, client) = setup().await;
     let row = json!({"client":{"mac":"02:00:00:00:00:01"},"usage_by_app":[]});
     mocks(
@@ -231,7 +231,7 @@ async fn report_bounds_fail_explicitly_instead_of_accepting_a_subset() {
         .collect_traffic("default", ActivityWindow::new(START, END).unwrap())
         .await
         .unwrap();
-    assert_ne!(snapshot.activity.status, SourceStatus::Collected);
+    assert_eq!(snapshot.activity.status, SourceStatus::Collected);
     let archived: Value = serde_json::from_str(snapshot.activity.data.unwrap().get()).unwrap();
     assert_eq!(
         archived["client_usage_by_app"].as_array().unwrap().len(),

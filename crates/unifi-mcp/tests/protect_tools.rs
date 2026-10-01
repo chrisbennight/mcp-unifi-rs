@@ -2433,7 +2433,7 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
         .and(path("/proxy/protect/api/events"))
         .and(header("cookie", "TOKEN=protect-session"))
         .and(query_param("start", "1000"))
-        .and(query_param("end", "2000"))
+        .and(query_param("end", "2592000000"))
         .and(query_param("limit", "3"))
         .and(query_param("offset", "0"))
         .and(query_param("types", "motion"))
@@ -2471,7 +2471,7 @@ async fn protect_events_filters_and_continues_without_a_hidden_scan_ceiling() {
                 "protect.events",
                 &serde_json::json!({
                     "start": 1000,
-                    "end": 2000,
+                    "end": 2_592_000_000_u64,
                     "camera": "cam-front",
                     "detection": "person",
                     "limit": 2

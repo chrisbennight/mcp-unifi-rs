@@ -380,7 +380,7 @@ async fn firewall_read_labels_a_zone_based_console() {
         output["generationNote"]
             .as_str()
             .expect("note")
-            .contains("classic console is refused")
+            .contains("zone-based firewall supported")
     );
     assert_eq!(output["zones"].as_array().expect("zones").len(), 2);
     assert_eq!(output["policies"][0]["action"], "ALLOW");
@@ -486,25 +486,21 @@ async fn an_over_ceiling_policy_inventory_returns_bounded_and_truncated() {
 }
 
 #[tokio::test]
-async fn a_classic_console_is_refused_by_name_rather_than_read_as_an_open_network() {
+async fn unavailable_zone_reads_retain_complete_original_rejections() {
     let server = MockServer::start().await;
     common_mocks(&server).await;
+    let original = serde_json::json!({"message":"feature requires the zone based firewall", "detail":format!("{}probe-tail", "x".repeat(60_000))}).to_string();
     // The documented classic-console rejection of the zone probe.
     Mock::given(method("GET"))
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/firewall/zones"
         )))
-        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "message": "feature requires the zone based firewall"
-        })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(&original))
         .mount(&server)
         .await;
     let handler = handler_for(&server);
 
-    // Unnarrowed, and narrowed to each generation-specific section: all three
-    // refuse. Returning the sections a classic console does have, with the
-    // firewall silently absent, would read as an open network to a caller
-    // auditing one -- which is the whole reason this refuses.
+    // Every generation-dependent read preserves the rejection instead of reporting an empty list.
     for narrowing in [
         serde_json::json!({}),
         serde_json::json!({"section": "zones"}),
@@ -513,16 +509,9 @@ async fn a_classic_console_is_refused_by_name_rather_than_read_as_an_open_networ
         let error = handler
             .call(&call("firewall.read", &narrowing), None)
             .await
-            .expect_err("classic console refused");
-        let message = error.message.to_string();
-        assert!(
-            message.contains("classic firewall"),
-            "refusal must name the generation, got: {message}"
-        );
-        assert!(
-            message.contains("portForwards"),
-            "refusal must name what still reads on this console, got: {message}"
-        );
+            .expect_err("original zone API rejection");
+        assert!(error.message.contains(&original));
+        assert!(error.message.contains("HTTP 400"));
     }
 }
 
@@ -715,18 +704,6 @@ async fn section_offset_is_rejected_outside_the_paginated_sections() {
         .await
         .expect_err("unsupported section offset");
     assert!(error.message.contains("zones or policies"));
-
-    let error = handler
-        .call(
-            &call(
-                "firewall.read",
-                &serde_json::json!({"section": "policies", "sectionOffset": 200_000}),
-            ),
-            None,
-        )
-        .await
-        .expect_err("offset ceiling");
-    assert!(error.message.contains("sectionOffset"));
 }
 
 #[tokio::test]
@@ -779,7 +756,7 @@ async fn narrowing_isolates_a_section_from_unrelated_endpoint_failures() {
 }
 
 #[tokio::test]
-async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
+async fn firewall_continuation_keeps_paging_large_collections() {
     let server = MockServer::start().await;
     common_mocks(&server).await;
     Mock::given(method("GET"))
@@ -791,8 +768,6 @@ async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
         })))
         .mount(&server)
         .await;
-    // A scan starting at the accepted maximum that still truncates: the
-    // next offset would exceed the cap, so no offset may be advertised.
     for page_start in [100_000_u64, 100_200] {
         let rows: Vec<serde_json::Value> = (page_start..page_start + 200)
             .map(|index| serde_json::json!({"id": format!("policy-{index}")}))
@@ -823,12 +798,27 @@ async fn a_continuation_past_the_offset_bound_explains_instead_of_lying() {
             None,
         )
         .await
-        .expect("boundary read");
+        .expect("large collection page");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["sectionsTruncated"], true);
-    assert!(output.get("nextSectionOffset").is_none());
-    let note = output["truncationNote"].as_str().expect("note");
-    assert!(note.contains("sectionOffset bound"));
+    assert_eq!(output["nextSectionOffset"], 100_200);
+    let continued = handler
+        .call(
+            &call(
+                "firewall.read",
+                &serde_json::json!({
+                    "section":"policies", "sectionOffset":output["nextSectionOffset"]
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("continuation beyond the first page")
+        .structured_content
+        .expect("structured continuation");
+    assert_eq!(continued["policies"][0]["id"], "policy-100200");
+    assert_eq!(continued["nextSectionOffset"], 100_400);
+    assert_eq!(continued["sectionsTruncated"], true);
 }
 
 #[tokio::test]

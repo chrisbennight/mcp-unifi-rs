@@ -182,7 +182,8 @@ operation, it probes the zone endpoint. Success identifies zone-based mode; the
 specific documented rejection naming zone-based firewalling identifies classic
 mode. Other failures remain errors. The result is not cached across calls.
 
-A broad `firewall.read` or `firewall.policies.update` refuses classic mode.
+A generation-dependent read, update or delete returns the original controller
+rejection when the zone-based API is unavailable.
 On either generation, a narrowed `firewall.read` can still read `portForwards`,
 `trafficRules`, or `trafficRoutes`. It never represents unsupported classic
 rules as an empty zone-based policy list.

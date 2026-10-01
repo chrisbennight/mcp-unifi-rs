@@ -13,16 +13,11 @@ pub struct ActivityWindow {
 
 impl ActivityWindow {
     /// # Errors
-    /// Rejects empty, reversed, unaligned, or greater-than-seven-day windows.
+    /// Rejects empty, reversed or unaligned windows.
     pub fn new(start: u64, end: u64) -> Result<Self, ApiError> {
-        if end <= start
-            || end - start > 168 * 3_600_000
-            || !start.is_multiple_of(3_600_000)
-            || !end.is_multiple_of(3_600_000)
-        {
+        if end <= start || !start.is_multiple_of(3_600_000) || !end.is_multiple_of(3_600_000) {
             return Err(ApiError::Config(
-                "activity window must cover whole UTC hours, from one hour to seven days"
-                    .to_owned(),
+                "activity window must cover ordered whole UTC hours".to_owned(),
             ));
         }
         Ok(Self { start, end })
@@ -37,7 +32,7 @@ pub enum ActivityRead<T> {
     Unrecognized,
 }
 
-/// Allowlisted activity totals. The source does not return collection timestamps.
+/// Activity counters used by the compact summary. The source does not return collection timestamps.
 #[derive(Debug, Deserialize)]
 pub struct ActivityReport {
     pub client_usage_by_app: Vec<ClientActivity>,
@@ -51,7 +46,7 @@ pub struct ClientActivity {
     pub usage_by_app: Vec<ApplicationActivity>,
 }
 
-/// Stable network identity and a display name; fingerprints are excluded.
+/// Client identity and display name used by the activity summary.
 #[derive(Debug, Deserialize)]
 pub struct ActivityClient {
     pub mac: String,
@@ -79,25 +74,4 @@ pub struct ActivityBucket {
 pub struct DpiName {
     pub id: u32,
     pub name: String,
-}
-
-impl ActivityReport {
-    pub(crate) fn validate(&self) -> bool {
-        self.client_usage_by_app.len() <= 1000
-            && self.total_usage_by_app.len() <= 4096
-            && self
-                .client_usage_by_app
-                .iter()
-                .map(|row| row.usage_by_app.len())
-                .sum::<usize>()
-                <= 20_000
-            && self.client_usage_by_app.iter().all(|row| {
-                row.client.mac.len() == 17
-                    && row
-                        .client
-                        .name
-                        .as_ref()
-                        .is_none_or(|name| name.len() <= 4096)
-            })
-    }
 }

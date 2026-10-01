@@ -80,7 +80,18 @@ impl Publication {
                 )?;
                 for client in clients {
                     let name = string(&serde_json::to_string(&client.name)?);
-                    lines.push(format!("unifi_client,{tags},client={} rx_bytes={}u,tx_bytes={}u,name_json={name} {timestamp}\n", client.mac, client.bytes.rx_bytes, client.bytes.tx_bytes));
+                    let prefix = format!(
+                        "unifi_client,{tags},client={} rx_bytes={}u,tx_bytes={}u,",
+                        client.mac, client.bytes.rx_bytes, client.bytes.tx_bytes
+                    );
+                    let line = format!("{prefix}name_json={name} {timestamp}\n");
+                    if line.len() <= 64 * 1024 {
+                        lines.push(line);
+                    } else {
+                        // The archive carries the complete name when its
+                        // encoded projection cannot fit in one sink line.
+                        lines.push(format!("{prefix}name_in_archive=true {timestamp}\n"));
+                    }
                 }
                 summary.push_str(",totals_status=\"calculated\"");
                 Some(total)
