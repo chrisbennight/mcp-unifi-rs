@@ -103,12 +103,14 @@ pub struct SystemLogPage<T = SystemLogEntry> {
 }
 
 impl<T> SystemLogPage<T> {
-    /// Whether the controller reports another page after this one.
+    /// Whether the controller totals indicate that this page leaves unread rows.
     #[must_use]
     pub fn has_more(&self) -> bool {
-        self.page_number
-            .checked_add(1)
-            .is_some_and(|next| next < self.total_page_count)
+        (self.page_number == 0 && self.total_element_count > self.data.len() as u64)
+            || self
+                .page_number
+                .checked_add(1)
+                .is_some_and(|next| next < self.total_page_count)
     }
 }
 
