@@ -23,10 +23,35 @@ impl LegacyClient {
         site: &str,
         query: &SystemLogQuery,
     ) -> Result<SystemLogPage, ApiError> {
+        let bytes = self.system_log_bytes(site, query).await?;
+        serde_json::from_slice(&bytes).map_err(|error| crate::error::decode_failure(&error, &bytes))
+    }
+
+    /// Read every original field in one caller-selected system-log page.
+    ///
+    /// # Errors
+    /// Returns complete upstream failures or a pagination diagnostic with
+    /// the original response body.
+    pub async fn system_log_records(
+        &self,
+        site: &str,
+        query: &SystemLogQuery,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
+        let bytes = self.system_log_bytes(site, query).await?;
+        serde_json::from_slice(&bytes).map_err(|error| crate::error::decode_failure(&error, &bytes))
+    }
+
+    async fn system_log_bytes(
+        &self,
+        site: &str,
+        query: &SystemLogQuery,
+    ) -> Result<Vec<u8>, ApiError> {
         let generation = self.ensure_session().await?;
         let result = match self.execute_system_log(site, query).await {
             Err(error) if is_login_required(&error) => {
-                self.refresh_session(generation).await?;
+                self.refresh_session(generation)
+                    .await
+                    .map_err(|refresh| error.with_refresh_failure(refresh))?;
                 self.execute_system_log(site, query).await
             }
             Err(ApiError::RateLimited {
@@ -56,30 +81,17 @@ impl LegacyClient {
         &self,
         site: &str,
         query: &SystemLogQuery,
-    ) -> Result<SystemLogPage, ApiError> {
-        let csrf = {
+    ) -> Result<Vec<u8>, ApiError> {
+        let (kind, csrf) = {
             let session = self.session.lock().await;
-            if session.kind != Some(ConsoleKind::UnifiOs) {
-                return Err(ApiError::Config(
-                    "Network system logs require a UniFi OS console".to_owned(),
-                ));
-            }
-            session.csrf.clone()
+            (session.kind, session.csrf.clone())
         };
-        let url = http::build_url(
-            &self.base,
-            &[
-                "proxy",
-                "network",
-                "v2",
-                "api",
-                "site",
-                site,
-                "system-log",
-                "all",
-            ],
-            &[],
-        )?;
+        let mut route = Vec::new();
+        if kind == Some(ConsoleKind::UnifiOs) {
+            route.extend(["proxy", "network"]);
+        }
+        route.extend(["v2", "api", "site", site, "system-log", "all"]);
+        let url = http::build_url(&self.base, &route, &[])?;
         let mut request = self
             .http
             .post(url)
@@ -112,11 +124,11 @@ impl LegacyClient {
                 RequestClass::IdempotentRead,
             ));
         }
-        let page: SystemLogPage = serde_json::from_slice(&bytes)
+        let page: SystemLogPage<serde_json::Value> = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
         query
             .validate_response(&page)
             .map_err(|error| error.with_controller_response(&bytes))?;
-        Ok(page)
+        Ok(bytes)
     }
 }

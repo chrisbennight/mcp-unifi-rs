@@ -65,6 +65,8 @@ async fn every_documented_inventory_route_returns_full_rows_and_a_continuation()
     let cases = [
         ("countries", "countries", true),
         ("sites", "sites", true),
+        ("dpiApplications", "dpi/applications", true),
+        ("dpiCategories", "dpi/categories", true),
         ("clients", "sites/SITE/clients", true),
         ("devices", "sites/SITE/devices", true),
         ("deviceTags", "sites/SITE/device-tags", true),
@@ -123,6 +125,39 @@ async fn every_documented_inventory_route_returns_full_rows_and_a_continuation()
         assert_eq!(result["pageMetadata"]["totalCount"], 2);
         assert!(result["pageMetadata"].get("data").is_none());
     }
+}
+
+#[tokio::test]
+async fn filtered_dpi_catalogs_stop_on_empty_rows_despite_unfiltered_totals() {
+    let server = MockServer::start().await;
+    for (kind, route) in [
+        ("dpiApplications", "dpi/applications"),
+        ("dpiCategories", "dpi/categories"),
+    ] {
+        Mock::given(method("GET")).and(path(format!("{PREFIX}/{route}")))
+            .and(query_param("offset","1")).and(query_param("filter","id.eq(42)"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "offset":1,"limit":1,"count":0,"totalCount":100,"data":[],"unknownMetadata":"original"
+            }))).expect(1).mount(&server).await;
+        let output = handler_for(&server)
+            .call(
+                &call(
+                    "network.inventory.list",
+                    json!({"kind":kind,"offset":1,"limit":1,"filter":"id.eq(42)"}),
+                ),
+                None,
+            )
+            .await
+            .expect("complete filtered page")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["records"], json!([]));
+        assert_eq!(output["totalCount"], 100);
+        assert_eq!(output["paginationBasis"], "returnedRows");
+        assert_eq!(output["pageMetadata"]["unknownMetadata"], "original");
+        assert!(output.get("nextOffset").is_none());
+    }
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
 }
 
 #[tokio::test]

@@ -43,6 +43,7 @@ pub enum ToolKind {
     NetworksStatus,
     NetworksConfigure,
     RadiusProfilesList,
+    NetworkSourceRead,
     NetworkInventoryList,
     NetworkInventoryDetail,
     NetworkSwitchingDetail,
@@ -94,6 +95,7 @@ pub enum ToolKind {
     ProtectEventThumbnail,
     WifiDiagnose,
     EventsSearch,
+    EventsRead,
     StatsQuery,
     TrafficRead,
     WlansUpdate,
@@ -178,6 +180,7 @@ impl ToolKind {
             | Self::WlanGroupsList
             | Self::PortForwardsStatus
             | Self::RadiusProfilesList
+            | Self::NetworkSourceRead
             | Self::NetworkInventoryList
             | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
@@ -208,6 +211,7 @@ impl ToolKind {
             | Self::ProtectEventThumbnail
             | Self::WifiDiagnose
             | Self::EventsSearch
+            | Self::EventsRead
             | Self::StatsQuery
             | Self::TrafficRead
             | Self::VouchersSearch
@@ -265,6 +269,7 @@ impl ToolKind {
             | Self::NetworksConfigure
             | Self::WifiBroadcastsConfigure
             | Self::RadiusProfilesList
+            | Self::NetworkSourceRead
             | Self::NetworkInventoryList
             | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
@@ -283,6 +288,7 @@ impl ToolKind {
             | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
             | Self::EventsSearch
+            | Self::EventsRead
             | Self::StatsQuery
             | Self::TrafficRead
             | Self::WlansUpdate
@@ -496,10 +502,9 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "firewall.read",
         "The normalized firewall audit view: zone-based zones and policies \
          with their match semantics, plus port forwards, traffic rules, and \
-         traffic routes. Reads the zone-based firewall only; a console running \
-         the classic firewall is refused by name rather than reported as \
-         having no firewall, and the refusal names the sections that read the \
-         same on either generation. Narrow with section, and continue a \
+         traffic routes. An unsupported zone API returns the original \
+         controller rejection. Port forwards, traffic rules and traffic routes \
+         remain readable on either generation. Narrow with section, and continue a \
          truncated zone or policy section with sectionOffset.",
     ),
     sensitive_read_spec(
@@ -691,7 +696,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          session supplies recording, hardware, health, capacity, and aggregate \
          storage facts; unavailable facts remain absent. The place to start on \
          a camera question. Request detailFields to inspect selected fields
-         from the original local bootstrap response.",
+         from the original local bootstrap response. Select view applicationInfo or recorder
+         to read the complete official controller record without a local session.",
     ),
     sensitive_read_spec(
         ToolKind::ProtectEvents,
@@ -725,6 +731,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          window, filtered by time, severity, category, or client MAC, newest first \
          with pagination.",
     ),
+    sensitive_read_spec(
+        ToolKind::EventsRead,
+        "events.read",
+        "Read a complete Network system-log page with fixed startMs/endMs, controller page and pageSize (1-1000). Returns every original record and metadata field, including unknown parameters. Follow nextPage for additional pages; large pages remain in labeled MCP content. Use events.search for compact filtered summaries.",
+    ),
     read_spec(
         ToolKind::StatsQuery,
         "stats.query",
@@ -736,7 +747,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::TrafficRead,
         "traffic.read",
-        "Read one complete Network traffic source: activity counters, activity graph, or hourly WAN report. Use source activity, graph, or wan and fixed startMs/endMs or hours (1-168). Returns every original JSON field, including unknown extensions. Reports unsupported or unrecognized sources explicitly; large data remains in MCP content. Use stats.query for compact attribution and accounting summaries.",
+        "Read one complete Network traffic source: activity counters, activity graph, or hourly WAN report. Use source activity, graph, or wan and fixed startMs/endMs or positive hours. Returns every original JSON field, including unknown extensions. Reports unsupported or unrecognized sources explicitly; large data remains in MCP content. Use stats.query for compact attribution and accounting summaries.",
     ),
     sensitive_read_spec(
         ToolKind::NetworksRead,
@@ -766,17 +777,22 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::RadiusProfilesList,
         "radius_profiles.list",
-        "Page through the official Network API's RADIUS profiles for this site. Returns the controller's profile fields unchanged, including identifiers for enterprise Wi-Fi configuration. Continue with nextOffset.",
+        "Page through the official Network API's RADIUS profiles for this site, with its documented filter. Returns complete profile fields and original page metadata. Large values remain available in MCP content. Continue with nextOffset.",
+    ),
+    sensitive_read_spec(
+        ToolKind::NetworkSourceRead,
+        "network.source.read",
+        "Page through complete legacy active clients, site health, network configuration, neighboring access points, or DPI counters with source, offset and limit. Returns every selected controller field and complete envelope metadata. Paging is local; each call fetches a new response. Large fields remain in labeled MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkInventoryList,
         "network.inventory.list",
-        "Page through sites, connected clients, adopted devices, countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
+        "Page through sites, connected clients, adopted devices, countries, DPI applications/categories, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkInventoryDetail,
         "network.inventory.detail",
-        "Read a complete connected client, adopted device, or latest device statistics record by its official id. Use kind client, device, or deviceStatistics. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
+        "Read complete Network application information with kind applicationInfo, or a connected client, adopted device, or latest device statistics record with kind client, device, or deviceStatistics and its official id. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkSwitchingDetail,
@@ -1082,6 +1098,7 @@ mod tests {
         ToolKind::NetworksConfigure,
         ToolKind::WifiBroadcastsConfigure,
         ToolKind::RadiusProfilesList,
+        ToolKind::NetworkSourceRead,
         ToolKind::NetworkInventoryList,
         ToolKind::NetworkInventoryDetail,
         ToolKind::NetworkSwitchingDetail,
@@ -1132,6 +1149,7 @@ mod tests {
         ToolKind::ProtectEventThumbnail,
         ToolKind::WifiDiagnose,
         ToolKind::EventsSearch,
+        ToolKind::EventsRead,
         ToolKind::StatsQuery,
         ToolKind::TrafficRead,
         ToolKind::WlansUpdate,
@@ -1233,6 +1251,7 @@ mod tests {
                 | ToolKind::NetworksConfigure
                 | ToolKind::WifiBroadcastsConfigure
                 | ToolKind::RadiusProfilesList
+                | ToolKind::NetworkSourceRead
                 | ToolKind::NetworkInventoryList
                 | ToolKind::NetworkInventoryDetail
                 | ToolKind::NetworkSwitchingDetail
@@ -1283,6 +1302,7 @@ mod tests {
                 | ToolKind::ProtectEventThumbnail
                 | ToolKind::WifiDiagnose
                 | ToolKind::EventsSearch
+                | ToolKind::EventsRead
                 | ToolKind::StatsQuery
                 | ToolKind::TrafficRead
                 | ToolKind::WlansUpdate

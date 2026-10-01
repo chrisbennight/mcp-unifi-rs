@@ -54,6 +54,8 @@ mod legacy_configuration;
 mod legacy_wlan_request;
 mod network_configuration;
 mod network_request;
+mod network_source;
+use network_source::{NetworkSourceReadInput, NetworkSourceReadOutput};
 mod protect_updates;
 use legacy_configuration::{
     LegacyConfigurationListInput, LegacyConfigurationResult, LegacyConfigurationStatusInput,
@@ -121,12 +123,10 @@ const AP_DETAIL_CEILING: usize = 16;
 
 /// Event search bounds.
 const DEFAULT_EVENT_WINDOW_HOURS: u32 = 24;
-const MAXIMUM_EVENT_WINDOW_HOURS: u32 = 168;
 const EVENT_FETCH_LIMIT: u32 = 1000;
 
 /// Statistics bounds.
 const DEFAULT_WAN_REPORT_HOURS: u32 = 24;
-const MAXIMUM_WAN_REPORT_HOURS: u32 = 168;
 const DEFAULT_TOP_APPLICATIONS: u16 = 10;
 const MAXIMUM_TOP_APPLICATIONS: u16 = 50;
 
@@ -258,6 +258,10 @@ struct PendingDevicesListOutput {
     devices: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     devices_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -1471,9 +1475,28 @@ struct ProtectLiveviewsConfigureOutput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
+    /// Select the summary (default), complete application info, or complete recorder record.
+    #[serde(default)]
+    view: ProtectOverviewView,
     /// Top-level fields from the local bootstrap response to include.
     /// Requested fields remain complete, including large values.
     detail_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectOverviewView {
+    #[default]
+    Summary,
+    ApplicationInfo,
+    Recorder,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum ProtectOverviewResult {
+    Summary(Box<ProtectOverviewOutput>),
+    Record(RecordOutput),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -2350,11 +2373,11 @@ struct ProtectEventsCursor {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectEventsInput {
-    /// Relative window ending now, 1-168 hours. Defaults to 24 on the first
+    /// Positive relative window ending now. Defaults to 24 on the first
     /// page. Cannot be combined with `start`, `end`, or `cursor`.
     last_hours: Option<u32>,
     /// Explicit window start in epoch milliseconds. Supply with `end` to read
-    /// an older window; adjacent windows make all retained history reachable.
+    /// an older window of controller-retained history.
     start: Option<u64>,
     /// Explicit window end in epoch milliseconds. Supply with `start`.
     end: Option<u64>,
@@ -2462,13 +2485,22 @@ struct RadiusProfilesListInput {
     /// Profiles per page, 1-200.
     #[serde(default = "default_search_limit")]
     limit: u16,
+    /// Documented controller filter expression.
+    filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RadiusProfilesListOutput {
     /// Complete fields for the profiles returned on this page.
-    profiles: Vec<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles: Option<Vec<Map<String, Value>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -2483,6 +2515,8 @@ struct RadiusProfilesListOutput {
 enum NetworkInventoryKind {
     Countries,
     Sites,
+    DpiApplications,
+    DpiCategories,
     Clients,
     Devices,
     DeviceTags,
@@ -2497,7 +2531,7 @@ enum NetworkInventoryKind {
 impl NetworkInventoryKind {
     const fn site_kind(self) -> Option<SiteInventoryKind> {
         match self {
-            Self::Countries | Self::Sites => None,
+            Self::Countries | Self::Sites | Self::DpiApplications | Self::DpiCategories => None,
             Self::Clients => Some(SiteInventoryKind::Clients),
             Self::Devices => Some(SiteInventoryKind::Devices),
             Self::DeviceTags => Some(SiteInventoryKind::DeviceTags),
@@ -2541,6 +2575,9 @@ struct NetworkInventoryListOutput {
     total_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<u64>,
+    /// Filtered DPI dictionaries continue according to returned rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pagination_basis: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -2561,6 +2598,7 @@ struct NetworkSwitchingDetailInput {
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 enum NetworkInventoryDetailKind {
+    ApplicationInfo,
     Client,
     Device,
     DeviceStatistics,
@@ -2570,12 +2608,13 @@ enum NetworkInventoryDetailKind {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct NetworkInventoryDetailInput {
     kind: NetworkInventoryDetailKind,
-    id: String,
+    /// Required for client, device and deviceStatistics; omitted for applicationInfo.
+    id: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkRecordOutput {
+struct RecordOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2623,6 +2662,10 @@ struct NetworkPolicyListOutput {
     records: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     records_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_metadata_in_content: Option<bool>,
     offset: u64,
     limit: u64,
     count: u64,
@@ -3350,8 +3393,8 @@ struct TrafficRouteView {
 #[serde(rename_all = "camelCase")]
 struct FirewallReadOutput {
     /// `zoneBased`, from live capability detection. Only that generation is
-    /// readable here; a classic console is refused rather than returned with
-    /// this field set. Absent when a narrowing selected only sections that
+    /// readable here; an unsupported zone API returns its original rejection.
+    /// Absent when a narrowing selected only sections that
     /// exist identically on both generations, so detection was not needed and
     /// was not performed — unverified rather than guessed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4339,7 +4382,7 @@ enum EventSeverity {
 struct EventsSearchInput {
     /// Restrict to one system-log severity before the bounded upstream read.
     severity: Option<EventSeverity>,
-    /// Window in hours ending now, 1-168. Defaults to 24.
+    /// Positive window in hours ending now. Defaults to 24.
     last_hours: Option<u32>,
     /// Case-insensitive substring matched against the event key or
     /// category, such as `wan`, `roam`, or `security`.
@@ -4399,13 +4442,13 @@ enum StatsReport {
 struct StatsQueryInput {
     /// Which bounded report to run.
     report: StatsReport,
-    /// Window in hours, 1-168; defaults to 24. Activity reports end at the
+    /// Positive window in hours; defaults to 24. Activity reports end at the
     /// latest completed UTC hour; wanHourly retains its window ending now.
     hours: Option<u32>,
     /// Number of top applications for the DPI report, 1-50. Defaults to 10.
     top: Option<u16>,
     /// Fixed interval boundaries in epoch milliseconds. Supply both, on UTC
-    /// hour boundaries, instead of hours; at most seven days, ending in the past.
+    /// hour boundaries, instead of hours, ending in the past.
     start_ms: Option<u64>,
     end_ms: Option<u64>,
     /// Client-history page size, 1-200; defaults to 50.
@@ -4426,7 +4469,7 @@ enum TrafficReadSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TrafficReadInput {
     source: TrafficReadSource,
-    /// Whole UTC hours, 1-168; defaults to 24 ending at the latest completed hour.
+    /// Positive whole UTC hours; defaults to 24 ending at the latest completed hour.
     hours: Option<u32>,
     /// Fixed UTC hour boundaries in epoch milliseconds, instead of hours.
     start_ms: Option<u64>,
@@ -4537,14 +4580,17 @@ impl ToolSpec {
             ToolKind::RadiusProfilesList => {
                 tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
             }
+            ToolKind::NetworkSourceRead => {
+                tool::<NetworkSourceReadInput, NetworkSourceReadOutput>(self)
+            }
             ToolKind::NetworkInventoryList => {
                 tool::<NetworkInventoryListInput, NetworkInventoryListOutput>(self)
             }
             ToolKind::NetworkSwitchingDetail => {
-                tool::<NetworkSwitchingDetailInput, NetworkRecordOutput>(self)
+                tool::<NetworkSwitchingDetailInput, RecordOutput>(self)
             }
             ToolKind::NetworkInventoryDetail => {
-                tool::<NetworkInventoryDetailInput, NetworkRecordOutput>(self)
+                tool::<NetworkInventoryDetailInput, RecordOutput>(self)
             }
             ToolKind::NetworkPolicyList => {
                 tool::<NetworkPolicyListInput, NetworkPolicyListOutput>(self)
@@ -4662,7 +4708,7 @@ impl ToolSpec {
             ToolKind::CamerasTalkbackStart => {
                 tool::<CameraTalkbackInput, CameraTalkbackOutput>(self)
             }
-            ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewOutput>(self),
+            ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewResult>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::ProtectUpdates => tool::<ProtectUpdatesInput, ProtectUpdatesOutput>(self),
             ToolKind::ProtectEventThumbnail => {
@@ -4670,6 +4716,9 @@ impl ToolSpec {
             }
             ToolKind::WifiDiagnose => tool::<WifiDiagnoseInput, WifiDiagnoseOutput>(self),
             ToolKind::EventsSearch => tool::<EventsSearchInput, EventsSearchOutput>(self),
+            ToolKind::EventsRead => {
+                tool::<system_log::EventsReadInput, system_log::EventsReadOutput>(self)
+            }
             ToolKind::StatsQuery => tool::<StatsQueryInput, StatsQueryOutput>(self),
             ToolKind::TrafficRead => tool::<TrafficReadInput, TrafficReadOutput>(self),
             ToolKind::WlansList | ToolKind::PortForwardsList => {
@@ -4935,6 +4984,7 @@ impl UnifiMcp {
             ToolKind::NetworksConfigure => self.networks_configure(params).await,
             ToolKind::WifiBroadcastsConfigure => self.wifi_broadcasts_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
+            ToolKind::NetworkSourceRead => self.network_source_read(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
             ToolKind::NetworkInventoryDetail => self.network_inventory_detail(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,
@@ -4995,6 +5045,7 @@ impl UnifiMcp {
             ToolKind::ProtectEventThumbnail => self.protect_event_thumbnail(params).await,
             ToolKind::WifiDiagnose => self.wifi_diagnose(params).await,
             ToolKind::EventsSearch => self.events_search(params).await,
+            ToolKind::EventsRead => system_log::read(self, params).await,
             ToolKind::StatsQuery => self.stats_query(params).await,
             ToolKind::TrafficRead => self.traffic_read(params).await,
             ToolKind::WlansList => self.wlans_list(params).await,
@@ -5327,7 +5378,9 @@ impl UnifiMcp {
             .offset
             .checked_add(count)
             .ok_or_else(|| page_validation_error(&response, "pending device offset overflow"))?;
-        if next > page.total_count || (next < page.total_count && page.data.is_empty()) {
+        if (count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -5339,6 +5392,8 @@ impl UnifiMcp {
         pending_devices_list_result(PendingDevicesListOutput {
             devices: Some(page.data),
             devices_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -7245,6 +7300,24 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectOverviewInput>(params)?;
+        if !matches!(input.view, ProtectOverviewView::Summary) {
+            if input.detail_fields.is_some() {
+                return Err(McpError::invalid_params(
+                    "detailFields applies to the summary view",
+                    None,
+                ));
+            }
+            let record = match input.view {
+                ProtectOverviewView::ApplicationInfo => self.protect().info_record().await,
+                ProtectOverviewView::Recorder => self.protect().nvr_record().await,
+                ProtectOverviewView::Summary => unreachable!("summary continues below"),
+            }
+            .map_err(api_error)?;
+            return protect_overview_result(ProtectOverviewResult::Record(RecordOutput {
+                record: Some(record),
+                record_in_content: None,
+            }));
+        }
         validate_bootstrap_detail_request(false, input.detail_fields.as_deref())?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
         let CameraInventory {
@@ -7300,21 +7373,24 @@ impl UnifiMcp {
             }
             None => None,
         };
-        structured(ProtectOverviewOutput {
-            console: self.protect_name().to_owned(),
-            application_version,
-            cameras_by_state: counts
-                .into_iter()
-                .map(|(state, count)| CameraCountRow { state, count })
-                .collect(),
-            camera_count: cameras.len(),
-            not_recording: recording_summary_complete.then_some(idle),
-            not_recording_truncated: (recording_summary_complete && idle_truncated).then_some(true),
-            not_recording_count: recording_summary_complete.then_some(idle_count),
-            recorders,
-            bootstrap_details,
-            capabilities: protect_capabilities(local_state, local_error.as_ref()),
-        })
+        protect_overview_result(ProtectOverviewResult::Summary(Box::new(
+            ProtectOverviewOutput {
+                console: self.protect_name().to_owned(),
+                application_version,
+                cameras_by_state: counts
+                    .into_iter()
+                    .map(|(state, count)| CameraCountRow { state, count })
+                    .collect(),
+                camera_count: cameras.len(),
+                not_recording: recording_summary_complete.then_some(idle),
+                not_recording_truncated: (recording_summary_complete && idle_truncated)
+                    .then_some(true),
+                not_recording_count: recording_summary_complete.then_some(idle_count),
+                recorders,
+                bootstrap_details,
+                capabilities: protect_capabilities(local_state, local_error.as_ref()),
+            },
+        )))
     }
 
     /// Historical detections through the Protect application route.
@@ -7440,37 +7516,20 @@ impl UnifiMcp {
         let needs_generation = input.section.is_none_or(generation_specific);
         let zone_based = if needs_generation {
             let site_id = self.site_id().await?;
-            capability::detect(self.integration(), &site_id)
+            let capabilities = capability::detect(self.integration(), &site_id)
                 .await
-                .map_err(api_error)?
-                .firewall
-                == FirewallGeneration::ZoneBased
+                .map_err(api_error)?;
+            if let Some(rejection) = capabilities.firewall_rejection {
+                return Err(api_error(rejection));
+            }
+            capabilities.firewall == FirewallGeneration::ZoneBased
         } else {
             false
         };
-        // A classic console is refused rather than answered. This surface
-        // reads the zone-based firewall only, so returning what a classic
-        // console does have -- port forwards and traffic rules -- alongside an
-        // empty firewall would report an open network to a caller auditing
-        // one. The refusal names the generation and the sections that still
-        // read identically on both, so a caller that wanted those can ask for
-        // them directly.
-        if needs_generation && !zone_based {
-            return Err(McpError::invalid_params(
-                "this console runs the classic firewall, which this server does \
-                 not read; its zones and policies do not exist. Narrow to \
-                 portForwards, trafficRules, or trafficRoutes, which read the \
-                 same on either generation",
-                None,
-            ));
-        }
         let (generation, generation_note) = if needs_generation {
             (
                 Some("zoneBased"),
-                Some(
-                    "zone-based firewall console; a classic console is refused \
-                     rather than reported as having no firewall",
-                ),
+                Some("zone-based firewall supported by the controller capability probe"),
             )
         } else {
             (None, None)
@@ -7756,6 +7815,10 @@ impl UnifiMcp {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one bounded read validates pagination and preserves complete controller records and metadata"
+    )]
     async fn network_inventory_list(
         &self,
         params: &CallToolRequestParams,
@@ -7793,6 +7856,18 @@ impl UnifiMcp {
             self.integration()
                 .site_records(requested, input.filter.as_deref())
                 .await
+        } else if matches!(
+            input.kind,
+            NetworkInventoryKind::DpiApplications | NetworkInventoryKind::DpiCategories
+        ) {
+            let kind = if matches!(input.kind, NetworkInventoryKind::DpiCategories) {
+                unifi_api::DpiCatalogKind::Categories
+            } else {
+                unifi_api::DpiCatalogKind::Applications
+            };
+            self.integration()
+                .dpi_catalog(kind, requested, input.filter.as_deref())
+                .await
         } else {
             self.integration()
                 .countries(requested, input.filter.as_deref())
@@ -7827,7 +7902,11 @@ impl UnifiMcp {
                 ),
             ));
         }
-        if next < page.total_count && page.data.is_empty() {
+        let row_based_paging = matches!(
+            input.kind,
+            NetworkInventoryKind::DpiApplications | NetworkInventoryKind::DpiCategories
+        ) && input.filter.is_some();
+        if next < page.total_count && page.data.is_empty() && !row_based_paging {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7849,7 +7928,12 @@ impl UnifiMcp {
             limit: page.limit,
             count: page.count,
             total_count: page.total_count,
-            next_offset: (next < page.total_count).then_some(next),
+            next_offset: if row_based_paging {
+                (row_count == page.limit).then_some(next)
+            } else {
+                (next < page.total_count).then_some(next)
+            },
+            pagination_basis: row_based_paging.then_some("returnedRows"),
         })
     }
 
@@ -7878,7 +7962,7 @@ impl UnifiMcp {
             .switching_detail(&site_id, kind, &input.id)
             .await
             .map_err(api_error)?;
-        network_record_result(NetworkRecordOutput {
+        record_result(RecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -7889,26 +7973,45 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworkInventoryDetailInput>(params)?;
-        if input.id.is_empty() || input.id.len() > 256 || matches!(input.id.as_str(), "." | "..") {
-            return Err(McpError::invalid_params(
-                "id must be a nonempty id of at most 256 bytes",
-                None,
-            ));
-        }
         let kind = match input.kind {
+            NetworkInventoryDetailKind::ApplicationInfo => {
+                if input.id.is_some() {
+                    return Err(McpError::invalid_params(
+                        "applicationInfo has no id parameter",
+                        None,
+                    ));
+                }
+                let record = self.integration().info_record().await.map_err(api_error)?;
+                return record_result(RecordOutput {
+                    record: Some(record),
+                    record_in_content: None,
+                });
+            }
             NetworkInventoryDetailKind::Client => unifi_api::InventoryDetailKind::Client,
             NetworkInventoryDetailKind::Device => unifi_api::InventoryDetailKind::Device,
             NetworkInventoryDetailKind::DeviceStatistics => {
                 unifi_api::InventoryDetailKind::DeviceStatistics
             }
         };
+        let id = input.id.ok_or_else(|| {
+            McpError::invalid_params(
+                "id is required for client, device or deviceStatistics",
+                None,
+            )
+        })?;
+        if id.is_empty() || id.len() > 256 || matches!(id.as_str(), "." | "..") {
+            return Err(McpError::invalid_params(
+                "id must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
         let site_id = self.site_id().await?;
         let record = self
             .integration()
-            .inventory_detail(&site_id, kind, &input.id)
+            .inventory_detail(&site_id, kind, &id)
             .await
             .map_err(api_error)?;
-        network_record_result(NetworkRecordOutput {
+        record_result(RecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -7965,7 +8068,9 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "policy offset overflow"))?;
-        if next > page.total_count || (next < page.total_count && page.data.is_empty()) {
+        if (row_count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7978,6 +8083,8 @@ impl UnifiMcp {
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -8498,15 +8605,26 @@ impl UnifiMcp {
         if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
             return Err(McpError::invalid_params("limit must be 1-200", None));
         }
+        if input
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.len() > 2048)
+        {
+            return Err(McpError::invalid_params(
+                "filter must be at most 2048 bytes",
+                None,
+            ));
+        }
         let site_id = self.site_id().await?;
         let (page, response) = self
             .integration()
-            .radius_profiles_with_response(
+            .radius_profile_records(
                 &site_id,
                 PageRequest {
                     offset: input.offset,
                     limit: u32::from(input.limit),
                 },
+                input.filter.as_deref(),
             )
             .await
             .map_err(api_error)?;
@@ -8529,17 +8647,22 @@ impl UnifiMcp {
             .offset
             .checked_add(row_count)
             .ok_or_else(|| page_validation_error(&response, "RADIUS profile offset overflow"))?;
-        if next < page.total_count && page.data.is_empty() {
+        if (row_count > 0 && next > page.total_count)
+            || (next < page.total_count && page.data.is_empty())
+        {
             return Err(page_validation_error(
                 &response,
                 format!(
-                    "RADIUS profile page at offset {} returned no rows before reported total {}",
-                    input.offset, page.total_count
+                    "RADIUS profile page through offset {next} conflicts with reported total {}",
+                    page.total_count
                 ),
             ));
         }
-        structured(RadiusProfilesListOutput {
-            profiles: page.data,
+        radius_profiles_list_result(RadiusProfilesListOutput {
+            profiles: Some(page.data),
+            profiles_in_content: None,
+            page_metadata: Some(controller_page_metadata(&response)?),
+            page_metadata_in_content: None,
             offset: page.offset,
             limit: page.limit,
             count: page.count,
@@ -9358,21 +9481,14 @@ impl UnifiMcp {
         structured_with_accepted_response(output)
     }
 
-    /// Refuse the policy surface on a console that runs the classic firewall,
-    /// naming the generation rather than letting the endpoint's rejection
-    /// arrive as an unexplained controller failure.
+    /// Verify the zone API is available, retaining the original controller rejection.
     async fn require_zone_based_firewall(&self) -> Result<(), McpError> {
         let site_id = self.site_id().await?;
         let capabilities = capability::detect(self.integration(), &site_id)
             .await
             .map_err(api_error)?;
-        if capabilities.firewall == FirewallGeneration::Classic {
-            return Err(McpError::invalid_params(
-                "this console runs the classic firewall, which has no zone-based \
-                 policies; this server reads and writes the zone-based firewall \
-                 only",
-                None,
-            ));
+        if let Some(rejection) = capabilities.firewall_rejection {
+            return Err(api_error(rejection));
         }
         Ok(())
     }
@@ -9414,9 +9530,7 @@ impl UnifiMcp {
             ));
         }
 
-        // A classic console has no policies at all, so reading one there would
-        // surface as an unexplained controller failure rather than as the
-        // console running a different firewall generation.
+        // Preserve the zone API rejection before attempting a policy write.
         self.require_zone_based_firewall().await?;
 
         let site_id = self.site_id().await?;
@@ -10363,11 +10477,8 @@ impl UnifiMcp {
         let category = validate_filter(input.category.as_deref())?;
         let client = validate_filter(input.client.as_deref())?;
         let window_hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
-        if !(1..=MAXIMUM_EVENT_WINDOW_HOURS).contains(&window_hours) {
-            return Err(McpError::invalid_params(
-                format!("lastHours must be between 1 and {MAXIMUM_EVENT_WINDOW_HOURS}"),
-                None,
-            ));
+        if window_hours == 0 {
+            return Err(McpError::invalid_params("lastHours must be positive", None));
         }
         let (window_start_ms, now_ms) = log_window(window_hours)?;
         let mut query =
@@ -10820,11 +10931,8 @@ fn resolve_protect_event_query(
         (Some(start), Some(end)) if input.last_hours.is_none() => (start, end),
         (None, None) => {
             let hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
-            if !(1..=MAXIMUM_EVENT_WINDOW_HOURS).contains(&hours) {
-                return Err(McpError::invalid_params(
-                    format!("lastHours must be between 1 and {MAXIMUM_EVENT_WINDOW_HOURS}"),
-                    None,
-                ));
+            if hours == 0 {
+                return Err(McpError::invalid_params("lastHours must be positive", None));
             }
             let end = current_time_ms()?;
             (end.saturating_sub(u64::from(hours) * 3_600_000), end)
@@ -10851,15 +10959,6 @@ fn validate_protect_window(start: u64, end: u64) -> Result<(), McpError> {
     if start > end {
         return Err(McpError::invalid_params(
             "Protect event start is after end",
-            None,
-        ));
-    }
-    let maximum = u64::from(MAXIMUM_EVENT_WINDOW_HOURS) * 3_600_000;
-    if end - start > maximum {
-        return Err(McpError::invalid_params(
-            format!(
-                "Protect event windows may span at most {MAXIMUM_EVENT_WINDOW_HOURS} hours; use adjacent windows for older history"
-            ),
             None,
         ));
     }
@@ -13385,6 +13484,13 @@ fn page_validation_error(
     })
 }
 
+fn controller_page_metadata(response: &BoundedMessage) -> Result<Map<String, Value>, McpError> {
+    let mut metadata = serde_json::from_str::<Map<String, Value>>(response.as_str())
+        .map_err(|error| page_validation_error(response, error.to_string()))?;
+    metadata.remove("data");
+    Ok(metadata)
+}
+
 fn viewer_settings_match(changes: &ProtectViewerSettingsChanges, after: &Value) -> bool {
     changes
         .name
@@ -13989,22 +14095,32 @@ fn network_policy_detail_result(
 fn network_policy_list_result(
     mut output: NetworkPolicyListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
+    let mut content = Vec::new();
+    if structured(&output)?
         .structured_content
-        .as_ref()
         .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(records) = output.records.take()
     {
-        let records = output.records.take().expect("policy page records exist");
         output.records_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "records: {}",
             Value::Array(records)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
 fn network_policy_write_result<K: Serialize>(
@@ -14124,25 +14240,73 @@ fn firewall_delete_result(
 fn pending_devices_list_result(
     mut output: PendingDevicesListOutput,
 ) -> Result<CallToolResult, McpError> {
-    let full = structured(&output)?;
-    if full
+    let mut content = Vec::new();
+    if structured(&output)?
         .structured_content
-        .as_ref()
         .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(devices) = output.devices.take()
     {
-        let devices = output.devices.take().expect("page records exist");
         output.devices_in_content = Some(true);
-        let mut result = structured(output)?;
-        result.content.push(ContentBlock::text(format!(
+        content.push(ContentBlock::text(format!(
             "devices: {}",
             Value::Array(devices)
         )));
-        return Ok(result);
     }
-    Ok(full)
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
 }
 
-fn network_record_result(mut output: NetworkRecordOutput) -> Result<CallToolResult, McpError> {
+fn radius_profiles_list_result(
+    mut output: RadiusProfilesListOutput,
+) -> Result<CallToolResult, McpError> {
+    let mut content = Vec::new();
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(profiles) = output.profiles.take()
+    {
+        output.profiles_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "profiles: {}",
+            serde_json::to_value(profiles).expect("controller JSON records")
+        )));
+    }
+    if structured(&output)?
+        .structured_content
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
+        && let Some(metadata) = output.page_metadata.take()
+    {
+        output.page_metadata_in_content = Some(true);
+        content.push(ContentBlock::text(format!(
+            "pageMetadata: {}",
+            Value::Object(metadata)
+        )));
+    }
+    let mut result = structured(output)?;
+    result.content.extend(content);
+    Ok(result)
+}
+
+fn protect_overview_result(output: ProtectOverviewResult) -> Result<CallToolResult, McpError> {
+    match output {
+        ProtectOverviewResult::Summary(output) => structured(output),
+        ProtectOverviewResult::Record(output) => record_result(output),
+    }
+}
+
+fn record_result(mut output: RecordOutput) -> Result<CallToolResult, McpError> {
     let full = structured(&output)?;
     if full
         .structured_content

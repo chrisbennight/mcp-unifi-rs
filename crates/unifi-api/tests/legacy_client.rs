@@ -63,6 +63,88 @@ fn jpeg_fixture() -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn read_refresh_failures_preserve_both_responses_for_every_transport() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for (read, request_method, route) in [
+        ("clients", "GET", "/proxy/network/api/s/default/stat/sta"),
+        (
+            "groups",
+            "GET",
+            "/proxy/network/v2/api/site/default/apgroups",
+        ),
+        ("dpi", "POST", "/proxy/network/api/s/default/stat/sitedpi"),
+        ("bootstrap", "GET", "/proxy/protect/api/bootstrap"),
+        ("events", "GET", "/proxy/protect/api/events"),
+        (
+            "thumbnail",
+            "GET",
+            "/proxy/protect/api/events/event-1/thumbnail",
+        ),
+        (
+            "logs",
+            "POST",
+            "/proxy/network/v2/api/site/default/system-log/all",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let original = format!("{}original-{read}-tail", "o".repeat(60_000));
+        let refresh = format!("{}refresh-{read}-tail", "r".repeat(60_000));
+        let count = Arc::new(AtomicUsize::new(0));
+        let logins = Arc::clone(&count);
+        let refresh_body = refresh.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .respond_with(move |_: &wiremock::Request| {
+                if logins.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200)
+                        .insert_header("set-cookie", "TOKEN=fixture-session; Path=/")
+                        .set_body_json(serde_json::json!({}))
+                } else {
+                    ResponseTemplate::new(503).set_body_string(&refresh_body)
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method(request_method))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(401).set_body_string(&original))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let result = match read {
+            "clients" => client.active_clients("default").await.map(|_| ()),
+            "groups" => client.ap_groups("default").await.map(|_| ()),
+            "dpi" => client.dpi_by_application("default").await.map(|_| ()),
+            "bootstrap" => client.protect_bootstrap().await.map(|_| ()),
+            "events" => client.protect_events(1000, 2000, 1, None).await.map(|_| ()),
+            "thumbnail" => client.protect_event_thumbnail("event-1").await.map(|_| ()),
+            "logs" => client
+                .system_log(
+                    "default",
+                    &unifi_api::system_log::SystemLogQuery::new(0, 2000, 10).expect("query"),
+                )
+                .await
+                .map(|_| ()),
+            _ => unreachable!("fixture read"),
+        };
+        let error = result.expect_err("both upstream failures");
+        let text = error.to_string();
+        assert!(matches!(error, ApiError::SessionRefresh { .. }));
+        assert!(text.contains(&original), "{read}");
+        assert!(text.contains(&refresh), "{read}");
+        assert!(text.contains("HTTP 401"));
+        assert!(text.contains("HTTP 503"));
+        assert_eq!(server.received_requests().await.expect("requests").len(), 3);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn a_legacy_decode_failure_keeps_the_controller_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -185,6 +267,62 @@ async fn unifi_os_sessions_carry_the_cookie_and_echo_csrf_on_mutations() {
         .kick_client("default", "AA:BB:CC:DD:EE:FF")
         .await
         .expect("kick");
+}
+
+#[tokio::test]
+async fn protect_reads_attempt_fixed_routes_after_standalone_network_detection() {
+    for (read,route,success) in [
+        ("bootstrap","/proxy/protect/api/bootstrap",serde_json::json!({"cameras":[],"nvr":{"id":"nvr-1","modelKey":"nvr"},"extension":"retained"}).to_string().into_bytes()),
+        ("events","/proxy/protect/api/events",serde_json::json!([{"id":"event-1","type":"motion","start":1}]).to_string().into_bytes()),
+        ("thumbnail","/proxy/protect/api/events/event-1/thumbnail",jpeg_fixture()),
+    ] {
+        for rejected in [false,true] {
+            let server=MockServer::start().await;
+            Mock::given(method("POST")).and(path("/api/login"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+                .expect(1).mount(&server).await;
+            let failure=format!("{}upstream-{read}-tail","x".repeat(60_000));
+            let template=if rejected {ResponseTemplate::new(404).set_body_string(&failure)} else {
+                ResponseTemplate::new(200).set_body_raw(success.clone(),if read=="thumbnail" {"image/jpeg"} else {"application/json"})
+            };
+            Mock::given(method("GET")).and(path(route)).respond_with(template)
+                .expect(1).mount(&server).await;
+            let client=client_for(&server);
+            let result=match read {
+                "bootstrap"=>client.protect_bootstrap().await.map(|record|{assert_eq!(record.raw["extension"],"retained");}),
+                "events"=>client.protect_events(0,2_592_000_000,10,None).await.map(|page|{assert_eq!(page.events.len(),1);}),
+                "thumbnail"=>client.protect_event_thumbnail("event-1").await.map(|bytes|assert_eq!(bytes,success)),
+                _=>unreachable!("fixture read"),
+            };
+            if rejected {assert!(result.expect_err("original upstream failure").to_string().contains(&failure));}
+            else {result.expect("fixed Protect endpoint");}
+            assert_eq!(server.received_requests().await.expect("requests").len(),3);
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn hourly_wan_reads_forward_long_windows_and_keep_the_original_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let body = r#" {"meta":{"rc":"ok","extension":"retained"},"data":[{"time":0,"wan-rx_bytes":1,"controllerExtension":"original"}]} "#;
+    Mock::given(method("POST")).and(path("/proxy/network/api/s/default/stat/report/hourly.site"))
+        .and(body_json(serde_json::json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"],"start":0,"end":2_592_000_000_u64})))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1).mount(&server).await;
+    let (rows, response) = client_for(&server)
+        .hourly_wan_report_with_response("default", 0, 2_592_000_000)
+        .await
+        .expect("long window");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(response, body.as_bytes());
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
 }
 
 #[tokio::test]
@@ -433,14 +571,15 @@ async fn a_failed_refresh_is_shared_across_concurrent_expiry_observers() {
     let client = client_for(&server);
     let (first, second) =
         tokio::join!(client.site_health("default"), client.site_health("default"));
-    assert!(matches!(
-        first.expect_err("shared refresh failure"),
-        ApiError::RateLimited { .. }
-    ));
-    assert!(matches!(
-        second.expect_err("shared refresh failure"),
-        ApiError::RateLimited { .. }
-    ));
+    for error in [first, second] {
+        let ApiError::SessionRefresh { original, refresh } =
+            error.expect_err("shared refresh failure")
+        else {
+            panic!("both responses must be retained");
+        };
+        assert!(original.to_string().contains("api.err.LoginRequired"));
+        assert!(matches!(*refresh, ApiError::RateLimited { .. }));
+    }
 }
 
 #[tokio::test]
@@ -1146,11 +1285,6 @@ async fn report_windows_are_validated_before_any_request() {
         .await
         .expect_err("inverted window");
     assert!(matches!(inverted, ApiError::Config(_)));
-    let too_wide = client
-        .hourly_wan_report("default", 0, 8 * 24 * 60 * 60 * 1000)
-        .await
-        .expect_err("over-wide window");
-    assert!(matches!(too_wide, ApiError::Config(_)));
 }
 
 #[tokio::test]

@@ -40,10 +40,10 @@ pub mod system_log;
 pub mod traffic;
 
 pub use client::{
-    IntegrationClient, InventoryDetailKind, NetworkPolicyCollection, SiteInventoryKind,
-    SwitchingDetailKind,
+    DpiCatalogKind, IntegrationClient, InventoryDetailKind, NetworkPolicyCollection,
+    SiteInventoryKind, SwitchingDetailKind,
 };
 pub use config::{ControllerConfig, TlsMode};
 pub use error::{ApiError, BoundedMessage};
-pub use legacy::{LegacyClient, LegacyConfig, RecordFingerprint};
+pub use legacy::{LegacyClient, LegacyConfig, LegacyDiagnosticSource, RecordFingerprint};
 pub use protect::{ProtectAvailability, ProtectClient};

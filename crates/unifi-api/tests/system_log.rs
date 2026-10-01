@@ -49,8 +49,8 @@ fn page() -> serde_json::Value {
             "message_raw": "{CLIENT} connected to {WLAN}",
             "parameters": {
                 "CLIENT": {"id": "aa:bb:cc:dd:ee:01", "name": "Laptop"},
-                "WLAN": {"name": "Guest", "passphrase": "ignored-secret"},
-                "UNMODELLED": {"password": "ignored-secret"}
+                "WLAN": {"name": "Guest", "passphrase": "fixture-passphrase"},
+                "UNMODELLED": {"password": "fixture-password"}
             }
         }],
         "page_number": 0, "total_element_count": 3, "total_page_count": 3
@@ -69,10 +69,11 @@ async fn system_log_uses_the_v2_route_with_csrf_and_reports_a_partial_page() {
             "timestampFrom": 0, "timestampTo": 2000, "pageNumber": 0, "pageSize": 1
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(page()))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
-    let result = client(&server)
+    let client = client(&server);
+    let result = client
         .system_log("default", &SystemLogQuery::new(0, 2000, 1).unwrap())
         .await
         .expect("v2 logs");
@@ -89,15 +90,23 @@ async fn system_log_uses_the_v2_route_with_csrf_and_reports_a_partial_page() {
             .as_deref(),
         Some("aa:bb:cc:dd:ee:01")
     );
-    assert!(!format!("{result:?}").contains("ignored-secret"));
+    let complete = client
+        .system_log_records("default", &SystemLogQuery::new(0, 2000, 1).unwrap())
+        .await
+        .expect("complete page");
+    assert_eq!(complete, page().as_object().expect("page object").clone());
+    assert_eq!(
+        complete["data"][0]["parameters"]["WLAN"]["passphrase"],
+        "fixture-passphrase"
+    );
 }
 
 #[test]
 fn invalid_windows_and_page_sizes_are_rejected_before_a_request() {
-    for (start, end, limit) in [(2, 1, 1), (0, 604_800_001, 1), (0, 1, 0), (0, 1, 1001)] {
+    for (start, end, limit) in [(2, 1, 1), (0, 1, 0), (0, 1, 1001)] {
         assert!(SystemLogQuery::new(start, end, limit).is_err());
     }
-    assert!(SystemLogQuery::new(0, 604_800_000, 1000).is_ok());
+    assert!(SystemLogQuery::new(0, 604_800_001, 1000).is_ok());
 }
 
 #[tokio::test]

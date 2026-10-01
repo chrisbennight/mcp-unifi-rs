@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::ApiError;
 
-const MAXIMUM_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const MAXIMUM_PAGE_SIZE: u32 = 1000;
 
 /// Controller-defined severity, used only as a bounded upstream filter.
@@ -17,13 +16,13 @@ pub enum SystemLogSeverity {
     VeryHigh,
 }
 
-/// The first bounded page of system logs in an explicit time window.
+/// One bounded page of system logs in an explicit time window.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemLogQuery {
     timestamp_from: u64,
     timestamp_to: u64,
-    page_number: u32,
+    page_number: u64,
     page_size: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     severities: Vec<SystemLogSeverity>,
@@ -33,12 +32,12 @@ impl SystemLogQuery {
     /// Validate the complete time window and row bound before any request.
     ///
     /// # Errors
-    /// Returns a configuration error for an inverted window, a window over
-    /// seven days, or a page size outside 1-1000.
+    /// Returns a configuration error for an inverted window or a page size
+    /// outside 1-1000. The controller decides supported time ranges.
     pub fn new(start: u64, end: u64, limit: u32) -> Result<Self, ApiError> {
-        if start > end || end - start > MAXIMUM_WINDOW_MS {
+        if start > end {
             return Err(ApiError::Config(
-                "system log window must be ordered and no longer than seven days".to_owned(),
+                "system log window must be ordered".to_owned(),
             ));
         }
         if !(1..=MAXIMUM_PAGE_SIZE).contains(&limit) {
@@ -55,6 +54,13 @@ impl SystemLogQuery {
         })
     }
 
+    /// Select the controller's zero-based page without scanning earlier pages.
+    #[must_use]
+    pub fn page(mut self, page_number: u64) -> Self {
+        self.page_number = page_number;
+        self
+    }
+
     /// Restrict the query to one severity.
     #[must_use]
     pub fn severity(mut self, severity: SystemLogSeverity) -> Self {
@@ -69,12 +75,14 @@ impl SystemLogQuery {
         self
     }
 
-    pub(crate) fn validate_response(&self, page: &SystemLogPage) -> Result<(), ApiError> {
+    pub(crate) fn validate_response<T>(&self, page: &SystemLogPage<T>) -> Result<(), ApiError> {
         let rows = page.data.len() as u64;
         if page.page_number != self.page_number
             || rows > u64::from(self.page_size)
             || page.total_element_count < rows
-            || (rows == 0 && page.total_element_count != 0)
+            || (rows == 0
+                && page.total_element_count != 0
+                && page.page_number < page.total_page_count)
             || (rows != 0 && page.total_page_count == 0)
         {
             return Err(ApiError::Decode(
@@ -87,22 +95,27 @@ impl SystemLogQuery {
 
 /// One page with controller-reported totals; never an implicit complete list.
 #[derive(Debug, Clone, Deserialize)]
-pub struct SystemLogPage {
-    pub data: Vec<SystemLogEntry>,
-    pub page_number: u32,
+pub struct SystemLogPage<T = SystemLogEntry> {
+    pub data: Vec<T>,
+    pub page_number: u64,
     pub total_element_count: u64,
     pub total_page_count: u64,
 }
 
-impl SystemLogPage {
-    /// Whether the controller reports rows beyond the bounded first page.
+impl<T> SystemLogPage<T> {
+    /// Whether the controller totals indicate that this page leaves unread rows.
     #[must_use]
     pub fn has_more(&self) -> bool {
-        self.total_element_count > self.data.len() as u64
+        (self.page_number == 0 && self.total_element_count > self.data.len() as u64)
+            || self
+                .page_number
+                .checked_add(1)
+                .is_some_and(|next| next < self.total_page_count)
     }
 }
 
-/// Allowlisted Network system-log fields. Unknown properties are discarded.
+/// Compact Network system-log fields for search and diagnostic summaries.
+/// Complete source pages are available through `LegacyClient::system_log_records`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemLogEntry {
     pub key: Option<String>,

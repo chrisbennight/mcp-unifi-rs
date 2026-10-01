@@ -1,11 +1,100 @@
 //! Normalization for the Network application system-log API.
 
-use unifi_api::{ApiError, system_log::SystemLogEntry};
+use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use unifi_api::{
+    ApiError,
+    system_log::{SystemLogEntry, SystemLogQuery, SystemLogSeverity},
+};
 
 use super::{
-    EVENT_MESSAGE_CEILING, EventRow, McpError, api_error, bounded_text, current_time_ms,
-    is_client_address,
+    EVENT_MESSAGE_CEILING, EventRow, EventSeverity, McpError, STRUCTURED_CONTENT_TARGET_BYTES,
+    UnifiMcp, api_error, bounded_text, current_time_ms, is_client_address, parse, structured,
 };
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct EventsReadInput {
+    /// Window start in epoch milliseconds.
+    start_ms: u64,
+    /// Window end in epoch milliseconds; must be at least startMs.
+    end_ms: u64,
+    /// Zero-based controller page, including pages beyond the reported total.
+    #[serde(default)]
+    page: u64,
+    /// Rows in one upstream page, 1-1000. Defaults to 100.
+    #[serde(default = "default_page_size")]
+    page_size: u32,
+    severity: Option<EventSeverity>,
+}
+
+const fn default_page_size() -> u32 {
+    100
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EventsReadOutput {
+    /// Complete original JSON page, including unknown metadata and fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<serde_json::Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_in_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_page: Option<u64>,
+    /// A terminal first page contains fewer rows than the controller reports.
+    pagination_incomplete: bool,
+}
+
+pub(super) async fn read(
+    handler: &UnifiMcp,
+    params: &CallToolRequestParams,
+) -> Result<CallToolResult, McpError> {
+    let input = parse::<EventsReadInput>(params)?;
+    let mut query = SystemLogQuery::new(input.start_ms, input.end_ms, input.page_size)
+        .map_err(api_error)?
+        .page(input.page);
+    if let Some(severity) = input.severity {
+        query = query.severity(match severity {
+            EventSeverity::Low => SystemLogSeverity::Low,
+            EventSeverity::Medium => SystemLogSeverity::Medium,
+            EventSeverity::High => SystemLogSeverity::High,
+            EventSeverity::VeryHigh => SystemLogSeverity::VeryHigh,
+        });
+    }
+    let response = handler
+        .legacy()
+        .system_log_records(handler.legacy_site(), &query)
+        .await
+        .map_err(api_error)?;
+    let total_pages = response["total_page_count"]
+        .as_u64()
+        .expect("validated page count");
+    let next_page = input.page.checked_add(1).filter(|next| *next < total_pages);
+    let pagination_incomplete = input.page == 0
+        && next_page.is_none()
+        && response["total_element_count"]
+            .as_u64()
+            .expect("validated element count")
+            > response["data"].as_array().expect("validated data").len() as u64;
+    let text = serde_json::to_string(&response)
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    let large = text.len() > STRUCTURED_CONTENT_TARGET_BYTES;
+    let mut result = structured(EventsReadOutput {
+        response: (!large).then_some(response),
+        response_in_content: large.then_some(true),
+        next_page,
+        pagination_incomplete,
+    })?;
+    if large {
+        result
+            .content
+            .push(ContentBlock::text(format!("response: {text}")));
+    }
+    Ok(result)
+}
 
 pub(super) fn log_window(hours: u32) -> Result<(u64, u64), McpError> {
     let end = current_time_ms()?;
@@ -111,17 +200,17 @@ mod tests {
     }
 
     #[test]
-    fn message_substitution_is_literal_allowlisted_and_bounded() {
+    fn message_substitution_preserves_inserted_text_and_signals_truncation() {
         let entry: SystemLogEntry = serde_json::from_value(serde_json::json!({
             "timestamp": 1,
-            "message_raw": "{CLIENT} joined {WLAN}; {PASSWORD}",
+            "message_raw": "{CLIENT} joined {WLAN}; {EXTENSION}",
             "parameters": {"CLIENT": {"name": "{WLAN}"}, "WLAN": {"name": "Guest"},
-                "PASSWORD": {"name": "secret"}}
+                "EXTENSION": {"name": "controller-field"}}
         }))
         .unwrap();
         assert_eq!(
             message(&entry).as_deref(),
-            Some("{WLAN} joined Guest; {PASSWORD}")
+            Some("{WLAN} joined Guest; {EXTENSION}")
         );
         let mut long = entry;
         long.parameters.client.as_mut().unwrap().name = Some("é".repeat(1000));
