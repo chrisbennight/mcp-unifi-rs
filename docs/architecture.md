@@ -220,7 +220,7 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | Protect event window | at most 168 h per window, default latest 24 h | protect.events | caller-windowed | explicit `start`/`end` accept older adjacent windows; invalid spans fail before login | the undocumented route is bounded per request while all console-retained history remains addressable |
 | Event message text | 256 chars | events.search, clients.context | marked | `…` appended only when cut | one line of context, never a silent excerpt |
 | Overview event counts | two one-row queries over 24 hours | network.overview | controller totals | `recentEvents` gives the window, total, and HIGH/VERY_HIGH count | response totals avoid count saturation; the two reads are not atomic |
-| Network event window | 1-168 h, default 24 | events.search | caller-chosen | validated, two-edged | keeps system-log queries bounded |
+| Network event window | positive hours, default 24 | events.search | caller-chosen | ordered timestamps | system-log pages have a separate row bound |
 | WAN report window | 1-168 h, default 24 | stats.query | caller-chosen | validated | the upstream report rejects longer windows |
 | Top applications | 1-50, default 10 | stats.query | caller-chosen | validated | ranking beyond 50 stops being "top" |
 | Weak-signal floor | -100..-30 dBm, default -75 | wifi.diagnose | caller-chosen | validated | -75 dBm is the usual roaming threshold |

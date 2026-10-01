@@ -94,6 +94,7 @@ pub enum ToolKind {
     ProtectEventThumbnail,
     WifiDiagnose,
     EventsSearch,
+    EventsRead,
     StatsQuery,
     TrafficRead,
     WlansUpdate,
@@ -208,6 +209,7 @@ impl ToolKind {
             | Self::ProtectEventThumbnail
             | Self::WifiDiagnose
             | Self::EventsSearch
+            | Self::EventsRead
             | Self::StatsQuery
             | Self::TrafficRead
             | Self::VouchersSearch
@@ -283,6 +285,7 @@ impl ToolKind {
             | Self::WifiBroadcastsStatus
             | Self::WifiDiagnose
             | Self::EventsSearch
+            | Self::EventsRead
             | Self::StatsQuery
             | Self::TrafficRead
             | Self::WlansUpdate
@@ -725,6 +728,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          window, filtered by time, severity, category, or client MAC, newest first \
          with pagination.",
     ),
+    sensitive_read_spec(
+        ToolKind::EventsRead,
+        "events.read",
+        "Read a complete Network system-log page with fixed startMs/endMs, controller page and pageSize (1-1000). Returns every original record and metadata field, including unknown parameters. Follow nextPage for additional pages; large pages remain in labeled MCP content. Use events.search for compact filtered summaries.",
+    ),
     read_spec(
         ToolKind::StatsQuery,
         "stats.query",
@@ -1132,6 +1140,7 @@ mod tests {
         ToolKind::ProtectEventThumbnail,
         ToolKind::WifiDiagnose,
         ToolKind::EventsSearch,
+        ToolKind::EventsRead,
         ToolKind::StatsQuery,
         ToolKind::TrafficRead,
         ToolKind::WlansUpdate,
@@ -1283,6 +1292,7 @@ mod tests {
                 | ToolKind::ProtectEventThumbnail
                 | ToolKind::WifiDiagnose
                 | ToolKind::EventsSearch
+                | ToolKind::EventsRead
                 | ToolKind::StatsQuery
                 | ToolKind::TrafficRead
                 | ToolKind::WlansUpdate

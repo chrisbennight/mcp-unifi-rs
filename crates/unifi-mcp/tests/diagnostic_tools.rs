@@ -367,15 +367,206 @@ async fn events_search_windows_filters_and_paginates() {
         ["EVT_WU_Roam", "EVT_IPS_IpsAlert", "EVT_GW_WANTransition"]
     );
 
-    // Window bounds are enforced.
+    // A positive time window is required.
     let error = handler
         .call(
-            &call("events.search", &serde_json::json!({"lastHours": 500})),
+            &call("events.search", &serde_json::json!({"lastHours": 0})),
             None,
         )
         .await
         .expect_err("window bound");
     assert!(error.message.contains("lastHours"));
+}
+
+#[tokio::test]
+async fn complete_system_log_pages_preserve_fields_and_use_the_console_route() {
+    for standalone in [false, true] {
+        for extension in ["controller-field".to_owned(), "x".repeat(60_000)] {
+            let server = MockServer::start().await;
+            if standalone {
+                Mock::given(method("POST"))
+                    .and(path("/api/login"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(ok_envelope(&serde_json::json!([]))),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            } else {
+                login_mock(&server).await;
+            }
+            let response = serde_json::json!({
+                "data":[{"timestamp":1000,"unknownExtension":extension,
+                    "parameters":{"WLAN":{"passphrase":"fixture-passphrase"},
+                        "CUSTOM":{"password":"fixture-password"}}}],
+                "page_number":1,"total_element_count":3,"total_page_count":3,
+                "unknownMetadata":{"largeCounter":18_446_744_073_709_551_617_u128}
+            });
+            let route = if standalone {
+                "/v2/api/site/default/system-log/all"
+            } else {
+                "/proxy/network/v2/api/site/default/system-log/all"
+            };
+            Mock::given(method("POST"))
+                .and(path(route))
+                .and(wiremock::matchers::body_json(serde_json::json!({
+                    "timestampFrom":0,"timestampTo":2_592_000_000_u64,
+                    "pageNumber":1,"pageSize":1,"severities":["VERY_HIGH"]
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result=handler_for(&server).call(&call("events.read",&serde_json::json!({
+                "startMs":0,"endMs":2_592_000_000_u64,"page":1,"pageSize":1,"severity":"veryHigh"
+            })),None).await.expect("complete source");
+            let output = result.structured_content.expect("structured");
+            assert_eq!(output["nextPage"], 2);
+            let original = if output["responseInContent"] == true {
+                let text = result
+                    .content
+                    .iter()
+                    .filter_map(|block| block.as_text())
+                    .find_map(|text| text.text.strip_prefix("response: "))
+                    .expect("complete content");
+                serde_json::from_str::<serde_json::Value>(text).expect("original page")
+            } else {
+                output["response"].clone()
+            };
+            assert_eq!(original, response);
+            assert_eq!(
+                original["data"][0]["parameters"]["WLAN"]["passphrase"],
+                "fixture-passphrase"
+            );
+            assert_eq!(
+                server.received_requests().await.expect("requests").len(),
+                if standalone { 3 } else { 2 }
+            );
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn system_log_source_allows_deep_empty_pages_and_keeps_upstream_failures() {
+    for rejected in [false, true] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        let failure = format!("{}upstream-error-tail", "x".repeat(60_000));
+        let response = serde_json::json!({"data":[],"page_number":100_000,
+            "total_element_count":3,"total_page_count":3,"unknownMetadata":"retained"});
+        let template = if rejected {
+            ResponseTemplate::new(404).set_body_string(&failure)
+        } else {
+            ResponseTemplate::new(200).set_body_json(&response)
+        };
+        Mock::given(method("POST"))
+            .and(path("/proxy/network/v2/api/site/default/system-log/all"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = handler_for(&server)
+            .call(
+                &call(
+                    "events.read",
+                    &serde_json::json!({
+                        "startMs":0,"endMs":2_592_000_000_u64,"page":100_000
+                    }),
+                ),
+                None,
+            )
+            .await;
+        if rejected {
+            assert!(
+                result
+                    .expect_err("original failure")
+                    .message
+                    .contains(&failure)
+            );
+        } else {
+            let output = result
+                .expect("empty page")
+                .structured_content
+                .expect("structured");
+            assert_eq!(output["response"], response);
+            assert!(output.get("nextPage").is_none());
+        }
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn compact_and_full_event_reads_signal_a_short_source_page() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/v2/api/site/default/system-log/all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":[{"timestamp":now_ms(),"key":"controller-event"}],
+            "page_number":0,"total_element_count":3,"total_page_count":1
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let output = handler_for(&server)
+        .call(&call("events.search", &serde_json::json!({})), None)
+        .await
+        .expect("compact search")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["fetchWindowTruncated"], true);
+    assert_eq!(output["rows"].as_array().expect("rows").len(), 1);
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "events.read",
+                &serde_json::json!({"startMs":0,"endMs":now_ms()}),
+            ),
+            None,
+        )
+        .await
+        .expect("complete source page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["paginationIncomplete"], true);
+    assert!(output.get("nextPage").is_none());
+    assert_eq!(output["response"]["total_element_count"], 3);
+    assert_eq!(output["response"]["total_page_count"], 1);
+    assert_eq!(
+        output["response"]["data"].as_array().expect("data").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn event_search_accepts_a_long_window_with_a_bounded_source_page() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/proxy/network/v2/api/site/default/system-log/all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":[],"page_number":0,"total_element_count":0,"total_page_count":0
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    handler_for(&server)
+        .call(
+            &call("events.search", &serde_json::json!({"lastHours":500})),
+            None,
+        )
+        .await
+        .expect("long window");
+    let requests = server.received_requests().await.expect("requests");
+    let request = serde_json::from_slice::<serde_json::Value>(&requests[1].body).expect("query");
+    assert_eq!(
+        request["timestampTo"].as_u64().expect("end")
+            - request["timestampFrom"].as_u64().expect("start"),
+        500 * 3_600_000
+    );
+    assert_eq!(request["pageSize"], 1000);
 }
 
 #[tokio::test]
