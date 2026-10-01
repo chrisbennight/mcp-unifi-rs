@@ -341,7 +341,7 @@ async fn activity_validation_error_reaches_the_tool_caller() {
 async fn invalid_inputs_make_no_controller_requests() {
     let server = MockServer::start().await;
     for input in [
-        json!({"report":"clientWanHistory","hours":169}),
+        json!({"report":"clientWanHistory","hours":0}),
         json!({"report":"clientWanHistory","startMs":START}),
         json!({"report":"clientWanHistory","startMs":START,"endMs":END,"hours":2}),
         json!({"report":"clientWanHistory","startMs":START+1,"endMs":END}),
@@ -445,6 +445,81 @@ async fn activity_summaries_page_large_client_and_application_collections() {
         1
     );
     assert!(last["activity"]["nextOffset"].is_null());
+}
+
+#[tokio::test]
+async fn long_traffic_windows_reach_every_fixed_source() {
+    let start = 0_u64;
+    let end = 720 * 3_600_000_u64;
+    for (source, route, request_method, body) in [
+        (
+            "activity",
+            TRAFFIC,
+            "GET",
+            json!({"client_usage_by_app":[],"total_usage_by_app":[],"unknownMetadata":"retained"}),
+        ),
+        (
+            "graph",
+            GRAPH,
+            "POST",
+            json!([{"timestamp":0,"interval_seconds":3600,"extension":"retained"}]),
+        ),
+        (
+            "wan",
+            WAN,
+            "POST",
+            json!({"meta":{"rc":"ok"},"data":[{"time":0,"wan-rx_bytes":1,"extension":"retained"}]}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        let mut mock = Mock::given(method(request_method)).and(path(route));
+        if source == "wan" {
+            mock = mock.and(body_json(
+                json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"],"start":start,"end":end}),
+            ));
+        } else {
+            mock = mock
+                .and(query_param("start", start.to_string()))
+                .and(query_param("end", end.to_string()));
+        }
+        mock.respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let handler = handler_for(&server);
+        let output = handler
+            .call(
+                &call(
+                    "traffic.read",
+                    &json!({"source":source,"startMs":start,"endMs":end}),
+                ),
+                None,
+            )
+            .await
+            .expect("long fixed window")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["data"], body);
+        assert_eq!(output["endMs"], end);
+        let output = handler
+            .call(
+                &call("traffic.read", &json!({"source":source,"hours":720})),
+                None,
+            )
+            .await;
+        // Relative requests have different fixed timestamps, so the strict
+        // source fixture returns its own upstream rejection. Local validation
+        // must still allow the request to reach that endpoint.
+        let result = output.expect("relative source response");
+        assert_eq!(
+            result.structured_content.expect("structured")["status"],
+            "unsupported"
+        );
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].url.path(), route);
+    }
 }
 
 #[tokio::test]

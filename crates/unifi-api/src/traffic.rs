@@ -13,16 +13,11 @@ pub struct ActivityWindow {
 
 impl ActivityWindow {
     /// # Errors
-    /// Rejects empty, reversed, unaligned, or greater-than-seven-day windows.
+    /// Rejects empty, reversed or unaligned windows.
     pub fn new(start: u64, end: u64) -> Result<Self, ApiError> {
-        if end <= start
-            || end - start > 168 * 3_600_000
-            || !start.is_multiple_of(3_600_000)
-            || !end.is_multiple_of(3_600_000)
-        {
+        if end <= start || !start.is_multiple_of(3_600_000) || !end.is_multiple_of(3_600_000) {
             return Err(ApiError::Config(
-                "activity window must cover whole UTC hours, from one hour to seven days"
-                    .to_owned(),
+                "activity window must cover ordered whole UTC hours".to_owned(),
             ));
         }
         Ok(Self { start, end })

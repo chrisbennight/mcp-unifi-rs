@@ -121,12 +121,10 @@ const AP_DETAIL_CEILING: usize = 16;
 
 /// Event search bounds.
 const DEFAULT_EVENT_WINDOW_HOURS: u32 = 24;
-const MAXIMUM_EVENT_WINDOW_HOURS: u32 = 168;
 const EVENT_FETCH_LIMIT: u32 = 1000;
 
 /// Statistics bounds.
 const DEFAULT_WAN_REPORT_HOURS: u32 = 24;
-const MAXIMUM_WAN_REPORT_HOURS: u32 = 168;
 const DEFAULT_TOP_APPLICATIONS: u16 = 10;
 const MAXIMUM_TOP_APPLICATIONS: u16 = 50;
 
@@ -2373,11 +2371,11 @@ struct ProtectEventsCursor {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectEventsInput {
-    /// Relative window ending now, 1-168 hours. Defaults to 24 on the first
+    /// Positive relative window ending now. Defaults to 24 on the first
     /// page. Cannot be combined with `start`, `end`, or `cursor`.
     last_hours: Option<u32>,
     /// Explicit window start in epoch milliseconds. Supply with `end` to read
-    /// an older window; adjacent windows make all retained history reachable.
+    /// an older window of controller-retained history.
     start: Option<u64>,
     /// Explicit window end in epoch milliseconds. Supply with `start`.
     end: Option<u64>,
@@ -4441,13 +4439,13 @@ enum StatsReport {
 struct StatsQueryInput {
     /// Which bounded report to run.
     report: StatsReport,
-    /// Window in hours, 1-168; defaults to 24. Activity reports end at the
+    /// Positive window in hours; defaults to 24. Activity reports end at the
     /// latest completed UTC hour; wanHourly retains its window ending now.
     hours: Option<u32>,
     /// Number of top applications for the DPI report, 1-50. Defaults to 10.
     top: Option<u16>,
     /// Fixed interval boundaries in epoch milliseconds. Supply both, on UTC
-    /// hour boundaries, instead of hours; at most seven days, ending in the past.
+    /// hour boundaries, instead of hours, ending in the past.
     start_ms: Option<u64>,
     end_ms: Option<u64>,
     /// Client-history page size, 1-200; defaults to 50.
@@ -4468,7 +4466,7 @@ enum TrafficReadSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TrafficReadInput {
     source: TrafficReadSource,
-    /// Whole UTC hours, 1-168; defaults to 24 ending at the latest completed hour.
+    /// Positive whole UTC hours; defaults to 24 ending at the latest completed hour.
     hours: Option<u32>,
     /// Fixed UTC hour boundaries in epoch milliseconds, instead of hours.
     start_ms: Option<u64>,
@@ -10945,11 +10943,8 @@ fn resolve_protect_event_query(
         (Some(start), Some(end)) if input.last_hours.is_none() => (start, end),
         (None, None) => {
             let hours = input.last_hours.unwrap_or(DEFAULT_EVENT_WINDOW_HOURS);
-            if !(1..=MAXIMUM_EVENT_WINDOW_HOURS).contains(&hours) {
-                return Err(McpError::invalid_params(
-                    format!("lastHours must be between 1 and {MAXIMUM_EVENT_WINDOW_HOURS}"),
-                    None,
-                ));
+            if hours == 0 {
+                return Err(McpError::invalid_params("lastHours must be positive", None));
             }
             let end = current_time_ms()?;
             (end.saturating_sub(u64::from(hours) * 3_600_000), end)
@@ -10976,15 +10971,6 @@ fn validate_protect_window(start: u64, end: u64) -> Result<(), McpError> {
     if start > end {
         return Err(McpError::invalid_params(
             "Protect event start is after end",
-            None,
-        ));
-    }
-    let maximum = u64::from(MAXIMUM_EVENT_WINDOW_HOURS) * 3_600_000;
-    if end - start > maximum {
-        return Err(McpError::invalid_params(
-            format!(
-                "Protect event windows may span at most {MAXIMUM_EVENT_WINDOW_HOURS} hours; use adjacent windows for older history"
-            ),
             None,
         ));
     }

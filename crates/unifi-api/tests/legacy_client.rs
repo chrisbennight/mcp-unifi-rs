@@ -270,6 +270,62 @@ async fn unifi_os_sessions_carry_the_cookie_and_echo_csrf_on_mutations() {
 }
 
 #[tokio::test]
+async fn protect_reads_attempt_fixed_routes_after_standalone_network_detection() {
+    for (read,route,success) in [
+        ("bootstrap","/proxy/protect/api/bootstrap",serde_json::json!({"cameras":[],"nvr":{"id":"nvr-1","modelKey":"nvr"},"extension":"retained"}).to_string().into_bytes()),
+        ("events","/proxy/protect/api/events",serde_json::json!([{"id":"event-1","type":"motion","start":1}]).to_string().into_bytes()),
+        ("thumbnail","/proxy/protect/api/events/event-1/thumbnail",jpeg_fixture()),
+    ] {
+        for rejected in [false,true] {
+            let server=MockServer::start().await;
+            Mock::given(method("POST")).and(path("/api/login"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+                .expect(1).mount(&server).await;
+            let failure=format!("{}upstream-{read}-tail","x".repeat(60_000));
+            let template=if rejected {ResponseTemplate::new(404).set_body_string(&failure)} else {
+                ResponseTemplate::new(200).set_body_raw(success.clone(),if read=="thumbnail" {"image/jpeg"} else {"application/json"})
+            };
+            Mock::given(method("GET")).and(path(route)).respond_with(template)
+                .expect(1).mount(&server).await;
+            let client=client_for(&server);
+            let result=match read {
+                "bootstrap"=>client.protect_bootstrap().await.map(|record|{assert_eq!(record.raw["extension"],"retained");}),
+                "events"=>client.protect_events(0,2_592_000_000,10,None).await.map(|page|{assert_eq!(page.events.len(),1);}),
+                "thumbnail"=>client.protect_event_thumbnail("event-1").await.map(|bytes|assert_eq!(bytes,success)),
+                _=>unreachable!("fixture read"),
+            };
+            if rejected {assert!(result.expect_err("original upstream failure").to_string().contains(&failure));}
+            else {result.expect("fixed Protect endpoint");}
+            assert_eq!(server.received_requests().await.expect("requests").len(),3);
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn hourly_wan_reads_forward_long_windows_and_keep_the_original_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let body = r#" {"meta":{"rc":"ok","extension":"retained"},"data":[{"time":0,"wan-rx_bytes":1,"controllerExtension":"original"}]} "#;
+    Mock::given(method("POST")).and(path("/proxy/network/api/s/default/stat/report/hourly.site"))
+        .and(body_json(serde_json::json!({"attrs":["time","wan-tx_bytes","wan-rx_bytes"],"start":0,"end":2_592_000_000_u64})))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1).mount(&server).await;
+    let (rows, response) = client_for(&server)
+        .hourly_wan_report_with_response("default", 0, 2_592_000_000)
+        .await
+        .expect("long window");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(response, body.as_bytes());
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+}
+
+#[tokio::test]
 async fn standalone_controllers_fall_back_to_the_legacy_login_route() {
     let server = MockServer::start().await;
     // No /api/auth/login mock: the probe receives the mock server's default
@@ -1229,11 +1285,6 @@ async fn report_windows_are_validated_before_any_request() {
         .await
         .expect_err("inverted window");
     assert!(matches!(inverted, ApiError::Config(_)));
-    let too_wide = client
-        .hourly_wan_report("default", 0, 8 * 24 * 60 * 60 * 1000)
-        .await
-        .expect_err("over-wide window");
-    assert!(matches!(too_wide, ApiError::Config(_)));
 }
 
 #[tokio::test]

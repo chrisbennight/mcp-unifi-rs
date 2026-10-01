@@ -365,8 +365,8 @@ remain errors with their complete bodies. The gateway owns disclosure.
   counters remain unknown. Returned timestamps are restricted to the requested
   window; the bucket at `endMs` is excluded.
 
-Use both `startMs` and `endMs` for a fixed interval of whole UTC hours, at most
-seven days, ending in the past. Alternatively, `hours` (1-168, default 24)
+Use both `startMs` and `endMs` for an ordered interval of whole UTC hours
+ending in the past. Alternatively, positive `hours` (default 24)
 selects a relative window. Activity reports end at the latest completed hour;
 `wanHourly` retains its relative window ending now. Reuse the returned fixed
 boundaries for subsequent pages and comparisons; these reads are not atomic
@@ -410,8 +410,8 @@ See [traffic compatibility](compatibility.md#traffic-counter-evidence) and
 
 Read one complete fixed source with `source` set to `activity`, `graph`, or
 `wan`. Supply `startMs` and `endMs` on whole UTC hour boundaries for a fixed
-interval of one hour to seven days ending in the past. Alternatively,
-`hours` (1-168, default 24) ends at the latest completed UTC hour.
+ordered interval ending in the past. Alternatively,
+positive `hours` (default 24) ends at the latest completed UTC hour.
 
 The tool returns all original JSON fields as `data`, including client
 fingerprints, graph rates, unknown metadata and precise numeric values.
@@ -782,8 +782,8 @@ that event.
 The first call accepts `lastHours` (default 24), or an explicit `start` and
 `end` in epoch milliseconds for an older window, plus optional `camera` and
 `detection` filters. The camera filter accepts an id, exact reported name, or
-display name from camera inventory. A window may span at most seven days;
-adjacent explicit windows keep older retained history reachable. Each page
+display name from camera inventory. The window must be ordered; the controller
+decides how much history is available. Each page
 returns `nextCursor` until it has proved the frozen window complete. The
 cursor moves the next request's upper time key strictly before the last
 complete timestamp group, so insertions and removals among newer rows cannot

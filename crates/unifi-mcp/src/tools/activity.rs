@@ -2,10 +2,9 @@
 
 use super::{
     CallToolResult, CounterSemantics, CoverageStatus, DEFAULT_TOP_APPLICATIONS,
-    DEFAULT_WAN_REPORT_HOURS, JsonSchema, MAXIMUM_SEARCH_LIMIT, MAXIMUM_TOP_APPLICATIONS,
-    MAXIMUM_WAN_REPORT_HOURS, McpError, Serialize, StatsQueryInput, StatsQueryOutput, StatsReport,
-    StatsSourceError, TopApplicationRow, TrafficCoverage, UnifiMcp, api_error, bounded_text,
-    structured_stats,
+    DEFAULT_WAN_REPORT_HOURS, JsonSchema, MAXIMUM_SEARCH_LIMIT, MAXIMUM_TOP_APPLICATIONS, McpError,
+    Serialize, StatsQueryInput, StatsQueryOutput, StatsReport, StatsSourceError, TopApplicationRow,
+    TrafficCoverage, UnifiMcp, api_error, bounded_text, structured_stats,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use unifi_api::traffic::{
@@ -85,16 +84,33 @@ pub(super) fn report_window(input: &StatsQueryInput) -> Result<ActivityWindow, M
     )
     .map_err(|_| McpError::internal_error("system clock out of range", None))?;
     match (input.start_ms, input.end_ms, input.hours) {
-        (Some(start), Some(end), None) if end <= now => ActivityWindow::new(start, end).map_err(|_| McpError::invalid_params("startMs/endMs must cover whole UTC hours, from one hour to seven days, ending in the past", None)),
+        (Some(start), Some(end), None) if end <= now => {
+            ActivityWindow::new(start, end).map_err(|_| {
+                McpError::invalid_params(
+                    "startMs/endMs must cover ordered whole UTC hours ending in the past",
+                    None,
+                )
+            })
+        }
         (None, None, hours) => {
             let hours = hours.unwrap_or(DEFAULT_WAN_REPORT_HOURS);
-            if !(1..=MAXIMUM_WAN_REPORT_HOURS).contains(&hours) {
-                return Err(McpError::invalid_params("hours must be between 1 and 168", None));
+            if hours == 0 {
+                return Err(McpError::invalid_params("hours must be positive", None));
             }
-            let end = if input.report == StatsReport::WanHourly { now } else { now / HOUR_MS * HOUR_MS };
-            Ok(ActivityWindow { start: end.saturating_sub(u64::from(hours) * HOUR_MS), end })
+            let end = if input.report == StatsReport::WanHourly {
+                now
+            } else {
+                now / HOUR_MS * HOUR_MS
+            };
+            Ok(ActivityWindow {
+                start: end.saturating_sub(u64::from(hours) * HOUR_MS),
+                end,
+            })
         }
-        _ => Err(McpError::invalid_params("supply both startMs/endMs instead of hours, with endMs in the past", None)),
+        _ => Err(McpError::invalid_params(
+            "supply both startMs/endMs instead of hours, with endMs in the past",
+            None,
+        )),
     }
 }
 
