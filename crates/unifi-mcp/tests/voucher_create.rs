@@ -216,7 +216,6 @@ async fn a_confirmed_call_sends_the_batch_and_returns_every_code() {
         .structured_content
         .expect("structured");
     assert_eq!(output["applied"], true);
-    assert_eq!(output["wellFormed"], true);
     assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 3);
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert_eq!(output["checks"]["countMatches"], true);
@@ -236,11 +235,6 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             "a duplicate code",
             vec!["1234567890", "1234567890", "3456789012"],
             "allDistinct",
-        ),
-        (
-            "a code with whitespace",
-            vec!["1234567890", "2345 78901", "3456789012"],
-            "allWellFormed",
         ),
         (
             "a missing code",
@@ -266,7 +260,6 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             .structured_content
             .expect("structured");
 
-        assert_eq!(output["wellFormed"], false, "{label}: {output}");
         assert_eq!(output["checks"][failed], false, "{label}: {output}");
         // Every code in the creation response remains available to the caller.
         let returned: Vec<&str> = output["vouchers"]
@@ -277,6 +270,37 @@ async fn a_batch_that_fails_a_check_still_returns_its_codes() {
             .collect();
         assert_eq!(returned, minted, "{label}: {output}");
     }
+}
+
+#[tokio::test]
+async fn controller_code_strings_have_observations_without_format_verdicts() {
+    let server = MockServer::start().await;
+    let long_code = "λ".repeat(80);
+    let minted = [" leading and trailing ", long_code.as_str()];
+    mints(&server, &batch(&minted)).await;
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name":"guests", "count":2, "timeLimitMinutes":60, "confirm":true
+            })),
+            None,
+        )
+        .await
+        .expect("complete controller strings")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["vouchers"][0]["code"], minted[0]);
+    assert_eq!(output["vouchers"][1]["code"], minted[1]);
+    assert_eq!(output["checks"]["countMatches"], true);
+    assert_eq!(output["checks"]["allIdentified"], true);
+    assert_eq!(output["checks"]["allDistinct"], true);
+    assert_eq!(output["checks"]["codeLengths"], serde_json::json!([22, 80]));
+    assert!(output.get("wellFormed").is_none());
+    assert!(output["checks"].get("allWellFormed").is_none());
+    let body: serde_json::Value =
+        serde_json::from_str(output["responseBody"].as_str().expect("original body"))
+            .expect("JSON");
+    assert_eq!(body["vouchers"][1]["code"], minted[1]);
 }
 
 #[tokio::test]
@@ -454,9 +478,113 @@ async fn controller_generated_codes_are_returned_exactly() {
     assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 2);
     assert_eq!(output["vouchers"][0]["code"], "1234567890", "{output}");
     assert_eq!(output["vouchers"][1]["code"], PASSWORD, "{output}");
-    assert_eq!(output["checks"]["allWellFormed"], true, "{output}");
-    assert_eq!(output["wellFormed"], true, "{output}");
     assert_eq!(output["vouchers"][1]["id"], "voucher-1", "{output}");
+}
+
+#[tokio::test]
+async fn native_limits_rates_and_original_names_reach_the_controller() {
+    for name in [format!("  {}  ", "g".repeat(500)), "   ".to_owned()] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let vouchers = (0..1000)
+            .map(|index| serde_json::json!({"code":format!("{index:010}")}))
+            .collect::<Vec<_>>();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
+            )))
+            .and(body_json(serde_json::json!({
+                "name":name,"count":1000,"timeLimitMinutes":1_000_000,
+                "authorizedGuestLimit":4_294_967_296_u64,"dataUsageLimitMBytes":1_048_576,
+                "rxRateLimitKbps":100_000,"txRateLimitKbps":2
+            })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"vouchers":vouchers})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = handler_for(&server)
+            .call(
+                &create(&serde_json::json!({
+                    "name":name,"count":1000,"timeLimitMinutes":1_000_000,
+                    "guestLimit":4_294_967_296_u64,"dataLimitMegabytes":1_048_576,
+                    "downloadRateLimitKbps":100_000,"uploadRateLimitKbps":2,"confirm":true
+                })),
+                None,
+            )
+            .await
+            .expect("native voucher creation")
+            .structured_content
+            .expect("structured");
+        assert_eq!(output["batch"]["name"], name);
+        assert_eq!(output["batch"]["guestLimit"], 4_294_967_296_u64);
+        assert_eq!(output["batch"]["downloadRateLimitKbps"], 100_000);
+        assert_eq!(output["batch"]["uploadRateLimitKbps"], 2);
+        assert_eq!(output["requested"], 1000);
+        assert_eq!(output["vouchers"].as_array().expect("vouchers").len(), 1000);
+        assert_eq!(output["vouchers"][999]["code"], "0000000999");
+        assert_eq!(output["responseStatus"], 201);
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn default_count_and_rate_preview_do_not_contact_the_controller() {
+    let server = MockServer::start().await;
+    let output = handler_for(&server)
+        .call(
+            &create(&serde_json::json!({
+                "name":"  label  ","timeLimitMinutes":1_000_000,
+                "downloadRateLimitKbps":2,"uploadRateLimitKbps":100_000
+            })),
+            None,
+        )
+        .await
+        .expect("preview")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["requested"], 1);
+    assert_eq!(output["batch"]["name"], "  label  ");
+    assert_eq!(output["batch"]["downloadRateLimitKbps"], 2);
+    assert_eq!(output["batch"]["uploadRateLimitKbps"], 100_000);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn native_optional_ranges_are_validated_before_controller_calls() {
+    let server = MockServer::start().await;
+    let handler = handler_for(&server);
+    for (field, values) in [
+        ("guestLimit", vec![0, 9_223_372_036_854_775_808_u64]),
+        ("dataLimitMegabytes", vec![0, 1_048_577]),
+        ("downloadRateLimitKbps", vec![1, 100_001]),
+        ("uploadRateLimitKbps", vec![1, 100_001]),
+    ] {
+        for value in values {
+            let mut input = serde_json::json!({"name":"g","timeLimitMinutes":60,"confirm":true});
+            input[field] = serde_json::json!(value);
+            let error = handler
+                .call(&create(&input), None)
+                .await
+                .expect_err("native invalid range");
+            assert!(error.message.contains(field));
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -473,7 +601,7 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
             "count must be between",
         ),
         (
-            serde_json::json!({"name": "g", "count": 101, "timeLimitMinutes": 60}),
+            serde_json::json!({"name": "g", "count": 1001, "timeLimitMinutes": 60}),
             "count must be between",
         ),
         (
@@ -481,21 +609,21 @@ async fn a_batch_that_cannot_be_satisfied_is_refused_before_it_is_minted() {
             "timeLimitMinutes must be between",
         ),
         (
-            serde_json::json!({"name": "g", "count": 1, "timeLimitMinutes": 10081}),
+            serde_json::json!({"name": "g", "count": 1, "timeLimitMinutes": 1_000_001}),
             "timeLimitMinutes must be between",
         ),
         (
-            serde_json::json!({"name": "   ", "count": 1, "timeLimitMinutes": 60}),
-            "name must be 1-",
+            serde_json::json!({"name": "", "count": 1, "timeLimitMinutes": 60}),
+            "name must be nonempty",
         ),
-        // Caller supplied names remain bounded before a mutation.
+        // Bound the complete serialized request before calling the controller.
         (
             serde_json::json!({
-                "name": "g".repeat(129),
+                "name": "\"".repeat(600_000),
                 "count": 1,
                 "timeLimitMinutes": 60,
             }),
-            "name must be 1-",
+            "serialized voucher request exceeds",
         ),
     ] {
         let mut confirmed = arguments.clone();
@@ -529,7 +657,7 @@ async fn failed_readback_is_reported_without_hiding_created_codes() {
         .expect("structured");
     assert_eq!(output["verified"], false, "{output}");
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
-    assert!(output.get("wellFormed").is_some(), "{output}");
+    assert!(output.get("checks").is_some(), "{output}");
     assert_eq!(output["readbackErrors"][0]["voucherId"], "voucher-0");
     assert!(
         output["readbackErrors"][0]["error"]

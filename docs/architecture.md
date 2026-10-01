@@ -181,7 +181,7 @@ accepted write proves nothing. Every write tool shares one path:
 ### Voucher readback
 
 The official voucher list and detail endpoints return codes. `vouchers.create`
-checks the returned batch's count, identity, distinctness, and code form, then
+reports the returned batch's count, identity, distinctness and code lengths, then
 reads each identified voucher back to compare its id and code. A failed
 readback is reported alongside the creation response. `vouchers.search` and
 `vouchers.status` let callers retrieve codes later without minting again.
@@ -202,7 +202,8 @@ and why its value was chosen, so changing one is a one-line reviewed edit.
 | Bound | Value | Applies to | Contract | Signal / recovery | Rationale |
 |---|---|---|---|---|---|
 | Search page limit | 1-200, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset` | one page stays well under the response budget |
-| Filter length | 128 UTF-8 bytes | all string filters, and the voucher batch label | fail-loud | error; surrounding whitespace trimmed before the check, content never cut | longer values are ids pasted by mistake |
+| Filter length | 128 UTF-8 bytes | compact search filters | fail-loud | input error; surrounding whitespace normalized | bounds local matching work; complete source reads remain available |
+| Voucher creation request | native API field ranges; complete serialized body at most 1 MiB | vouchers.create | fail-loud before controller access | error names the invalid native field or request bound | labels are forwarded unchanged; count and bandwidth fields match the upstream contract |
 | Structured content formatting target | 48 KiB | formatters that move large fields to labeled MCP content | complete values preserved | `...InContent` flags locate moved fields; structured results may exceed the target | avoids repeating large values in structured and text content |
 | Device inventory scan | 1000 rows | devices.*, AP name joins | signaled | `inventoryTruncated`; status selector error names the ceiling | order of magnitude above any home site |
 | Firewall zone scan | 400 rows per call | firewall.read | signaled + continuable | `sectionsTruncated`; continue with `section: zones` and `sectionOffset` from `nextSectionOffset` | ceiling-limited section still fits the budget |

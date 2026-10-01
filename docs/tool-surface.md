@@ -1003,8 +1003,13 @@ within the transport body bound. The gateway owns authorization and disclosure.
 
 ### Voucher creation and lifecycle
 
-It takes `name`, `count`, `timeLimitMinutes`, and optionally `guestLimit` and
-`dataLimitMegabytes`, and echoes all of them back under `batch`. A preview is
+It takes `name`, `timeLimitMinutes`, and optionally `count` (default one),
+`guestLimit`, `dataLimitMegabytes`, `downloadRateLimitKbps` and
+`uploadRateLimitKbps`, and echoes them back under `batch`. Names are forwarded
+unchanged, including whitespace. The native API allows 1-1000 vouchers,
+1-1000000 minutes, a positive signed 64-bit guest limit, 1-1048576 megabytes,
+and 2-100000 kilobits per second for each rate. The complete serialized request
+has an explicit 1 MiB bound. A preview is
 what this write is reviewed from, and two batches differing only in validity or
 access limits are different batches — a count alone could not tell them apart.
 
@@ -1027,12 +1032,10 @@ to labeled MCP content with `responseBodyInContent`. An oversized voucher view
 also moves intact to content with `vouchersInContent`; issued codes remain
 available without repeating creation.
 
-Creation checks the returned batch — whether as many came back as
-were asked for, whether each carries an id and a code, whether the codes are
-distinct, and whether each is free of whitespace and within a plausible length.
-Code lengths are reported rather than judged: the controller decides the
-format, and refusing a batch for being unfamiliar would condemn vouchers that
-already exist. It also reads each identified voucher back and sets `verified`
+Creation checks report whether the returned count matches, whether each voucher
+carries a nonempty ID and code, and whether codes are distinct. Code lengths
+are observations; the controller defines the format. Creation also reads each
+identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
 and complete controller response or error. `readbackComplete` says whether verification
@@ -1069,10 +1072,9 @@ use labeled MCP content with `responseBodyInContent`; the voucher summary and
 verification results remain available. Voucher list and detail reads can also
 retrieve their codes.
 
-For the same reason, everything that can refuse a batch refuses it before
-minting: the count and validity bounds and the label's length are decided from
-the request alone. A batch rejected after minting is the one outcome worse than
-not minting at all.
+Native field ranges and the complete request body bound are checked before
+minting. The controller decides whether the requested combination is supported;
+its complete rejection remains available.
 
 Not idempotent, and says so — each call mints another batch.
 
