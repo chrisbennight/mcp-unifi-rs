@@ -30,8 +30,8 @@ pub mod system_log;
 pub mod traffic;
 
 pub use client::{
-    DpiCatalogKind, IntegrationClient, InventoryDetailKind, NetworkPolicyCollection,
-    SiteInventoryKind, SwitchingDetailKind,
+    DpiCatalogKind, IntegrationClient, InventoryDetailKind, MAXIMUM_DPI_NAME_IDS,
+    NetworkPolicyCollection, SiteInventoryKind, SwitchingDetailKind,
 };
 pub use config::{ControllerConfig, TlsMode};
 pub use error::{ApiError, BoundedMessage};

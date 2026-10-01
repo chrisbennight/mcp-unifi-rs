@@ -244,14 +244,16 @@ impl UnifiMcp {
         if rows.is_empty() {
             return (Vec::new(), "empty", Vec::new());
         }
-        let ids: Vec<_> = rows
-            .iter()
+        // Keep the optional name lookup within its existing request budget,
+        // enriching the same highest-ranked rows as a compact ranking.
+        let named_rows = rows.iter().take(unifi_api::MAXIMUM_DPI_NAME_IDS);
+        let ids: Vec<_> = named_rows
+            .clone()
             .map(|row| u32::from(row.category) << 16 | u32::from(row.application))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let cats: Vec<_> = rows
-            .iter()
+        let cats: Vec<_> = named_rows
             .map(|row| u32::from(row.category))
             .collect::<BTreeSet<_>>()
             .into_iter()

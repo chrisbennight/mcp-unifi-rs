@@ -209,6 +209,102 @@ async fn application_ranking_uses_verified_category_and_application_name_mapping
 }
 
 #[tokio::test]
+async fn large_application_rankings_preserve_bounded_name_enrichment() {
+    let server = MockServer::start().await;
+    login_mock(&server).await;
+    let mut data = fixture();
+    data["client_usage_by_app"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    data["client_usage_by_app"][0]["usage_by_app"] = (1..=301)
+        .map(|id| {
+            json!({"application":id,"category":1,"bytes_received":id,
+            "bytes_transmitted":0,"total_bytes":id,"activity_seconds":60})
+        })
+        .collect();
+    data["total_usage_by_app"] = (1..=301)
+        .map(|id| {
+            json!({"application":id,"category":1,"bytes_received":id,
+            "bytes_transmitted":0,"total_bytes":id,"client_count":1})
+        })
+        .collect();
+    activity_mock(&server, data).await;
+    evidence_mock(&server, wan()).await;
+    for (count, requests) in [(10, 1), (50, 4)] {
+        let selected = 302 - count..=301;
+        let filter = format!(
+            "id.in({})",
+            selected
+                .clone()
+                .map(|id| ((1_u32 << 16) | id).to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let names: Vec<_> = selected
+            .map(|id| json!({"id":(1_u32 << 16) | id,"name":format!("Application {id}")}))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/proxy/network/integration/v1/dpi/applications"))
+            .and(query_param("filter", filter))
+            .and(query_param("limit", "50"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "offset":0,"limit":50,"count":count,"totalCount":2112,"data":names
+            })))
+            .expect(requests)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/proxy/network/integration/v1/dpi/categories"))
+        .and(query_param("filter", "id.in(1)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offset":0,"limit":50,"count":1,"totalCount":2112,
+            "data":[{"id":1,"name":"Known category"}]
+        })))
+        .expect(5)
+        .mount(&server)
+        .await;
+    for (top, returned) in [
+        (None, 10),
+        (Some(50), 50),
+        (Some(51), 51),
+        (Some(300), 300),
+        (Some(usize::MAX), 301),
+    ] {
+        let mut input = args("dpiApplications");
+        if let Some(top) = top {
+            input["top"] = json!(top);
+        }
+        let output = query(&server, input).await;
+        let rows = output["topApplications"].as_array().unwrap();
+        assert_eq!(output["totalApplications"], 301);
+        assert_eq!(rows.len(), returned);
+        for (index, row) in rows.iter().enumerate() {
+            let id = 301 - index;
+            assert_eq!(row["applicationId"], id);
+            assert_eq!(row["rxBytes"], id);
+            assert_eq!(row["categoryName"], "Known category");
+            if index < 50 {
+                assert_eq!(row["applicationName"], format!("Application {id}"));
+            } else {
+                assert!(row["applicationName"].is_null());
+            }
+        }
+        assert_eq!(
+            output["activity"]["namesStatus"],
+            if returned <= 50 {
+                "reported"
+            } else {
+                "partial"
+            }
+        );
+        assert!(output["sourceErrors"].as_array().is_none_or(Vec::is_empty));
+    }
+}
+
+#[tokio::test]
 async fn invalid_dpi_lookup_returns_its_controller_response_with_activity() {
     let server = MockServer::start().await;
     login_mock(&server).await;

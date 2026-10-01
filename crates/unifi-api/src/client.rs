@@ -23,6 +23,9 @@ use crate::{
 /// same way; a second copy of this policy would drift from this one.
 pub(crate) const MAXIMUM_RETRY_AFTER: Duration = Duration::from_secs(10);
 
+/// Identifier budget for one optional DPI display-name request.
+pub const MAXIMUM_DPI_NAME_IDS: usize = 50;
+
 /// Documented site inventory families in the Network Integration API.
 #[derive(Debug, Clone, Copy)]
 pub enum SiteInventoryKind {
@@ -166,7 +169,7 @@ impl IntegrationClient {
         ids: &[u32],
         categories: bool,
     ) -> Result<Vec<crate::traffic::DpiName>, ApiError> {
-        if ids.is_empty() || ids.len() > 50 {
+        if ids.is_empty() || ids.len() > MAXIMUM_DPI_NAME_IDS {
             return Err(ApiError::Config(
                 "DPI name selection must contain 1-50 IDs".to_owned(),
             ));

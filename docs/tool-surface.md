@@ -394,7 +394,10 @@ remain errors with their complete bodies. The gateway owns disclosure.
   before selection. Numeric category/application IDs remain available when
   official catalog names are missing. `namesStatus` identifies lookup failures,
   and `sourceErrors` carries each failed application or category lookup's
-  controller response.
+  controller response. Name enrichment covers the first 50 ranked rows in two
+  bounded catalog requests. A larger ranking preserves those names and reports
+  `namesStatus: "partial"` when additional names are missing; the complete DPI
+  dictionaries remain available through `network.inventory.list`.
 - `wanHourly` returns site WAN counters without client attribution. Missing
   counters remain unknown. Returned timestamps are restricted to the requested
   window; the bucket at `endMs` is excluded.
