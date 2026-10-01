@@ -85,9 +85,33 @@ pub(crate) const STRUCTURED_CONTENT_TARGET_BYTES: usize = 48 * 1024;
 const MAXIMUM_POLICY_REQUEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 
-/// Search pagination bounds shared by the list tools.
-const MAXIMUM_SEARCH_LIMIT: u16 = 200;
-const DEFAULT_SEARCH_LIMIT: u16 = 50;
+/// Documented controller limits for Integration collection requests.
+const MAXIMUM_INTEGRATION_LIMIT: u32 = 200;
+const MAXIMUM_VOUCHER_LIMIT: u32 = 1000;
+const DEFAULT_SEARCH_LIMIT: usize = 50;
+
+fn integration_limit(requested: usize) -> u32 {
+    u32::try_from(requested.min(MAXIMUM_INTEGRATION_LIMIT as usize))
+        .expect("the native integration limit fits u32")
+}
+
+fn voucher_limit(requested: usize) -> u32 {
+    u32::try_from(requested.min(MAXIMUM_VOUCHER_LIMIT as usize))
+        .expect("the native voucher limit fits u32")
+}
+
+fn protect_limit(requested: usize) -> u32 {
+    u32::try_from(requested.min(unifi_api::MAXIMUM_PROTECT_EVENT_PAGE_LIMIT as usize))
+        .expect("the Protect event read budget fits u32")
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PageCounts {
+    requested_limit: usize,
+    effective_limit: u64,
+    returned: usize,
+}
 /// Ceiling on client rows scanned to resolve one hardware address to the
 /// controller's own client id.
 const CLIENT_SCAN_CEILING: u64 = 1000;
@@ -106,7 +130,7 @@ const IDLE_CAMERA_LIST_CEILING: usize = 100;
 /// Ceiling on device inventory rows scanned per call.
 const DEVICE_INVENTORY_CEILING: u64 = 1000;
 /// System-log rows scanned when building one client's recent events.
-const EVENT_SCAN_LIMIT: u32 = 200;
+const EVENT_SCAN_LIMIT: usize = 200;
 /// Recent events returned for one client.
 const CONTEXT_EVENT_LIMIT: usize = 20;
 /// Ceiling on one event message's characters in output.
@@ -123,12 +147,11 @@ const AP_DETAIL_CEILING: usize = 16;
 
 /// Event search bounds.
 const DEFAULT_EVENT_WINDOW_HOURS: u32 = 24;
-const EVENT_FETCH_LIMIT: u32 = 1000;
+const EVENT_FETCH_LIMIT: usize = 1000;
 
 /// Statistics bounds.
 const DEFAULT_WAN_REPORT_HOURS: u32 = 24;
-const DEFAULT_TOP_APPLICATIONS: u16 = 10;
-const MAXIMUM_TOP_APPLICATIONS: u16 = 50;
+const DEFAULT_TOP_APPLICATIONS: usize = 10;
 
 // ---------------------------------------------------------------------------
 // Inputs and outputs
@@ -207,15 +230,16 @@ struct ClientsSearchInput {
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
     offset: usize,
-    /// Rows per page, 1-200.
+    /// Positive rows per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     /// Concise identity-and-connection rows, or full association detail.
     #[serde(default)]
     detail: DetailLevel,
 }
 
-fn default_search_limit() -> u16 {
+fn default_search_limit() -> usize {
     DEFAULT_SEARCH_LIMIT
 }
 
@@ -236,9 +260,10 @@ struct DevicesSearchInput {
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
     offset: usize,
-    /// Rows per page, 1-200.
+    /// Positive rows per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -247,13 +272,15 @@ struct PendingDevicesListInput {
     #[serde(default)]
     offset: u64,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PendingDevicesListOutput {
+    page_counts: PageCounts,
     #[serde(skip_serializing_if = "Option::is_none")]
     devices: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -545,9 +572,10 @@ struct CamerasSearchInput {
     /// Zero-based offset into the filtered, name-sorted result.
     #[serde(default)]
     offset: usize,
-    /// Rows per page, 1-200.
+    /// Positive rows per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -610,9 +638,10 @@ struct ProtectDevicesListInput {
     /// Zero-based offset into the controller's inventory for this family.
     #[serde(default)]
     offset: usize,
-    /// Records per page, 1-200.
+    /// Positive records per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -965,7 +994,8 @@ struct ProtectArmProfilesListInput {
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1093,7 +1123,8 @@ struct ProtectUsersListInput {
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1192,7 +1223,8 @@ struct ProtectAssetsListInput {
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1274,7 +1306,8 @@ struct ProtectViewsListInput {
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2388,10 +2421,11 @@ struct ProtectEventsInput {
     /// Continuation returned by the prior page. Pass it back unchanged and do
     /// not repeat window or filter fields.
     cursor: Option<ProtectEventsCursor>,
-    /// Maximum upstream rows inspected for this page, 1-200. Filtered pages
+    /// Positive upstream scan count for this page. The event read budget applies. Filtered pages
     /// may contain fewer rows; continue until `nextCursor` is absent.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     /// Include the controller's complete record for every returned event.
     /// Omitted or false keeps search pages compact.
     include_details: Option<bool>,
@@ -2425,6 +2459,7 @@ struct ProtectEventView {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct ProtectEventsOutput {
+    page_counts: PageCounts,
     rows: Vec<ProtectEventView>,
     /// Frozen time window covered by this scan.
     window_start: u64,
@@ -2482,9 +2517,10 @@ struct RadiusProfilesListInput {
     /// Zero-based offset into the controller's profile list.
     #[serde(default)]
     offset: u64,
-    /// Profiles per page, 1-200.
+    /// Positive profiles per page; the controller limit applies.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     /// Documented controller filter expression.
     filter: Option<String>,
 }
@@ -2492,6 +2528,7 @@ struct RadiusProfilesListInput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RadiusProfilesListOutput {
+    page_counts: PageCounts,
     /// Complete fields for the profiles returned on this page.
     #[serde(skip_serializing_if = "Option::is_none")]
     profiles: Option<Vec<Map<String, Value>>>,
@@ -2552,13 +2589,15 @@ struct NetworkInventoryListInput {
     #[serde(default)]
     offset: u64,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct NetworkInventoryListOutput {
+    page_counts: PageCounts,
     kind: NetworkInventoryKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     records: Option<Vec<Value>>,
@@ -2650,13 +2689,15 @@ struct NetworkPolicyListInput {
     #[serde(default)]
     offset: u64,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct NetworkPolicyListOutput {
+    page_counts: PageCounts,
     kind: NetworkPolicyKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     records: Option<Vec<Value>>,
@@ -3276,9 +3317,10 @@ struct WifiBroadcastsListInput {
     /// Zero-based offset into the controller's broadcast list.
     #[serde(default)]
     offset: u64,
-    /// Broadcasts per page, 1-200.
+    /// Positive broadcasts per page; the controller limit applies.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     /// The official controller filter query, sent unchanged.
     filter: Option<String>,
 }
@@ -3286,6 +3328,7 @@ struct WifiBroadcastsListInput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct WifiBroadcastsListOutput {
+    page_counts: PageCounts,
     #[serde(skip_serializing_if = "Option::is_none")]
     broadcasts: Option<Vec<Map<String, Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3889,16 +3932,17 @@ struct VouchersSearchInput {
     /// Zero-based offset into the controller's voucher list.
     #[serde(default)]
     offset: u32,
-    /// Vouchers per page, 1-100. Defaults to 25.
+    /// Positive vouchers per page. Defaults to 25; the native limit applies.
     #[serde(default = "default_voucher_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 const fn default_voucher_count() -> u32 {
     1
 }
 
-const fn default_voucher_limit() -> u16 {
+const fn default_voucher_limit() -> usize {
     25
 }
 
@@ -3927,9 +3971,10 @@ struct VouchersRevokeMatchingInput {
     /// Offset of the preview page, independent of the deletion selection.
     #[serde(default)]
     preview_offset: u32,
-    /// Preview rows, 1-100. Default 25. Confirmation deletes every filter match.
+    /// Positive preview rows. Default 25; the native limit applies. Confirmation deletes every filter match.
     #[serde(default = "default_voucher_limit")]
-    preview_limit: u16,
+    #[schemars(range(min = 1))]
+    preview_limit: usize,
     /// Delete all matching vouchers. Absent or false previews one page.
     #[serde(default)]
     confirm: bool,
@@ -3938,6 +3983,7 @@ struct VouchersRevokeMatchingInput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct VouchersRevokeMatchingOutput {
+    page_counts: PageCounts,
     filter: String,
     matches_before: u64,
     preview_complete: bool,
@@ -4040,6 +4086,7 @@ impl From<VoucherDetails> for VoucherReadView {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct VouchersSearchOutput {
+    page_counts: PageCounts,
     vouchers: Vec<VoucherReadView>,
     offset: u64,
     limit: u64,
@@ -4391,9 +4438,10 @@ struct EventsSearchInput {
     /// Zero-based offset into the time-sorted result.
     #[serde(default)]
     offset: usize,
-    /// Rows per page, 1-200.
+    /// Positive rows per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -4444,14 +4492,16 @@ struct StatsQueryInput {
     /// Positive window in hours; defaults to 24. Activity reports end at the
     /// latest completed UTC hour; wanHourly retains its window ending now.
     hours: Option<u32>,
-    /// Number of top applications for the DPI report, 1-50. Defaults to 10.
-    top: Option<u16>,
+    /// Positive number of top applications for the DPI report. Defaults to 10.
+    #[schemars(range(min = 1))]
+    top: Option<usize>,
     /// Fixed interval boundaries in epoch milliseconds. Supply both, on UTC
     /// hour boundaries, instead of hours, ending in the past.
     start_ms: Option<u64>,
     end_ms: Option<u64>,
-    /// Client-history page size, 1-200; defaults to 50.
-    limit: Option<u16>,
+    /// Positive client-history page size; defaults to 50.
+    #[schemars(range(min = 1))]
+    limit: Option<usize>,
     /// Client-history row offset. Reuse fixed timestamps across pages.
     offset: Option<usize>,
 }
@@ -5157,11 +5207,7 @@ impl UnifiMcp {
 
         let total = clients.len();
         let offset = input.offset;
-        let page: Vec<ActiveClient> = clients
-            .into_iter()
-            .skip(offset)
-            .take(usize::from(input.limit))
-            .collect();
+        let page: Vec<ActiveClient> = clients.into_iter().skip(offset).take(input.limit).collect();
         let next_offset = next_offset(offset, page.len(), total);
 
         // Resolve access point names only when a returned row actually
@@ -5317,7 +5363,7 @@ impl UnifiMcp {
         let rows: Vec<DeviceRow> = devices
             .into_iter()
             .skip(offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .map(device_row)
             .collect();
         let next_offset = next_offset(offset, rows.len(), total);
@@ -5334,8 +5380,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<PendingDevicesListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         if input
             .filter
@@ -5352,7 +5398,7 @@ impl UnifiMcp {
             .pending_devices(
                 PageRequest {
                     offset: input.offset,
-                    limit: u32::from(input.limit),
+                    limit: integration_limit(input.limit),
                 },
                 input.filter.as_deref(),
             )
@@ -5361,7 +5407,7 @@ impl UnifiMcp {
         let count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(integration_limit(input.limit))
             || count > page.limit
             || page.count != count
         {
@@ -5389,6 +5435,11 @@ impl UnifiMcp {
             ));
         }
         pending_devices_list_result(PendingDevicesListOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             devices: Some(page.data),
             devices_in_content: None,
             page_metadata: Some(controller_page_metadata(&response)?),
@@ -5847,11 +5898,7 @@ impl UnifiMcp {
             .collect();
 
         let total = matched.len();
-        let rows: Vec<CameraView> = matched
-            .into_iter()
-            .skip(offset)
-            .take(usize::from(limit))
-            .collect();
+        let rows: Vec<CameraView> = matched.into_iter().skip(offset).take(limit).collect();
         let next_offset = next_offset(offset, rows.len(), total);
         structured(CamerasSearchOutput {
             cameras: rows,
@@ -5866,8 +5913,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectDevicesListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let devices = self
             .protect()
@@ -5878,7 +5925,7 @@ impl UnifiMcp {
         let page: Vec<Value> = devices
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect();
         let next = input.offset.saturating_add(page.len());
         structured(ProtectDevicesListOutput {
@@ -6023,15 +6070,15 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectArmProfilesListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let profiles = self.protect().arm_profiles().await.map_err(api_error)?;
         let total_count = profiles.len();
         let page = profiles
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect::<Vec<_>>();
         let next = input.offset.saturating_add(page.len());
         arm_profiles_list_result(ProtectArmProfilesListOutput {
@@ -6281,8 +6328,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectUsersListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let users = self
             .protect()
@@ -6293,7 +6340,7 @@ impl UnifiMcp {
         let page: Vec<Value> = users
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect();
         let next = input.offset.saturating_add(page.len());
         structured(ProtectUsersListOutput {
@@ -6396,15 +6443,15 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectViewsListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let viewers = self.protect().viewers().await.map_err(api_error)?;
         let total_count = viewers.len();
         let page: Vec<Value> = viewers
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect();
         let next = input.offset.saturating_add(page.len());
         structured(ProtectViewersListOutput {
@@ -6524,15 +6571,15 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectViewsListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let liveviews = self.protect().liveviews().await.map_err(api_error)?;
         let total_count = liveviews.len();
         let page: Vec<Value> = liveviews
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect();
         let next = input.offset.saturating_add(page.len());
         structured(ProtectLiveviewsListOutput {
@@ -7020,15 +7067,15 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectAssetsListInput>(params)?;
-        if !(1..=200).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let assets = self.protect().animation_assets().await.map_err(api_error)?;
         let total_count = assets.len();
         let page: Vec<Value> = assets
             .into_iter()
             .skip(input.offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect();
         let next = input.offset.saturating_add(page.len());
         structured(ProtectAssetsListOutput {
@@ -7393,6 +7440,10 @@ impl UnifiMcp {
     }
 
     /// Historical detections through the Protect application route.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one event page binds camera selection, filters, continuation and count metadata"
+    )]
     async fn protect_events_search(
         &self,
         params: &CallToolRequestParams,
@@ -7433,7 +7484,7 @@ impl UnifiMcp {
             .protect_events(
                 query.window_start,
                 query.window_end,
-                u32::from(limit),
+                protect_limit(limit),
                 query.continuation.as_ref(),
             )
             .await
@@ -7490,6 +7541,11 @@ impl UnifiMcp {
             detection: query.detection,
         });
         structured(ProtectEventsOutput {
+            page_counts: PageCounts {
+                requested_limit: limit,
+                effective_limit: u64::from(protect_limit(limit)),
+                returned: rows.len(),
+            },
             rows,
             window_start: query.window_start,
             window_end: query.window_end,
@@ -7823,8 +7879,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworkInventoryListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         if input
             .filter
@@ -7844,7 +7900,7 @@ impl UnifiMcp {
         }
         let requested = PageRequest {
             offset: input.offset,
-            limit: u32::from(input.limit),
+            limit: integration_limit(input.limit),
         };
         let (page, response) = if let Some(kind) = input.kind.site_kind() {
             let site_id = self.site_id().await?;
@@ -7876,7 +7932,7 @@ impl UnifiMcp {
         let row_count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(integration_limit(input.limit))
             || row_count > page.limit
             || page.count != row_count
         {
@@ -7918,6 +7974,11 @@ impl UnifiMcp {
             .map_err(|error| page_validation_error(&response, error.to_string()))?;
         page_metadata.remove("data");
         network_inventory_list_result(NetworkInventoryListOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
@@ -8021,8 +8082,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworkPolicyListInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         if input
             .filter
@@ -8042,7 +8103,7 @@ impl UnifiMcp {
                 input.kind.collection(),
                 PageRequest {
                     offset: input.offset,
-                    limit: u32::from(input.limit),
+                    limit: integration_limit(input.limit),
                 },
                 input.filter.as_deref(),
             )
@@ -8051,7 +8112,7 @@ impl UnifiMcp {
         let row_count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(integration_limit(input.limit))
             || row_count > page.limit
             || page.count != row_count
         {
@@ -8079,6 +8140,11 @@ impl UnifiMcp {
             ));
         }
         network_policy_list_result(NetworkPolicyListOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             kind: input.kind,
             records: Some(page.data),
             records_in_content: None,
@@ -8601,8 +8667,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<RadiusProfilesListInput>(params)?;
-        if input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         if input
             .filter
@@ -8621,7 +8687,7 @@ impl UnifiMcp {
                 &site_id,
                 PageRequest {
                     offset: input.offset,
-                    limit: u32::from(input.limit),
+                    limit: integration_limit(input.limit),
                 },
                 input.filter.as_deref(),
             )
@@ -8630,7 +8696,7 @@ impl UnifiMcp {
         let row_count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(integration_limit(input.limit))
             || row_count > page.limit
             || page.count != row_count
         {
@@ -8658,6 +8724,11 @@ impl UnifiMcp {
             ));
         }
         radius_profiles_list_result(RadiusProfilesListOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             profiles: Some(page.data),
             profiles_in_content: None,
             page_metadata: Some(controller_page_metadata(&response)?),
@@ -8675,10 +8746,9 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<WifiBroadcastsListInput>(params)?;
-        if input.offset > i32::MAX as u64 || input.limit == 0 || input.limit > MAXIMUM_SEARCH_LIMIT
-        {
+        if input.offset > i32::MAX as u64 || input.limit == 0 {
             return Err(McpError::invalid_params(
-                "offset must be 0-2147483647 and limit must be 1-200",
+                "offset must be 0-2147483647 and limit must be positive",
                 None,
             ));
         }
@@ -8699,7 +8769,7 @@ impl UnifiMcp {
                 &site_id,
                 PageRequest {
                     offset: input.offset,
-                    limit: u32::from(input.limit),
+                    limit: integration_limit(input.limit),
                 },
                 input.filter.as_deref(),
             )
@@ -8720,7 +8790,7 @@ impl UnifiMcp {
         let row_count = page.data.len() as u64;
         if page.offset != input.offset
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(integration_limit(input.limit))
             || row_count > page.limit
             || page.count != row_count
         {
@@ -8755,6 +8825,11 @@ impl UnifiMcp {
             ));
         }
         wifi_broadcasts_list_result(WifiBroadcastsListOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             broadcasts: Some(page.data),
             broadcasts_in_content: None,
             page_metadata: (!page_metadata.is_empty()).then_some(page_metadata),
@@ -9876,9 +9951,9 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<VouchersSearchInput>(params)?;
-        if input.offset > i32::MAX as u32 || !(1..=100).contains(&input.limit) {
+        if input.offset > i32::MAX as u32 || input.limit == 0 {
             return Err(McpError::invalid_params(
-                "offset must fit a nonnegative 32-bit integer and limit must be 1-100",
+                "offset must fit a nonnegative 32-bit integer and limit must be positive",
                 None,
             ));
         }
@@ -9889,14 +9964,16 @@ impl UnifiMcp {
                 &site_id,
                 PageRequest {
                     offset: u64::from(input.offset),
-                    limit: u32::from(input.limit),
+                    limit: voucher_limit(input.limit),
                 },
             )
             .await
             .map_err(api_error)?;
         if page.offset != u64::from(input.offset)
+            || page.limit == 0
+            || page.limit > u64::from(voucher_limit(input.limit))
             || page.count != page.data.len() as u64
-            || page.data.len() > usize::from(input.limit)
+            || page.count > page.limit
             || page.offset.saturating_add(page.count) > page.total_count
         {
             return Err(page_validation_error(
@@ -9915,6 +9992,11 @@ impl UnifiMcp {
             ));
         }
         structured(VouchersSearchOutput {
+            page_counts: PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            },
             vouchers: page.data.into_iter().map(VoucherReadView::from).collect(),
             offset: page.offset,
             limit: page.limit,
@@ -9957,10 +10039,10 @@ impl UnifiMcp {
         if input.filter.trim().is_empty()
             || input.filter.len() > 2048
             || input.preview_offset > i32::MAX as u32
-            || !(1..=100).contains(&input.preview_limit)
+            || input.preview_limit == 0
         {
             return Err(McpError::invalid_params(
-                "filter must be nonempty and at most 2048 bytes; previewOffset must fit a nonnegative 32-bit integer; previewLimit must be 1-100",
+                "filter must be nonempty and at most 2048 bytes; previewOffset must fit a nonnegative 32-bit integer; previewLimit must be positive",
                 None,
             ));
         }
@@ -9971,7 +10053,7 @@ impl UnifiMcp {
                 &site_id,
                 PageRequest {
                     offset: u64::from(input.preview_offset),
-                    limit: u32::from(input.preview_limit),
+                    limit: voucher_limit(input.preview_limit),
                 },
                 Some(&input.filter),
             )
@@ -9984,6 +10066,11 @@ impl UnifiMcp {
             input.preview_limit,
         )?;
         let mut output = VouchersRevokeMatchingOutput {
+            page_counts: PageCounts {
+                requested_limit: input.preview_limit,
+                effective_limit: before.limit,
+                returned: before.data.len(),
+            },
             filter: input.filter,
             matches_before: before.total_count,
             preview_complete: before.offset == 0 && before.count == before.total_count,
@@ -10515,11 +10602,7 @@ impl UnifiMcp {
 
         let total = rows.len();
         let offset = input.offset;
-        let page: Vec<EventRow> = rows
-            .into_iter()
-            .skip(offset)
-            .take(usize::from(input.limit))
-            .collect();
+        let page: Vec<EventRow> = rows.into_iter().skip(offset).take(input.limit).collect();
         let next_offset = next_offset(offset, page.len(), total);
         structured(EventsSearchOutput {
             rows: page,
@@ -10643,7 +10726,7 @@ impl UnifiMcp {
 
     async fn dpi_stats(
         &self,
-        top: u16,
+        top: usize,
         activity_response: Option<ApiError>,
     ) -> Result<CallToolResult, McpError> {
         let report = match self.legacy().dpi_by_application(self.legacy_site()).await {
@@ -10725,7 +10808,7 @@ impl UnifiMcp {
             std::cmp::Reverse(u128::from(row.tx_bytes) + u128::from(row.rx_bytes))
         });
         let total_applications = applications.len();
-        applications.truncate(usize::from(top));
+        applications.truncate(top);
         structured_stats(StatsQueryOutput {
             report: "dpiApplications",
             coverage: TrafficCoverage {
@@ -10837,12 +10920,9 @@ fn wireless_load(
     (clients_by_ap, weak_clients)
 }
 
-fn validate_page(limit: u16) -> Result<(), McpError> {
-    if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&limit) {
-        return Err(McpError::invalid_params(
-            format!("limit must be between 1 and {MAXIMUM_SEARCH_LIMIT}"),
-            None,
-        ));
+fn validate_page(limit: usize) -> Result<(), McpError> {
+    if limit == 0 {
+        return Err(McpError::invalid_params("limit must be positive", None));
     }
     Ok(())
 }
@@ -14453,11 +14533,13 @@ fn validate_voucher_records_page(
     page: &unifi_api::models::Page<Value>,
     response: &BoundedMessage,
     offset: u64,
-    limit: u16,
+    limit: usize,
 ) -> Result<(), McpError> {
     if page.offset != offset
+        || page.limit == 0
+        || page.limit > u64::from(voucher_limit(limit))
         || page.count != page.data.len() as u64
-        || page.data.len() > usize::from(limit)
+        || page.count > page.limit
         || (page.count != 0 && page.offset.saturating_add(page.count) > page.total_count)
         || (page.count == 0 && page.offset < page.total_count)
     {

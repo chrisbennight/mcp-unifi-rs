@@ -35,5 +35,8 @@ pub use client::{
 };
 pub use config::{ControllerConfig, TlsMode};
 pub use error::{ApiError, BoundedMessage};
-pub use legacy::{LegacyClient, LegacyConfig, LegacyDiagnosticSource, RecordFingerprint};
+pub use legacy::{
+    LegacyClient, LegacyConfig, LegacyDiagnosticSource, MAXIMUM_PROTECT_EVENT_PAGE_LIMIT,
+    RecordFingerprint,
+};
 pub use protect::{ProtectAvailability, ProtectClient};

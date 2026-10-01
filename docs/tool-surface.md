@@ -11,6 +11,20 @@ stay compact; selected tools also return the controller's original fields.
 The registry in `crates/unifi-mcp/src/registry.rs` is the executable source of
 these names, descriptions, and classifications; this page explains them.
 
+List and search page counts accept positive caller values while preserving their
+compact defaults. Local pages use the requested count over the available rows.
+Official Network Integration pages use the documented 200-row controller limit;
+voucher pages and previews use its 1,000-row limit. Their `pageCounts` reports
+`requestedLimit`, `effectiveLimit` and `returned`, and continuation follows the
+accepted controller page. Protect event pages keep the existing 999-row read
+budget plus one lookahead and report the same count metadata. Complete system-log
+pages report `requestedLimit` and `returned`; an upstream refusal remains an error.
+Response byte, scan, request and duration budgets still apply.
+
+The native Network bounds are published in the
+[Network 10.6.106 API](https://developer.ui.com/network/v10.6.106/getnetworksoverviewpage)
+OpenAPI specification, including the `/v1/sites/{siteId}/hotspot/vouchers` page.
+
 ## Reads
 
 Reads are annotated read-only, idempotent, and non-destructive. Most are
@@ -79,7 +93,7 @@ interface state remain available.
 
 ### `devices.pending.list`
 
-`offset`, `limit` (1-200, default 50), and the official `filter` query page
+`offset`, `limit` (positive, default 50), and the official `filter` query page
 devices pending adoption across the controller. Each row retains every field
 returned by the controller, including its MAC address and support state.
 `nextOffset` identifies the next page. Large pages carry their records in MCP
@@ -112,7 +126,7 @@ security modes, and passphrases. The gateway controls access to these values.
 ### `networks.list`, `networks.status`, and `networks.configure`
 
 These workflows use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
-`networks.list` accepts `offset` (0-2147483647), `limit` (1-200, default 50),
+`networks.list` accepts `offset` (0-2147483647), `limit` (positive, default 50),
 and the controller's documented `filter` query (at most 2048 bytes). `response`
 retains the entire page, including additional controller metadata and fields.
 Use `nextOffset` to continue. An empty page beyond the total is valid; an
@@ -147,7 +161,7 @@ an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
 
-`offset`, `limit` (1-200, default 50), and the documented `filter` page through the official Network
+`offset`, `limit` (positive, default 50), and the documented `filter` page through the official Network
 API's [RADIUS profiles](https://developer.ui.com/network/v10.4.57/getradiusprofileoverviewpage)
 for the selected site. Each profile preserves the fields
 the controller returned, including the id needed for enterprise Wi-Fi setup.
@@ -160,7 +174,7 @@ accepted controller response with a separate validation diagnostic.
 
 ### `network.source.read`
 
-`source`, `offset`, `limit` (1-200, default 50).
+`source`, `offset`, `limit` (positive, default 50).
 
 Complete records behind legacy diagnostic views. Sources are `activeClients`,
 `siteHealth`, `networkConfiguration`, `neighborAccessPoints`, and `dpiCounters`.
@@ -184,7 +198,7 @@ These tools use the [official Network Integration API](https://developer.ui.com/
 `network.inventory.list` accepts a `kind` of `countries`, `sites`, `clients`,
 `devices`, `dpiApplications`, `dpiCategories`, `deviceTags`,
 `lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
-`siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
+`siteToSiteVpnTunnels`, plus `offset` and `limit` (positive, default 50).
 The documented `filter` query is available except for WAN interfaces, whose
 endpoint has no filter parameter. Countries, sites and DPI dictionaries are controller-wide; other kinds
 use the selected site. Each page returns complete controller records, page
@@ -216,7 +230,7 @@ application information without a site lookup.
 These tools read [ACL rules, firewall zones, firewall policies, DNS policies, and traffic matching lists](https://developer.ui.com/network/v10.4.57/openapi.json)
 from the official Network Integration API. Choose `kind` as `aclRules`,
 `firewallZones`, `firewallPolicies`, `dnsPolicies`, or `trafficMatchingLists`. The list accepts `offset`, `limit`
-(1-200, default 50), and the documented `filter` query. It returns complete controller rows, page
+(positive, default 50), and the documented `filter` query. It returns complete controller rows, page
 counts, and `nextOffset`; large pages carry records in MCP content and set
 `recordsInContent`. `pageMetadata` retains all original page fields except
 the data array, returned as `records`; large metadata moves to MCP content
@@ -293,7 +307,7 @@ to MCP content with explicit markers.
 ### `wifi.broadcasts.list` and `wifi.broadcasts.status`
 
 These tools use the [official Network Wi-Fi broadcast API](https://developer.ui.com/network/v10.4.57/getwifibroadcastpage).
-`wifi.broadcasts.list` accepts `offset` (0-2147483647), `limit` (1-200, default 50),
+`wifi.broadcasts.list` accepts `offset` (0-2147483647), `limit` (positive, default 50),
 and the documented `filter` query (at most 2048 bytes),
 returns complete controller fields for each selected row, and supplies
 `nextOffset` until the list is complete. `wifi.broadcasts.status` accepts a
@@ -356,7 +370,7 @@ limited to 256 characters with a visible ellipsis when shortened.
 ### `events.read`
 
 Read a complete Network system-log page using `startMs`, `endMs`, `page`
-(zero-based, default zero), `pageSize` (1-1000, default 100), and optional
+(zero-based, default zero), positive `pageSize` (default 100), and optional
 `severity`. Time windows must be ordered; the controller decides supported
 ranges. `response` retains every original JSON field, including parameters,
 credentials and unknown page metadata. Follow `nextPage` for additional pages.
@@ -373,10 +387,10 @@ remain errors with their complete bodies. The gateway owns disclosure.
 
 - `clientWanHistory` returns the controller Activity view's historical Internet
   download/upload totals per client, sorted by combined bytes, with MAC address
-  and display name. `limit` (1-200, default 50) and `offset` page the returned
+  and display name. `limit` (positive, default 50) and `offset` page the returned
   client inventory. `clientTotals` covers all returned clients, not just the page.
 - `dpiApplications` ranks the same interval's application counters. `top`
-  (1-50, default 10) bounds the ranking; `totalApplications` reports the number
+  (positive, default 10) bounds the ranking; `totalApplications` reports the number
   before selection. Numeric category/application IDs remain available when
   official catalog names are missing. `namesStatus` identifies lookup failures,
   and `sourceErrors` carries each failed application or category lookup's
@@ -520,7 +534,7 @@ applies to event thumbnails.
 These tools read the official Protect inventory and detail endpoints for lights,
 sensors, chimes, sirens, fobs, relays, speakers, bridges, link stations, and
 alarm hubs. `kind` selects one documented family. The list accepts `offset` and
-`limit` (1-200, default 50), returns complete records for that page, and gives
+`limit` (positive, default 50), returns complete records for that page, and gives
 `totalCount` and `nextOffset` until the inventory is complete. The detail tool
 accepts the exact `deviceId` and returns its complete controller record.
 Controller-specific fields remain present, including fields unknown to this
@@ -569,7 +583,7 @@ move to labeled content. The gateway decides caller access.
 ### `protect.arm_profiles.list`, `protect.arm_profiles.configure`, and `protect.alarms.action`
 
 The list tool pages the complete arm-profile records from Protect's documented
-`arm-profiles` endpoint. It accepts `offset` and `limit` (1-200, default 50)
+`arm-profiles` endpoint. It accepts `offset` and `limit` (positive, default 50)
 and returns `totalCount` and `nextOffset` with each page. If the selected page
 exceeds the structured content formatting target, `profilesInContent` points to the
 complete page in labeled content, including when one record alone is large.
@@ -595,7 +609,7 @@ gateway decides access.
 
 These tools read the Protect `users` and UniFi Identity `ulp-users` resources
 documented in the Protect 7.3.53 API. `kind` is `user` or `identityUser`. The
-list accepts `offset` and `limit` (1-200, default 50), returns complete records
+list accepts `offset` and `limit` (positive, default 50), returns complete records
 for that page, and gives
 `totalCount` and `nextOffset` until the inventory is complete. The detail tool
 accepts the exact `userId` and returns its complete controller record. The
@@ -670,7 +684,7 @@ These tools read viewer devices and live-view configurations from the Protect
 7.3.53 API. Viewer records include their assigned live view and stream limit;
 live-view records include their layout and camera slots. The tools preserve
 the complete controller records, including future fields. Lists accept
-`offset` and `limit` (1-200, default 50) and return `totalCount` and
+`offset` and `limit` (positive, default 50) and return `totalCount` and
 `nextOffset` until complete. Detail reads use the exact `viewerId` or
 `liveviewId`. An empty inventory is distinct from an absent route. Invalid
 records or a wrong detail id return the accepted controller body with a local
@@ -862,7 +876,7 @@ it.
 
 `vouchers.revoke_matching` accepts the documented Network API `filter`
 (nonempty, at most 2048 bytes), optional `previewOffset` and `previewLimit`
-(1-100, default 25), and `confirm` (default false). Filters are sent unchanged,
+(positive, default 25), and `confirm` (default false). Filters are sent unchanged,
 including case and whitespace. Supported predicates are defined by the
 [controller catalog](https://developer.ui.com/network/v10.4.57/openapi.json).
 

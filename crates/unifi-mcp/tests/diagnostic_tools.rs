@@ -82,6 +82,58 @@ async fn login_mock(server: &MockServer) {
         .await;
 }
 
+#[tokio::test]
+async fn complete_system_log_pages_honor_large_counts_and_default_size() {
+    use serde_json::{Value, json};
+    for (requested, returned) in [
+        (None, 100usize),
+        (Some(1500usize), 1500),
+        (Some(usize::MAX), 1501),
+    ] {
+        let server = MockServer::start().await;
+        login_mock(&server).await;
+        let limit = requested.unwrap_or(100);
+        let rows: Vec<Value> = (0..returned).map(|i| json!({"timestamp":i})).collect();
+        Mock::given(method("POST"))
+            .and(path("/proxy/network/v2/api/site/default/system-log/all"))
+            .and(wiremock::matchers::body_json(json!({"timestampFrom":0,"timestampTo":2000,"pageNumber":0,"pageSize":limit})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":rows,"page_number":0,"total_element_count":1501,"total_page_count":if returned==1501 {1} else {2}})))
+            .expect(1).mount(&server).await;
+        let handler = handler_for(&server);
+        let mut input = json!({"startMs":0,"endMs":2000});
+        if let Some(limit) = requested {
+            input["pageSize"] = json!(limit);
+        }
+        let page = handler
+            .call(&call("events.read", &input), None)
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(page["requestedLimit"], limit);
+        assert_eq!(page["returned"], returned);
+        assert_eq!(page["response"]["data"].as_array().unwrap().len(), returned);
+        assert_eq!(
+            page.get("nextPage").cloned().unwrap_or(Value::Null),
+            if returned == 1501 {
+                Value::Null
+            } else {
+                json!(1)
+            }
+        );
+        let before = server.received_requests().await.unwrap().len();
+        input["pageSize"] = json!(0);
+        assert!(
+            handler
+                .call(&call("events.read", &input), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), before);
+        server.verify().await;
+    }
+}
+
 async fn site_mock(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path(format!("{INTEGRATION}/sites")))

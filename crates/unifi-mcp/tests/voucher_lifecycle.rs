@@ -71,6 +71,82 @@ fn voucher(id: &str, code: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn voucher_pages_and_previews_honor_counts_up_to_the_native_limit() {
+    use serde_json::{Value, json};
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let items: Vec<Value> = (0..1001)
+        .map(|i| voucher(&format!("voucher-{i}"), "fixture-code"))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!("{PREFIX}/sites/{SITE_ID}/hotspot/vouchers")))
+        .respond_with(move |request: &wiremock::Request| {
+            let query:std::collections::BTreeMap<_,_>=request.url.query_pairs().collect();
+            let offset:usize=query["offset"].parse().unwrap();
+            let limit:usize=query["limit"].parse().unwrap();
+            assert!((1..=1000).contains(&limit));
+            let rows:Vec<Value>=items.iter().skip(offset).take(limit).cloned().collect();
+            ResponseTemplate::new(200).set_body_json(json!({"offset":offset,"limit":limit,"count":rows.len(),"totalCount":1001,"data":rows}))
+        }).expect(10).mount(&server).await;
+    let handler = handler_for(&server);
+    for preview in [false, true] {
+        for (limit, offset, effective, returned) in [
+            (None, 0usize, 25usize, 25usize),
+            (Some(300usize), 0, 300, 300),
+            (Some(1500), 0, 1000, 1000),
+            (Some(usize::MAX), 0, 1000, 1000),
+            (Some(1500), 1000, 1000, 1),
+        ] {
+            let (tool, input) = if preview {
+                let mut input = json!({"filter":"name.eq('visitor')","previewOffset":offset});
+                if let Some(limit) = limit {
+                    input["previewLimit"] = json!(limit);
+                }
+                ("vouchers.revoke_matching", input)
+            } else {
+                let mut input = json!({"offset":offset});
+                if let Some(limit) = limit {
+                    input["limit"] = json!(limit);
+                }
+                ("vouchers.search", input)
+            };
+            let page = handler
+                .call(&call(tool, &input), None)
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(
+                page["pageCounts"],
+                json!({"requestedLimit":limit.unwrap_or(25),"effectiveLimit":effective,"returned":returned})
+            );
+            if preview {
+                assert_eq!(page["applied"], false);
+            } else {
+                assert_eq!(page["vouchers"].as_array().unwrap().len(), returned);
+                assert_eq!(
+                    page.get("nextOffset").cloned().unwrap_or(Value::Null),
+                    if offset + returned < 1001 {
+                        json!(offset + returned)
+                    } else {
+                        Value::Null
+                    }
+                );
+            }
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.method == "GET")
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn bulk_preview_retains_complete_records_and_reports_its_partial_page() {
     let server = MockServer::start().await;
     mount_site(&server).await;
@@ -432,7 +508,7 @@ async fn search_rejects_invalid_page_before_contacting_the_controller() {
         )
         .await
         .expect_err("invalid limit");
-    assert!(error.message.contains("limit must be 1-100"));
+    assert!(error.message.contains("limit must be positive"));
 }
 
 #[tokio::test]

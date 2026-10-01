@@ -65,6 +65,58 @@ async fn login(server: &MockServer) {
         .await;
 }
 
+#[tokio::test]
+async fn complete_source_pages_accept_large_counts_and_keep_the_default() {
+    let server = MockServer::start().await;
+    login(&server).await;
+    let rows: Vec<Value> = (0..301).map(|i| json!({"id":i})).collect();
+    for &(_, verb, route) in CASES {
+        source_mock(verb, route)
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"meta":{"rc":"ok"},"data":rows})),
+            )
+            .expect(4)
+            .mount(&server)
+            .await;
+    }
+    let handler = handler_for(&server);
+    for &(source, _, _) in CASES {
+        for (limit, offset, returned, next) in [
+            (None, 0usize, 50usize, Some(50usize)),
+            (Some(300usize), 0, 300, Some(300)),
+            (Some(usize::MAX), 0, 301, None),
+            (Some(300), 300, 1, None),
+        ] {
+            let mut input = json!({"source":source,"offset":offset});
+            if let Some(limit) = limit {
+                input["limit"] = json!(limit);
+            }
+            let page = handler
+                .call(&call(input), None)
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(page["records"].as_array().unwrap().len(), returned);
+            assert_eq!(page["limit"], limit.unwrap_or(50));
+            assert_eq!(page["count"], returned);
+            assert_eq!(
+                page.get("nextOffset").cloned().unwrap_or(Value::Null),
+                json!(next)
+            );
+        }
+        let before = server.received_requests().await.unwrap().len();
+        assert!(
+            handler
+                .call(&call(json!({"source":source,"limit":0})), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), before);
+    }
+    server.verify().await;
+}
+
 fn source_mock(verb: &str, route: &str) -> MockBuilder {
     let mock = Mock::given(method(verb)).and(path(format!("/proxy/network/api/s/default/{route}")));
     if verb == "POST" {
@@ -217,7 +269,6 @@ async fn invalid_inputs_do_not_make_controller_requests() {
     for input in [
         json!({"source":"arbitrary"}),
         json!({"source":"activeClients","limit":0}),
-        json!({"source":"siteHealth","limit":201}),
         json!({"source":"dpiCounters","endpoint":"/other"}),
     ] {
         assert!(handler.call(&call(input), None).await.is_err());

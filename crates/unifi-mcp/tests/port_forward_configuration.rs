@@ -460,7 +460,7 @@ async fn invalid_shapes_and_request_bounds_fail_before_http() {
             .expect_err("invalid");
     }
     handler
-        .call(&call("port_forwards.list", json!({"limit":201})), None)
+        .call(&call("port_forwards.list", json!({"limit":0})), None)
         .await
         .expect_err("bound");
     assert!(

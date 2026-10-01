@@ -2,11 +2,11 @@
 
 use super::{
     ApiError, BoundedMessage, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize,
-    JsonSchema, MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_SEARCH_LIMIT, McpError,
-    NETWORK_POLICY_READBACK_BUDGET, NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation,
-    PageRequest, STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp, Value, api_error,
-    default_search_limit, network_request::NetworkRequest, page_validation_error, parse,
-    requested_json_matches, structured, wifi_request::WifiBroadcastRequest,
+    JsonSchema, MAXIMUM_POLICY_REQUEST_BYTES, McpError, NETWORK_POLICY_READBACK_BUDGET,
+    NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation, PageRequest,
+    STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp, Value, api_error, default_search_limit,
+    network_request::NetworkRequest, page_validation_error, parse, requested_json_matches,
+    structured, wifi_request::WifiBroadcastRequest,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -15,7 +15,8 @@ pub(super) struct NetworksListInput {
     #[serde(default)]
     offset: u32,
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
     filter: Option<String>,
 }
 
@@ -70,6 +71,8 @@ impl ConfigurationFamily {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ConfigurationResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_counts: Option<super::PageCounts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,9 +131,9 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworksListInput>(params)?;
-        if input.offset > i32::MAX as u32 || !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
+        if input.offset > i32::MAX as u32 || input.limit == 0 {
             return Err(McpError::invalid_params(
-                "offset must be 0-2147483647 and limit must be 1-200",
+                "offset must be 0-2147483647 and limit must be positive",
                 None,
             ));
         }
@@ -151,7 +154,7 @@ impl UnifiMcp {
                 &site_id,
                 PageRequest {
                     offset: u64::from(input.offset),
-                    limit: u32::from(input.limit),
+                    limit: super::integration_limit(input.limit),
                 },
                 input.filter.as_deref(),
             )
@@ -166,7 +169,7 @@ impl UnifiMcp {
             .ok_or_else(|| page_validation_error(&source, "network page offset overflow"))?;
         if page.offset != u64::from(input.offset)
             || page.limit == 0
-            || page.limit > u64::from(input.limit)
+            || page.limit > u64::from(super::integration_limit(input.limit))
             || rows > page.limit
             || page.count != rows
             || (rows > 0 && next > page.total_count)
@@ -178,6 +181,11 @@ impl UnifiMcp {
             ));
         }
         result(ConfigurationResult {
+            page_counts: Some(super::PageCounts {
+                requested_limit: input.limit,
+                effective_limit: page.limit,
+                returned: page.data.len(),
+            }),
             response: Some(response),
             next_offset: (next < page.total_count).then_some(next),
             ..Default::default()

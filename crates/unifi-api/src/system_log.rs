@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::ApiError;
 
-const MAXIMUM_PAGE_SIZE: u32 = 1000;
-
 /// Controller-defined severity, used only as a bounded upstream filter.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -23,7 +21,7 @@ pub struct SystemLogQuery {
     timestamp_from: u64,
     timestamp_to: u64,
     page_number: u64,
-    page_size: u32,
+    page_size: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     severities: Vec<SystemLogSeverity>,
 }
@@ -33,16 +31,16 @@ impl SystemLogQuery {
     ///
     /// # Errors
     /// Returns a configuration error for an inverted window or a page size
-    /// outside 1-1000. The controller decides supported time ranges.
-    pub fn new(start: u64, end: u64, limit: u32) -> Result<Self, ApiError> {
+    /// of zero. The controller decides supported time ranges and page sizes.
+    pub fn new(start: u64, end: u64, limit: usize) -> Result<Self, ApiError> {
         if start > end {
             return Err(ApiError::Config(
                 "system log window must be ordered".to_owned(),
             ));
         }
-        if !(1..=MAXIMUM_PAGE_SIZE).contains(&limit) {
+        if limit == 0 {
             return Err(ApiError::Config(
-                "system log page size must be between 1 and 1000".to_owned(),
+                "system log page size must be positive".to_owned(),
             ));
         }
         Ok(Self {
@@ -78,7 +76,7 @@ impl SystemLogQuery {
     pub(crate) fn validate_response<T>(&self, page: &SystemLogPage<T>) -> Result<(), ApiError> {
         let rows = page.data.len() as u64;
         if page.page_number != self.page_number
-            || rows > u64::from(self.page_size)
+            || page.data.len() > self.page_size
             || page.total_element_count < rows
             || (rows == 0
                 && page.total_element_count != 0

@@ -1,9 +1,9 @@
 //! Complete records behind the compact legacy Network diagnostic views.
 
 use super::{
-    CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
-    MAXIMUM_SEARCH_LIMIT, Map, McpError, STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp,
-    Value, api_error, default_search_limit, parse, structured,
+    CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema, Map, McpError,
+    STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp, Value, api_error, default_search_limit,
+    parse, structured,
 };
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
@@ -35,9 +35,10 @@ pub(super) struct NetworkSourceReadInput {
     /// Offset into the complete response fetched for this call.
     #[serde(default)]
     offset: u64,
-    /// Complete source rows per page, 1-200.
+    /// Positive complete source rows per page.
     #[serde(default = "default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -54,7 +55,7 @@ pub(super) struct NetworkSourceReadOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     controller_metadata_in_content: Option<bool>,
     offset: u64,
-    limit: u16,
+    limit: usize,
     count: u64,
     /// Number of rows in this call's complete accepted controller response.
     total_count: u64,
@@ -69,8 +70,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworkSourceReadInput>(params)?;
-        if !(1..=MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let envelope = self
             .legacy()
@@ -86,7 +87,7 @@ impl UnifiMcp {
         let records: Vec<Value> = data
             .iter()
             .skip(offset)
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .cloned()
             .collect();
         let count = records.len() as u64;

@@ -44,7 +44,7 @@ const CSRF_HEADER: &str = "x-csrf-token";
 const MAXIMUM_RECORD_LIMIT: u32 = 1000;
 /// One row is reserved for the lookahead that proves a time-keyset boundary
 /// does not split simultaneous events.
-const MAXIMUM_PROTECT_EVENT_PAGE_LIMIT: u32 = MAXIMUM_RECORD_LIMIT - 1;
+pub const MAXIMUM_PROTECT_EVENT_PAGE_LIMIT: u32 = MAXIMUM_RECORD_LIMIT - 1;
 /// Event ids are opaque identifiers, not display text. Refuse an implausible
 /// wire value rather than letting one consume the bounded result budget.
 const MAXIMUM_EVENT_IDENTIFIER_BYTES: usize = 256;

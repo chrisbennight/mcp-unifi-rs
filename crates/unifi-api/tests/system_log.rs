@@ -103,10 +103,11 @@ async fn system_log_uses_the_v2_route_with_csrf_and_reports_a_partial_page() {
 
 #[test]
 fn invalid_windows_and_page_sizes_are_rejected_before_a_request() {
-    for (start, end, limit) in [(2, 1, 1), (0, 1, 0), (0, 1, 1001)] {
+    for (start, end, limit) in [(2, 1, 1), (0, 1, 0)] {
         assert!(SystemLogQuery::new(start, end, limit).is_err());
     }
     assert!(SystemLogQuery::new(0, 604_800_001, 1000).is_ok());
+    assert!(SystemLogQuery::new(0, 1, usize::MAX).is_ok());
 }
 
 #[tokio::test]

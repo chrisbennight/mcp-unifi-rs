@@ -2,9 +2,9 @@
 
 use super::{
     CallToolResult, CounterSemantics, CoverageStatus, DEFAULT_TOP_APPLICATIONS,
-    DEFAULT_WAN_REPORT_HOURS, JsonSchema, MAXIMUM_SEARCH_LIMIT, MAXIMUM_TOP_APPLICATIONS, McpError,
-    Serialize, StatsQueryInput, StatsQueryOutput, StatsReport, StatsSourceError, TopApplicationRow,
-    TrafficCoverage, UnifiMcp, api_error, bounded_text, structured_stats,
+    DEFAULT_WAN_REPORT_HOURS, JsonSchema, McpError, Serialize, StatsQueryInput, StatsQueryOutput,
+    StatsReport, StatsSourceError, TopApplicationRow, TrafficCoverage, UnifiMcp, api_error,
+    bounded_text, structured_stats,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use unifi_api::traffic::{
@@ -127,14 +127,14 @@ impl UnifiMcp {
         let top = input.top.unwrap_or(DEFAULT_TOP_APPLICATIONS);
         let limit = input.limit.unwrap_or(50);
         let offset = input.offset.unwrap_or(0);
-        if !(1..=MAXIMUM_TOP_APPLICATIONS).contains(&top)
-            || !(1..=MAXIMUM_SEARCH_LIMIT).contains(&limit)
+        if top == 0
+            || limit == 0
             || (input.report == StatsReport::ClientWanHistory && input.top.is_some())
             || (input.report == StatsReport::DpiApplications
                 && (input.limit.is_some() || input.offset.is_some()))
         {
             return Err(McpError::invalid_params(
-                "top (1-50) applies only to dpiApplications; limit (1-200) and nonnegative offset apply only to clientWanHistory",
+                "positive top applies only to dpiApplications; positive limit and nonnegative offset apply only to clientWanHistory",
                 None,
             ));
         }
@@ -166,14 +166,10 @@ impl UnifiMcp {
                 .then_with(|| a.mac.cmp(&b.mac))
         });
         let total_clients = clients.len();
-        let next = offset.saturating_add(usize::from(limit));
+        let next = offset.saturating_add(limit);
         let next_offset = (next < total_clients).then_some(next);
         let clients = if input.report == StatsReport::ClientWanHistory {
-            clients
-                .into_iter()
-                .skip(offset)
-                .take(usize::from(limit))
-                .collect()
+            clients.into_iter().skip(offset).take(limit).collect()
         } else {
             Vec::new()
         };
@@ -189,7 +185,7 @@ impl UnifiMcp {
         applications.sort_by_key(|row| {
             std::cmp::Reverse(u128::from(row.bytes_received) + u128::from(row.bytes_transmitted))
         });
-        applications.truncate(usize::from(top));
+        applications.truncate(top);
         let (top_applications, names_status, name_errors) =
             if input.report == StatsReport::DpiApplications {
                 let (rows, status, errors) = self.activity_names(applications).await;
