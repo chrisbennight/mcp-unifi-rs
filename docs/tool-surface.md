@@ -160,21 +160,25 @@ marked by `profilesInContent` and `pageMetadataInContent`.
 Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
 
-### `network.inventory.list` and `network.switching.detail`
+### `network.inventory.list/detail` and `network.switching.detail`
 
 These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).
 `network.inventory.list` accepts a `kind` of `countries`, `sites`, `clients`,
-`devices`, `deviceTags`,
+`devices`, `dpiApplications`, `dpiCategories`, `deviceTags`,
 `lags`, `mcLagDomains`, `switchStacks`, `wanInterfaces`, `vpnServers`, or
 `siteToSiteVpnTunnels`, plus `offset` and `limit` (1-200, default 50).
 The documented `filter` query is available except for WAN interfaces, whose
-endpoint has no filter parameter. Countries and sites are controller-wide; other kinds
+endpoint has no filter parameter. Countries, sites and DPI dictionaries are controller-wide; other kinds
 use the selected site. Each page returns complete controller records, page
 counts, and `nextOffset`. `pageMetadata` preserves all original page fields
 except the data array, which is returned as `records`. Large pages retain
 records and metadata in MCP content, marked by `recordsInContent` and
 `pageMetadataInContent`. Invalid page metadata
 returns the complete controller response with a separate diagnostic.
+Filtered DPI dictionaries continue according to returned rows and mark
+`paginationBasis: "returnedRows"`, because controller totals can describe the
+unfiltered catalog. A full final page can require one additional empty page;
+its absence of `nextOffset` ends the scan. Original totals remain available.
 
 `network.switching.detail` accepts `kind` (`lag`, `mcLagDomain`, or
 `switchStack`) and the official `id`, returning the complete controller
@@ -186,6 +190,8 @@ record. A large record is carried in MCP content and marked by
 connected client, adopted device, or latest device statistics record,
 including unknown fields and interface details. Large records remain in
 MCP content with `recordInContent`. Controller errors retain their full bodies.
+`kind: "applicationInfo"` requires no `id` and returns complete Network
+application information without a site lookup.
 
 ### `network.policy.list` and `network.policy.detail`
 
@@ -446,6 +452,12 @@ from the original local bootstrap, including recorder, account, and user
 records. These fields are returned completely as the console reports them,
 including when the selected fields exceed the structured content formatting
 target.
+Select `view: "applicationInfo"` or `view: "recorder"` on `protect.overview`
+for the complete official application or single recorder record. These views
+use only the Integration API key and require no local session or camera
+inventory reads. All fields remain available as `record`; large records move
+to labeled content with `recordInContent`. `detailFields` applies to the
+default `summary` view.
 If the optional local inventory read fails, `cameras.search` and
 `protect.overview` include the controller error in
 `capabilities.localUnavailableReason`, and `cameras.status` includes it in

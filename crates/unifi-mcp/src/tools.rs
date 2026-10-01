@@ -1475,9 +1475,28 @@ struct ProtectLiveviewsConfigureOutput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProtectOverviewInput {
+    /// Select the summary (default), complete application info, or complete recorder record.
+    #[serde(default)]
+    view: ProtectOverviewView,
     /// Top-level fields from the local bootstrap response to include.
     /// Requested fields remain complete, including large values.
     detail_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ProtectOverviewView {
+    #[default]
+    Summary,
+    ApplicationInfo,
+    Recorder,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum ProtectOverviewResult {
+    Summary(Box<ProtectOverviewOutput>),
+    Record(RecordOutput),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -2496,6 +2515,8 @@ struct RadiusProfilesListOutput {
 enum NetworkInventoryKind {
     Countries,
     Sites,
+    DpiApplications,
+    DpiCategories,
     Clients,
     Devices,
     DeviceTags,
@@ -2510,7 +2531,7 @@ enum NetworkInventoryKind {
 impl NetworkInventoryKind {
     const fn site_kind(self) -> Option<SiteInventoryKind> {
         match self {
-            Self::Countries | Self::Sites => None,
+            Self::Countries | Self::Sites | Self::DpiApplications | Self::DpiCategories => None,
             Self::Clients => Some(SiteInventoryKind::Clients),
             Self::Devices => Some(SiteInventoryKind::Devices),
             Self::DeviceTags => Some(SiteInventoryKind::DeviceTags),
@@ -2554,6 +2575,9 @@ struct NetworkInventoryListOutput {
     total_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<u64>,
+    /// Filtered DPI dictionaries continue according to returned rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pagination_basis: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -2574,6 +2598,7 @@ struct NetworkSwitchingDetailInput {
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 enum NetworkInventoryDetailKind {
+    ApplicationInfo,
     Client,
     Device,
     DeviceStatistics,
@@ -2583,12 +2608,13 @@ enum NetworkInventoryDetailKind {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct NetworkInventoryDetailInput {
     kind: NetworkInventoryDetailKind,
-    id: String,
+    /// Required for client, device and deviceStatistics; omitted for applicationInfo.
+    id: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct NetworkRecordOutput {
+struct RecordOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4557,10 +4583,10 @@ impl ToolSpec {
                 tool::<NetworkInventoryListInput, NetworkInventoryListOutput>(self)
             }
             ToolKind::NetworkSwitchingDetail => {
-                tool::<NetworkSwitchingDetailInput, NetworkRecordOutput>(self)
+                tool::<NetworkSwitchingDetailInput, RecordOutput>(self)
             }
             ToolKind::NetworkInventoryDetail => {
-                tool::<NetworkInventoryDetailInput, NetworkRecordOutput>(self)
+                tool::<NetworkInventoryDetailInput, RecordOutput>(self)
             }
             ToolKind::NetworkPolicyList => {
                 tool::<NetworkPolicyListInput, NetworkPolicyListOutput>(self)
@@ -4678,7 +4704,7 @@ impl ToolSpec {
             ToolKind::CamerasTalkbackStart => {
                 tool::<CameraTalkbackInput, CameraTalkbackOutput>(self)
             }
-            ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewOutput>(self),
+            ToolKind::ProtectOverview => tool::<ProtectOverviewInput, ProtectOverviewResult>(self),
             ToolKind::ProtectEvents => tool::<ProtectEventsInput, ProtectEventsOutput>(self),
             ToolKind::ProtectUpdates => tool::<ProtectUpdatesInput, ProtectUpdatesOutput>(self),
             ToolKind::ProtectEventThumbnail => {
@@ -7271,6 +7297,27 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ProtectOverviewInput>(params)?;
+        if !matches!(input.view, ProtectOverviewView::Summary) {
+            if input.detail_fields.is_some() {
+                return Err(McpError::invalid_params(
+                    "detailFields applies to the summary view",
+                    None,
+                ));
+            }
+            let record = match input.view {
+                ProtectOverviewView::ApplicationInfo => self.protect().info_record().await,
+                ProtectOverviewView::Recorder => self.protect().nvr_record().await,
+                ProtectOverviewView::Summary => unreachable!("summary continues below"),
+            }
+            .map_err(api_error)?;
+            return protect_overview_result(
+                ProtectOverviewResult::Record(RecordOutput {
+                    record: Some(record),
+                    record_in_content: None,
+                }),
+                None,
+            );
+        }
         validate_bootstrap_detail_request(false, input.detail_fields.as_deref())?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
         let CameraInventory {
@@ -7326,8 +7373,8 @@ impl UnifiMcp {
             }
             None => None,
         };
-        structured_with_upstream_error(
-            ProtectOverviewOutput {
+        protect_overview_result(
+            ProtectOverviewResult::Summary(Box::new(ProtectOverviewOutput {
                 console: self.protect_name().to_owned(),
                 application_version,
                 cameras_by_state: counts
@@ -7342,7 +7389,7 @@ impl UnifiMcp {
                 recorders,
                 bootstrap_details,
                 capabilities: protect_capabilities(local_state, local_error.as_ref()),
-            },
+            })),
             local_error.as_ref(),
         )
     }
@@ -7786,6 +7833,10 @@ impl UnifiMcp {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one bounded read validates pagination and preserves complete controller records and metadata"
+    )]
     async fn network_inventory_list(
         &self,
         params: &CallToolRequestParams,
@@ -7823,6 +7874,18 @@ impl UnifiMcp {
             self.integration()
                 .site_records(requested, input.filter.as_deref())
                 .await
+        } else if matches!(
+            input.kind,
+            NetworkInventoryKind::DpiApplications | NetworkInventoryKind::DpiCategories
+        ) {
+            let kind = if matches!(input.kind, NetworkInventoryKind::DpiCategories) {
+                unifi_api::DpiCatalogKind::Categories
+            } else {
+                unifi_api::DpiCatalogKind::Applications
+            };
+            self.integration()
+                .dpi_catalog(kind, requested, input.filter.as_deref())
+                .await
         } else {
             self.integration()
                 .countries(requested, input.filter.as_deref())
@@ -7857,7 +7920,11 @@ impl UnifiMcp {
                 ),
             ));
         }
-        if next < page.total_count && page.data.is_empty() {
+        let row_based_paging = matches!(
+            input.kind,
+            NetworkInventoryKind::DpiApplications | NetworkInventoryKind::DpiCategories
+        ) && input.filter.is_some();
+        if next < page.total_count && page.data.is_empty() && !row_based_paging {
             return Err(page_validation_error(
                 &response,
                 format!(
@@ -7879,7 +7946,12 @@ impl UnifiMcp {
             limit: page.limit,
             count: page.count,
             total_count: page.total_count,
-            next_offset: (next < page.total_count).then_some(next),
+            next_offset: if row_based_paging {
+                (row_count == page.limit).then_some(next)
+            } else {
+                (next < page.total_count).then_some(next)
+            },
+            pagination_basis: row_based_paging.then_some("returnedRows"),
         })
     }
 
@@ -7908,7 +7980,7 @@ impl UnifiMcp {
             .switching_detail(&site_id, kind, &input.id)
             .await
             .map_err(api_error)?;
-        network_record_result(NetworkRecordOutput {
+        record_result(RecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -7919,26 +7991,45 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<NetworkInventoryDetailInput>(params)?;
-        if input.id.is_empty() || input.id.len() > 256 || matches!(input.id.as_str(), "." | "..") {
-            return Err(McpError::invalid_params(
-                "id must be a nonempty id of at most 256 bytes",
-                None,
-            ));
-        }
         let kind = match input.kind {
+            NetworkInventoryDetailKind::ApplicationInfo => {
+                if input.id.is_some() {
+                    return Err(McpError::invalid_params(
+                        "applicationInfo has no id parameter",
+                        None,
+                    ));
+                }
+                let record = self.integration().info_record().await.map_err(api_error)?;
+                return record_result(RecordOutput {
+                    record: Some(record),
+                    record_in_content: None,
+                });
+            }
             NetworkInventoryDetailKind::Client => unifi_api::InventoryDetailKind::Client,
             NetworkInventoryDetailKind::Device => unifi_api::InventoryDetailKind::Device,
             NetworkInventoryDetailKind::DeviceStatistics => {
                 unifi_api::InventoryDetailKind::DeviceStatistics
             }
         };
+        let id = input.id.ok_or_else(|| {
+            McpError::invalid_params(
+                "id is required for client, device or deviceStatistics",
+                None,
+            )
+        })?;
+        if id.is_empty() || id.len() > 256 || matches!(id.as_str(), "." | "..") {
+            return Err(McpError::invalid_params(
+                "id must be a nonempty id of at most 256 bytes",
+                None,
+            ));
+        }
         let site_id = self.site_id().await?;
         let record = self
             .integration()
-            .inventory_detail(&site_id, kind, &input.id)
+            .inventory_detail(&site_id, kind, &id)
             .await
             .map_err(api_error)?;
-        network_record_result(NetworkRecordOutput {
+        record_result(RecordOutput {
             record: Some(record),
             record_in_content: None,
         })
@@ -14282,7 +14373,19 @@ fn radius_profiles_list_result(
     Ok(result)
 }
 
-fn network_record_result(mut output: NetworkRecordOutput) -> Result<CallToolResult, McpError> {
+fn protect_overview_result(
+    output: ProtectOverviewResult,
+    upstream_error: Option<&ApiError>,
+) -> Result<CallToolResult, McpError> {
+    match output {
+        ProtectOverviewResult::Summary(output) => {
+            structured_with_upstream_error(output, upstream_error)
+        }
+        ProtectOverviewResult::Record(output) => record_result(output),
+    }
+}
+
+fn record_result(mut output: RecordOutput) -> Result<CallToolResult, McpError> {
     let full = structured(&output)?;
     if full
         .structured_content

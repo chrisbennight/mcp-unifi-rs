@@ -53,6 +53,13 @@ pub enum InventoryDetailKind {
     DeviceStatistics,
 }
 
+/// Official controller-wide DPI dictionaries.
+#[derive(Debug, Clone, Copy)]
+pub enum DpiCatalogKind {
+    Applications,
+    Categories,
+}
+
 /// Network policy collections documented by the Integration API.
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicyCollection {
@@ -120,6 +127,35 @@ impl IntegrationClient {
     /// Returns an [`ApiError`] when the request or decoding fails.
     pub async fn info(&self) -> Result<ApplicationInfo, ApiError> {
         self.get_json(&["info"], &[]).await
+    }
+
+    /// Complete Network application information, including unknown fields.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn info_record(&self) -> Result<Value, ApiError> {
+        self.get_json(&["info"], &[]).await
+    }
+
+    /// Page a complete DPI application or category dictionary with its documented filter.
+    /// # Errors
+    /// Returns an [`ApiError`] when the request or decoding fails.
+    pub async fn dpi_catalog(
+        &self,
+        kind: DpiCatalogKind,
+        page: PageRequest,
+        filter: Option<&str>,
+    ) -> Result<(Page<Value>, BoundedMessage), ApiError> {
+        let collection = match kind {
+            DpiCatalogKind::Applications => "applications",
+            DpiCatalogKind::Categories => "categories",
+        };
+        let mut query = page_query(page).to_vec();
+        if let Some(filter) = filter {
+            query.push(("filter", filter.to_owned()));
+        }
+        self.get_json_with_response(&["dpi", collection], &query)
+            .await
+            .map(|(page, bytes)| (page, BoundedMessage::from_controller_bytes(&bytes)))
     }
 
     /// Resolve a bounded set of official application IDs to display names.

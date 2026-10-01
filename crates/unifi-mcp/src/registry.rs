@@ -691,7 +691,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
          session supplies recording, hardware, health, capacity, and aggregate \
          storage facts; unavailable facts remain absent. The place to start on \
          a camera question. Request detailFields to inspect selected fields
-         from the original local bootstrap response.",
+         from the original local bootstrap response. Select view applicationInfo or recorder
+         to read the complete official controller record without a local session.",
     ),
     sensitive_read_spec(
         ToolKind::ProtectEvents,
@@ -771,12 +772,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::NetworkInventoryList,
         "network.inventory.list",
-        "Page through sites, connected clients, adopted devices, countries, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
+        "Page through sites, connected clients, adopted devices, countries, DPI applications/categories, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkInventoryDetail,
         "network.inventory.detail",
-        "Read a complete connected client, adopted device, or latest device statistics record by its official id. Use kind client, device, or deviceStatistics. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
+        "Read complete Network application information with kind applicationInfo, or a connected client, adopted device, or latest device statistics record with kind client, device, or deviceStatistics and its official id. Returns all controller fields, including interfaces and unknown extensions; large records remain available in MCP content.",
     ),
     sensitive_read_spec(
         ToolKind::NetworkSwitchingDetail,
