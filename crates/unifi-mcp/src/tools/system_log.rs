@@ -10,8 +10,8 @@ use unifi_api::{
 };
 
 use super::{
-    EVENT_MESSAGE_CEILING, EventRow, EventSeverity, MAXIMUM_RESULT_BYTES, McpError, UnifiMcp,
-    api_error, bounded_text, current_time_ms, is_client_address, parse, structured,
+    EVENT_MESSAGE_CEILING, EventRow, EventSeverity, McpError, STRUCTURED_CONTENT_TARGET_BYTES,
+    UnifiMcp, api_error, bounded_text, current_time_ms, is_client_address, parse, structured,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -81,7 +81,7 @@ pub(super) async fn read(
             > response["data"].as_array().expect("validated data").len() as u64;
     let text = serde_json::to_string(&response)
         .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-    let large = text.len() > MAXIMUM_RESULT_BYTES;
+    let large = text.len() > STRUCTURED_CONTENT_TARGET_BYTES;
     let mut result = structured(EventsReadOutput {
         response: (!large).then_some(response),
         response_in_content: large.then_some(true),

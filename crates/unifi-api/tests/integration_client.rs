@@ -497,7 +497,7 @@ async fn vouchers_round_trip_create_list_and_delete() {
 
     let client = client_for(&server);
     let (created, status, body) = client
-        .create_vouchers(
+        .create_vouchers_with_response(
             "s1",
             &VoucherCreate {
                 name: "guests".to_owned(),

@@ -79,9 +79,9 @@ use unifi_api::system_log::{SystemLogQuery, SystemLogSeverity};
 const ACTION_METADATA_KEY: &str = "io.modelcontextprotocol/action-metadata";
 const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 
-/// Formatting threshold for moving complete large fields to labeled MCP content.
-/// Structured values may exceed this threshold without losing the result.
-pub(crate) const MAXIMUM_RESULT_BYTES: usize = 48 * 1024;
+/// Formatting target for moving complete large fields to labeled MCP content.
+/// Results remain available when their structured values exceed this target.
+pub(crate) const STRUCTURED_CONTENT_TARGET_BYTES: usize = 48 * 1024;
 const MAXIMUM_POLICY_REQUEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_ANIMATION_ASSET_BYTES: usize = 3 * 1024 * 1024;
 
@@ -4115,12 +4115,6 @@ struct VoucherVerification {
 struct VouchersCreateOutput {
     /// Whether the controller was asked to mint. False for a preview.
     applied: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_body: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_body_in_content: Option<bool>,
     /// What the call mints: how many vouchers, for how long, and under which
     /// limits. Two batches differing only in validity or access limits are
     /// different batches, and a preview that showed only a count could not
@@ -4128,6 +4122,13 @@ struct VouchersCreateOutput {
     batch: VoucherBatch,
     /// How many were requested.
     requested: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_status: Option<u16>,
+    /// Complete accepted creation body, including fields outside the voucher summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_in_content: Option<bool>,
     /// The vouchers, present only on a confirmed call. These are returned
     /// even when a check below failed, so the creation response is preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5610,44 +5611,41 @@ impl UnifiMcp {
         let interfaces = detail.interfaces.unwrap_or_default();
         let ports_truncated = interfaces.ports.len() > PORT_TABLE_CEILING;
         let radios_truncated = interfaces.radios.len() > RADIO_TABLE_CEILING;
-        structured_with_upstream_error(
-            DeviceStatusOutput {
-                id: detail.id,
-                name: detail.name,
-                model: detail.model,
-                mac: detail.mac_address,
-                ip: detail.ip_address,
-                state: detail.state,
-                firmware_version: detail.firmware_version,
-                statistics,
-                statistics_error: statistics_error.as_ref().map(ToString::to_string),
-                ports: interfaces
-                    .ports
-                    .into_iter()
-                    .take(PORT_TABLE_CEILING)
-                    .map(|port| DevicePortRow {
-                        idx: port.idx,
-                        state: port.state,
-                        connector: port.connector,
-                        speed_mbps: port.speed_mbps,
-                    })
-                    .collect(),
-                ports_truncated: ports_truncated.then_some(true),
-                radios: interfaces
-                    .radios
-                    .into_iter()
-                    .take(RADIO_TABLE_CEILING)
-                    .map(|radio| DeviceRadioRow {
-                        wlan_standard: radio.wlan_standard,
-                        frequency_ghz: radio.frequency_g_hz,
-                        channel: radio.channel,
-                        channel_width_mhz: radio.channel_width_m_hz,
-                    })
-                    .collect(),
-                radios_truncated: radios_truncated.then_some(true),
-            },
-            statistics_error.as_ref(),
-        )
+        structured(DeviceStatusOutput {
+            id: detail.id,
+            name: detail.name,
+            model: detail.model,
+            mac: detail.mac_address,
+            ip: detail.ip_address,
+            state: detail.state,
+            firmware_version: detail.firmware_version,
+            statistics,
+            statistics_error: statistics_error.as_ref().map(ToString::to_string),
+            ports: interfaces
+                .ports
+                .into_iter()
+                .take(PORT_TABLE_CEILING)
+                .map(|port| DevicePortRow {
+                    idx: port.idx,
+                    state: port.state,
+                    connector: port.connector,
+                    speed_mbps: port.speed_mbps,
+                })
+                .collect(),
+            ports_truncated: ports_truncated.then_some(true),
+            radios: interfaces
+                .radios
+                .into_iter()
+                .take(RADIO_TABLE_CEILING)
+                .map(|radio| DeviceRadioRow {
+                    wlan_standard: radio.wlan_standard,
+                    frequency_ghz: radio.frequency_g_hz,
+                    channel: radio.channel,
+                    channel_width_mhz: radio.channel_width_m_hz,
+                })
+                .collect(),
+            radios_truncated: radios_truncated.then_some(true),
+        })
     }
 
     /// Every camera on the console, fetched once and reduced to the view.
@@ -5856,15 +5854,12 @@ impl UnifiMcp {
             .take(usize::from(limit))
             .collect();
         let next_offset = next_offset(offset, rows.len(), total);
-        structured_with_upstream_error(
-            CamerasSearchOutput {
-                cameras: rows,
-                total,
-                next_offset,
-                capabilities,
-            },
-            inventory.local_error.as_ref(),
-        )
+        structured(CamerasSearchOutput {
+            cameras: rows,
+            total,
+            next_offset,
+            capabilities,
+        })
     }
 
     async fn protect_devices_list(
@@ -6360,7 +6355,7 @@ impl UnifiMcp {
             if preview
                 .structured_content
                 .as_ref()
-                .is_none_or(|value| value.to_string().len() <= MAXIMUM_RESULT_BYTES)
+                .is_none_or(|value| value.to_string().len() <= STRUCTURED_CONTENT_TARGET_BYTES)
             {
                 return Ok(preview);
             }
@@ -6384,7 +6379,7 @@ impl UnifiMcp {
         if full
             .structured_content
             .as_ref()
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         {
             let response = output.response.take().expect("accepted response exists");
             output.response_in_content = Some(true);
@@ -6704,7 +6699,7 @@ impl UnifiMcp {
         let mut camera = camera_by_selector(&inventory, selector)?;
         camera.details = details;
         camera.local_error = inventory.local_error.as_ref().map(ToString::to_string);
-        structured_with_upstream_error(camera, inventory.local_error.as_ref())
+        structured(camera)
     }
 
     async fn cameras_settings_read(
@@ -7318,13 +7313,10 @@ impl UnifiMcp {
                 ProtectOverviewView::Summary => unreachable!("summary continues below"),
             }
             .map_err(api_error)?;
-            return protect_overview_result(
-                ProtectOverviewResult::Record(RecordOutput {
-                    record: Some(record),
-                    record_in_content: None,
-                }),
-                None,
-            );
+            return protect_overview_result(ProtectOverviewResult::Record(RecordOutput {
+                record: Some(record),
+                record_in_content: None,
+            }));
         }
         validate_bootstrap_detail_request(false, input.detail_fields.as_deref())?;
         let inventory = self.camera_inventory(CameraInventoryScope::Full).await?;
@@ -7381,8 +7373,8 @@ impl UnifiMcp {
             }
             None => None,
         };
-        protect_overview_result(
-            ProtectOverviewResult::Summary(Box::new(ProtectOverviewOutput {
+        protect_overview_result(ProtectOverviewResult::Summary(Box::new(
+            ProtectOverviewOutput {
                 console: self.protect_name().to_owned(),
                 application_version,
                 cameras_by_state: counts
@@ -7397,9 +7389,8 @@ impl UnifiMcp {
                 recorders,
                 bootstrap_details,
                 capabilities: protect_capabilities(local_state, local_error.as_ref()),
-            })),
-            local_error.as_ref(),
-        )
+            },
+        )))
     }
 
     /// Historical detections through the Protect application route.
@@ -8801,7 +8792,7 @@ impl UnifiMcp {
         if full
             .structured_content
             .as_ref()
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         {
             return network_policy_detail_result(NetworkPolicyDetailOutput {
                 record: Some(Value::Object(record)),
@@ -10189,9 +10180,8 @@ impl UnifiMcp {
             complete: true,
             stop_reason: None,
         };
-        let mut error_bytes = 0;
         let mut ids = HashSet::new();
-        for (index, voucher) in vouchers.iter().enumerate() {
+        for voucher in vouchers {
             let (Some(id), Some(code)) = (voucher.id.as_deref(), voucher.code.as_deref()) else {
                 result.verified = false;
                 continue;
@@ -10221,30 +10211,18 @@ impl UnifiMcp {
                         ),
                     }
                     .to_string();
-                    error_bytes += message.len();
                     result.errors.push(VoucherReadbackFailure {
                         voucher_id: id.to_owned(),
                         error: message,
                     });
-                    if error_bytes >= MAXIMUM_RESULT_BYTES && index + 1 < vouchers.len() {
-                        result.complete = false;
-                        result.stop_reason = Some("responseBudget");
-                        break;
-                    }
                 }
                 Ok(Err(error)) => {
                     result.verified = false;
                     let message = error.to_string();
-                    error_bytes += message.len();
                     result.errors.push(VoucherReadbackFailure {
                         voucher_id: id.to_owned(),
                         error: message,
                     });
-                    if error_bytes >= MAXIMUM_RESULT_BYTES && index + 1 < vouchers.len() {
-                        result.complete = false;
-                        result.stop_reason = Some("responseBudget");
-                        break;
-                    }
                 }
                 Err(_) => {
                     result.verified = false;
@@ -10274,11 +10252,11 @@ impl UnifiMcp {
         if !input.confirm.unwrap_or(false) {
             return structured(VouchersCreateOutput {
                 applied: false,
+                batch,
+                requested: input.count,
                 response_status: None,
                 response_body: None,
                 response_body_in_content: None,
-                batch,
-                requested: input.count,
                 vouchers: None,
                 vouchers_in_content: None,
                 checks: None,
@@ -10293,9 +10271,9 @@ impl UnifiMcp {
         }
 
         let site_id = self.site_id().await?;
-        let (created, status, body) = self
+        let (created, response_status, response_body) = self
             .integration()
-            .create_vouchers(
+            .create_vouchers_with_response(
                 &site_id,
                 &VoucherCreate {
                     name: batch.name.clone(),
@@ -10339,11 +10317,15 @@ impl UnifiMcp {
             && checks.all_well_formed;
         structured_with_mutation_readback_errors(VouchersCreateOutput {
             applied: true,
-            response_status: Some(status),
-            response_body: Some(BoundedMessage::from_controller_bytes(&body).to_string()),
-            response_body_in_content: None,
             batch,
             requested: input.count,
+            response_status: Some(response_status),
+            response_body: Some(
+                BoundedMessage::from_controller_bytes(&response_body)
+                    .as_str()
+                    .to_owned(),
+            ),
+            response_body_in_content: None,
             vouchers: Some(vouchers),
             vouchers_in_content: None,
             checks: Some(checks),
@@ -13323,27 +13305,20 @@ fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
     let mut extra_content = Vec::new();
-    let mut source_errors_text = None;
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("sourceErrors")
     {
         fields.insert("sourceErrorsInContent".to_owned(), Value::Bool(true));
         let text = format!("sourceErrors: {errors}");
-        extra_content.push(ContentBlock::text(text.clone()));
-        source_errors_text = Some(text);
+        extra_content.push(ContentBlock::text(text));
     }
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(activity) = fields.remove("activity")
     {
         fields.insert("activityInContent".to_owned(), Value::Bool(true));
         extra_content.push(ContentBlock::text(format!("activity: {activity}")));
-    }
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
-        && let Some(errors) = source_errors_text
-    {
-        return Err(McpError::internal_error(errors, None));
     }
     let mut result = CallToolResult::structured(value);
     result.content.extend(extra_content);
@@ -13355,7 +13330,7 @@ fn traffic_read_result(mut output: TrafficReadOutput) -> Result<CallToolResult, 
     let mut content = Vec::new();
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(data) = output.data.take()
     {
         output.data_in_content = Some(true);
@@ -13363,7 +13338,7 @@ fn traffic_read_result(mut output: TrafficReadOutput) -> Result<CallToolResult, 
     }
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(error) = output.error.take()
     {
         output.error_in_content = Some(true);
@@ -13375,22 +13350,6 @@ fn traffic_read_result(mut output: TrafficReadOutput) -> Result<CallToolResult, 
     Ok(result)
 }
 
-/// Preserve a secondary controller failure when its text cannot fit beside
-/// the otherwise useful primary result.
-fn structured_with_upstream_error<T: Serialize>(
-    output: T,
-    upstream_error: Option<&ApiError>,
-) -> Result<CallToolResult, McpError> {
-    let value = serde_json::to_value(output)
-        .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
-        && let Some(error) = upstream_error
-    {
-        return Err(api_error(error.clone()));
-    }
-    Ok(CallToolResult::structured(value))
-}
-
 /// Keep an applied mutation's result available when a failed verification
 /// read returned more text than fits beside that result.
 fn structured_with_mutation_readback_error<T: Serialize>(
@@ -13400,14 +13359,14 @@ fn structured_with_mutation_readback_error<T: Serialize>(
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
     let mut extra_content = Vec::new();
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(Value::String(body)) = fields.remove("responseBody")
     {
         fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
         extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
     }
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Some(error) = upstream_error
         && let Value::Object(fields) = &mut value
         && fields.remove("readbackError").is_some()
@@ -13426,7 +13385,7 @@ fn structured_with_mutation_readback_error<T: Serialize>(
 }
 
 /// Keep a confirmed action's accepted response and any later controller
-/// readback failure available when either exceeds the structured result bound.
+/// readback failure available when either exceeds the content formatting target.
 fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
@@ -13435,7 +13394,7 @@ fn structured_with_accepted_response<T: Serialize>(output: T) -> Result<CallTool
         ("responseBody", "responseBodyInContent"),
         ("readbackError", "readbackErrorInContent"),
     ] {
-        if value.to_string().len() > MAXIMUM_RESULT_BYTES
+        if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
             && let Value::Object(fields) = &mut value
             && let Some(Value::String(body)) = fields.remove(field)
         {
@@ -13456,21 +13415,21 @@ fn structured_with_mutation_readback_errors<T: Serialize>(
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
     let mut extra_content = Vec::new();
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(Value::String(body)) = fields.remove("responseBody")
     {
         fields.insert("responseBodyInContent".to_owned(), Value::Bool(true));
         extra_content.push(ContentBlock::text(format!("responseBody: {body}")));
     }
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("readbackErrors")
     {
         fields.insert("readbackErrorsInContent".to_owned(), Value::Bool(true));
         extra_content.push(ContentBlock::text(format!("readbackErrors: {errors}")));
     }
-    if value.to_string().len() > MAXIMUM_RESULT_BYTES
+    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(vouchers) = fields.remove("vouchers")
     {
@@ -13806,7 +13765,7 @@ fn device_settings_update_result(
     let exceeds = |output: &ProtectDevicesSettingsUpdateOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -13850,7 +13809,7 @@ fn camera_disable_mic_result(
     let exceeds = |output: &CameraDisableMicOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -13887,7 +13846,7 @@ fn camera_settings_read_result(
 ) -> Result<CallToolResult, McpError> {
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(camera) = output.camera.take()
     {
         output.camera_in_content = Some(true);
@@ -13906,7 +13865,7 @@ fn camera_settings_update_result(
     let exceeds = |output: &CameraSettingsOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -13956,7 +13915,7 @@ fn protect_asset_upload_result(
     let exceeds = |output: &ProtectAssetUploadOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -13989,7 +13948,7 @@ fn protect_action_result(
     if full
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(body) = output.response_body.take()
     {
         output.response_body_in_content = Some(true);
@@ -14044,7 +14003,7 @@ fn protect_arm_operation_result(
     if structured(&output)?
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(requested) = output.requested.take()
     {
         output.requested_in_content = Some(true);
@@ -14053,7 +14012,7 @@ fn protect_arm_operation_result(
     if structured(&output)?
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(body) = output.response_body.take()
     {
         output.response_body_in_content = Some(true);
@@ -14062,7 +14021,7 @@ fn protect_arm_operation_result(
     if structured(&output)?
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(observed) = output.observed.take()
     {
         output.observed_in_content = Some(true);
@@ -14071,7 +14030,7 @@ fn protect_arm_operation_result(
     if structured(&output)?
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(error) = output.readback_error.take()
     {
         output.readback_error_in_content = Some(true);
@@ -14088,7 +14047,7 @@ fn wifi_broadcasts_list_result(
     let mut content = Vec::new();
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(broadcasts) = output.broadcasts.take()
     {
         output.broadcasts_in_content = Some(true);
@@ -14099,7 +14058,7 @@ fn wifi_broadcasts_list_result(
     }
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(metadata) = output.page_metadata.take()
     {
         output.page_metadata_in_content = Some(true);
@@ -14120,7 +14079,7 @@ fn network_policy_detail_result(
     if full
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
     {
         let record = output.record.take().expect("policy record exists");
         output.record_in_content = Some(true);
@@ -14139,7 +14098,7 @@ fn network_policy_list_result(
     let mut content = Vec::new();
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(records) = output.records.take()
     {
         output.records_in_content = Some(true);
@@ -14150,7 +14109,7 @@ fn network_policy_list_result(
     }
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(metadata) = output.page_metadata.take()
     {
         output.page_metadata_in_content = Some(true);
@@ -14170,7 +14129,7 @@ fn network_policy_write_result<K: Serialize>(
     let exceeds = |output: &NetworkPolicyWriteOutput<K>| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14214,7 +14173,7 @@ fn firewall_update_result(
     let exceeds = |output: &FirewallPoliciesUpdateOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14252,7 +14211,7 @@ fn firewall_delete_result(
     let exceeds = |output: &FirewallPoliciesDeleteOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14284,7 +14243,7 @@ fn pending_devices_list_result(
     let mut content = Vec::new();
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(devices) = output.devices.take()
     {
         output.devices_in_content = Some(true);
@@ -14295,7 +14254,7 @@ fn pending_devices_list_result(
     }
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(metadata) = output.page_metadata.take()
     {
         output.page_metadata_in_content = Some(true);
@@ -14315,7 +14274,7 @@ fn radius_profiles_list_result(
     let mut content = Vec::new();
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(profiles) = output.profiles.take()
     {
         output.profiles_in_content = Some(true);
@@ -14326,7 +14285,7 @@ fn radius_profiles_list_result(
     }
     if structured(&output)?
         .structured_content
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
         && let Some(metadata) = output.page_metadata.take()
     {
         output.page_metadata_in_content = Some(true);
@@ -14340,14 +14299,9 @@ fn radius_profiles_list_result(
     Ok(result)
 }
 
-fn protect_overview_result(
-    output: ProtectOverviewResult,
-    upstream_error: Option<&ApiError>,
-) -> Result<CallToolResult, McpError> {
+fn protect_overview_result(output: ProtectOverviewResult) -> Result<CallToolResult, McpError> {
     match output {
-        ProtectOverviewResult::Summary(output) => {
-            structured_with_upstream_error(output, upstream_error)
-        }
+        ProtectOverviewResult::Summary(output) => structured(output),
         ProtectOverviewResult::Record(output) => record_result(output),
     }
 }
@@ -14357,7 +14311,7 @@ fn record_result(mut output: RecordOutput) -> Result<CallToolResult, McpError> {
     if full
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
     {
         let record = output.record.take().expect("detail record exists");
         output.record_in_content = Some(true);
@@ -14376,7 +14330,7 @@ fn network_inventory_list_result(
     let exceeds = |output: &NetworkInventoryListOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14406,7 +14360,7 @@ fn devices_adopt_result(mut output: DevicesAdoptOutput) -> Result<CallToolResult
     let exceeds = |output: &DevicesAdoptOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14436,7 +14390,7 @@ fn devices_remove_result(mut output: DevicesRemoveOutput) -> Result<CallToolResu
     let exceeds = |output: &DevicesRemoveOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14466,7 +14420,7 @@ fn devices_control_result(mut output: DevicesControlOutput) -> Result<CallToolRe
     let exceeds = |output: &DevicesControlOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14513,7 +14467,7 @@ fn vouchers_revoke_matching_result(
     if full
         .structured_content
         .as_ref()
-        .is_none_or(|value| value.to_string().len() <= MAXIMUM_RESULT_BYTES)
+        .is_none_or(|value| value.to_string().len() <= STRUCTURED_CONTENT_TARGET_BYTES)
     {
         return Ok(full);
     }
@@ -14554,7 +14508,7 @@ fn voucher_revoke_result(mut output: VoucherRevokeOutput) -> Result<CallToolResu
     let exceeds = |output: &VoucherRevokeOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14581,7 +14535,7 @@ fn arm_profiles_list_result(
     if full
         .structured_content
         .as_ref()
-        .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES)
+        .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES)
     {
         let profiles = output.profiles.take().expect("page records exist");
         output.profiles_in_content = Some(true);
@@ -14601,7 +14555,7 @@ fn viewer_settings_result(
     let exceeds = |output: &ProtectViewerSettingsUpdateOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14719,7 +14673,7 @@ fn liveview_configure_result(
     let exceeds = |output: &ProtectLiveviewsConfigureOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?
@@ -14773,15 +14727,13 @@ mod tests {
 
     use rmcp::model::CallToolRequestParams;
     use serde_json::{Map, Value, json};
-    use unifi_api::{ApiError, BoundedMessage};
 
     use super::{
         BOOLEAN_SCHEMA_KEYWORDS, ClientsSearchInput, FIREWALL_POLICY_CHANGE_FIELDS,
-        FirewallPolicyChanges, JSON_SCHEMA_TYPES, MAXIMUM_RESULT_BYTES, POLICY_WIRE_NAMES,
-        PORT_FORWARD_CHANGE_FIELDS, PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges,
-        PortForwardView, WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView,
-        normalize_portable_schema, parse, schema_object, structured,
-        structured_with_upstream_error, trust_annotated,
+        FirewallPolicyChanges, JSON_SCHEMA_TYPES, POLICY_WIRE_NAMES, PORT_FORWARD_CHANGE_FIELDS,
+        PORT_FORWARD_WIRE_NAMES, PolicyView, PortForwardChanges, PortForwardView,
+        WLAN_CHANGE_FIELDS, WLAN_WIRE_NAMES, WlanChanges, WlanView, normalize_portable_schema,
+        parse, schema_object, structured, trust_annotated,
     };
     use crate::mutation::FieldOutcome;
     use crate::registry::{TOOL_REGISTRY, ToolBehavior};
@@ -15040,20 +14992,6 @@ mod tests {
         let mut empty = CallToolRequestParams::default();
         empty.name = "network.overview".into();
         assert!(parse::<super::EmptyInput>(&empty).is_ok());
-    }
-
-    #[test]
-    fn secondary_controller_error_survives_the_structured_result_budget() {
-        let body = format!("{}controller-error-tail", "x".repeat(MAXIMUM_RESULT_BYTES));
-        let error = ApiError::Status {
-            status: 503,
-            message: BoundedMessage::new(&body),
-        };
-        let result =
-            structured_with_upstream_error(json!({"error": error.to_string()}), Some(&error))
-                .expect_err("oversized secondary error");
-        assert!(result.message.contains("controller-error-tail"));
-        assert!(!result.message.contains("narrow the query"));
     }
 
     #[test]

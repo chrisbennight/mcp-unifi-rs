@@ -2847,11 +2847,15 @@ async fn protect_events_names_missing_local_session_credentials() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one local-session failure fixture covers summary, status, overview and requested-detail behavior"
+)]
 async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_read() {
     let server = MockServer::start().await;
     let bootstrap_failure = format!(
         "bootstrap unavailable: {}controller-local-detail",
-        "x".repeat(700)
+        "x".repeat(60000)
     );
     console_with(&server, sample_cameras()).await;
     Mock::given(method("POST"))
@@ -2898,6 +2902,28 @@ async fn configured_local_session_reports_unavailable_when_bootstrap_cannot_be_r
     assert_eq!(status["id"], "cam-front");
     assert_eq!(
         status["localError"],
+        format!("controller returned HTTP 503: {bootstrap_failure}")
+    );
+
+    Mock::given(method("GET"))
+        .and(path(format!("{PROTECT}/nvrs")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"id":"fixture-recorder","modelKey":"nvr","name":"Fixture"}),
+        ))
+        .mount(&server)
+        .await;
+    let overview = handler
+        .call(&call("protect.overview", &serde_json::json!({})), None)
+        .await
+        .expect("public overview with complete optional error")
+        .structured_content
+        .expect("structured overview");
+    assert_eq!(
+        overview["cameraCount"],
+        sample_cameras().as_array().expect("cameras").len()
+    );
+    assert_eq!(
+        overview["capabilities"]["localUnavailableReason"],
         format!("controller returned HTTP 503: {bootstrap_failure}")
     );
 

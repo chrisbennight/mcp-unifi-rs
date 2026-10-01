@@ -2,11 +2,11 @@
 
 use super::{
     ApiError, BoundedMessage, CallToolRequestParams, CallToolResult, ContentBlock, Deserialize,
-    JsonSchema, MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_RESULT_BYTES, MAXIMUM_SEARCH_LIMIT, McpError,
+    JsonSchema, MAXIMUM_POLICY_REQUEST_BYTES, MAXIMUM_SEARCH_LIMIT, McpError,
     NETWORK_POLICY_READBACK_BUDGET, NETWORK_POLICY_RESPONSE_RESERVE, NetworkPolicyWriteOperation,
-    PageRequest, Serialize, UnifiMcp, Value, api_error, default_search_limit,
-    network_request::NetworkRequest, page_validation_error, parse, requested_json_matches,
-    structured, wifi_request::WifiBroadcastRequest,
+    PageRequest, STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp, Value, api_error,
+    default_search_limit, network_request::NetworkRequest, page_validation_error, parse,
+    requested_json_matches, structured, wifi_request::WifiBroadcastRequest,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -459,7 +459,7 @@ fn result(output: ConfigurationResult) -> Result<CallToolResult, McpError> {
         "after",
         "readbackError",
     ] {
-        if value.to_string().len() <= MAXIMUM_RESULT_BYTES {
+        if value.to_string().len() <= STRUCTURED_CONTENT_TARGET_BYTES {
             break;
         }
         if let Some(part) = value.as_object_mut().expect("typed object").remove(field) {

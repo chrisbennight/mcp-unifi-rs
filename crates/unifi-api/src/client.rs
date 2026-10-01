@@ -1203,18 +1203,30 @@ impl IntegrationClient {
         &self,
         site_id: &str,
         request: &VoucherCreate,
+    ) -> Result<VoucherCreateResponse, ApiError> {
+        self.create_vouchers_with_response(site_id, request)
+            .await
+            .map(|(created, _, _)| created)
+    }
+
+    /// Create hotspot vouchers and retain the accepted HTTP status and complete body.
+    /// Never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApiError`] for request failures or an undecodable response,
+    /// preserving the complete controller body for decoding errors.
+    pub async fn create_vouchers_with_response(
+        &self,
+        site_id: &str,
+        request: &VoucherCreate,
     ) -> Result<(VoucherCreateResponse, u16, Vec<u8>), ApiError> {
-        let response = self
-            .send(
-                self.request(Method::POST, &["sites", site_id, "hotspot", "vouchers"])?
-                    .json(request),
-            )
+        let (status, bytes) = self
+            .post_action(&["sites", site_id, "hotspot", "vouchers"], request)
             .await?;
-        let status = response.status().as_u16();
-        let bytes = http::read_bounded_body(response).await?;
-        let result = serde_json::from_slice(&bytes)
+        let created = serde_json::from_slice(&bytes)
             .map_err(|error| crate::error::decode_failure(&error, &bytes))?;
-        Ok((result, status, bytes))
+        Ok((created, status, bytes))
     }
 
     /// Delete one voucher. Returns the accepted status and complete bounded

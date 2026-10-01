@@ -188,9 +188,9 @@ readback is reported alongside the creation response. `vouchers.search` and
 
 The creation response preserves rows even when a batch check fails.
 Input
-bounds are checked before minting. Complete accepted creation responses
-remain available, including unusually large records. Voucher reads also
-recover codes in caller-selected pages.
+bounds are checked before minting. Complete creation responses remain
+available, including unusually large records. Voucher reads also recover
+codes in caller-selected pages.
 
 ## Response bounds
 

@@ -2,8 +2,8 @@
 
 use super::{
     CallToolRequestParams, CallToolResult, ContentBlock, Deserialize, JsonSchema,
-    MAXIMUM_RESULT_BYTES, MAXIMUM_SEARCH_LIMIT, Map, McpError, Serialize, UnifiMcp, Value,
-    api_error, default_search_limit, parse, structured,
+    MAXIMUM_SEARCH_LIMIT, Map, McpError, STRUCTURED_CONTENT_TARGET_BYTES, Serialize, UnifiMcp,
+    Value, api_error, default_search_limit, parse, structured,
 };
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
@@ -114,7 +114,7 @@ fn source_result(mut output: NetworkSourceReadOutput) -> Result<CallToolResult, 
     let exceeds = |output: &NetworkSourceReadOutput| -> Result<bool, McpError> {
         Ok(structured(output)?
             .structured_content
-            .is_some_and(|value| value.to_string().len() > MAXIMUM_RESULT_BYTES))
+            .is_some_and(|value| value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES))
     };
     let mut content = Vec::new();
     if exceeds(&output)?

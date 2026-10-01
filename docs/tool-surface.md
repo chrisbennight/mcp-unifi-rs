@@ -140,9 +140,10 @@ reports `verified` for a matching configuration or `verifiedAbsent` after a
 confirmed 404. A surviving record or the full upstream readback error remains
 available. Ambiguous writes are never retried.
 
-When structured output exceeds 48 KiB, complete requested records, bodies,
-and errors move to labeled MCP text content with explicit `...InContent`
-markers. Each upstream response remains bounded by the transport's 4 MiB limit;
+Formatters can move complete large records, bodies and errors to labeled MCP
+text content with explicit `...InContent` markers, using 48 KiB as a
+structured content target. Results may exceed that target; no accepted
+controller values are discarded to meet it. Each upstream response remains bounded by the transport's 4 MiB limit;
 an exceeded limit fails explicitly. The gateway controls access and disclosure.
 
 ### `radius_profiles.list`
@@ -1035,8 +1036,8 @@ already exist. It also reads each identified voucher back and sets `verified`
 only when the count matches and every id and code matches. A failed readback is
 reported with the creation response in `readbackErrors`, with the voucher id
 and complete controller response or error. `readbackComplete` says whether verification
-reached the end of the returned batch. A deadline or accumulated error
-response budget that stops later reads is named in `readbackStopReason`; those
+reached the end of the returned batch. A deadline that stops later reads is
+named in `readbackStopReason`; those
 vouchers remain reachable through `vouchers.status` or `vouchers.search`
 without minting the batch again.
 Large errors move to a separate text content block, signaled by
@@ -1061,9 +1062,12 @@ full batch of real vouchers and is what keeps a hostile upstream from
 exhausting this process; trading that away would not make delivery certain, it
 would only move the failure.
 
-Complete large creation responses remain available. An oversized voucher
-view is returned intact in labeled content with `vouchersInContent`, including
-issued codes. Voucher list and detail reads can also retrieve the codes.
+Complete accepted creation responses remain available, including unusually
+large batches. `responseStatus` and `responseBody` retain the accepted status
+and original body, including names, timestamps and unknown fields. Large bodies
+use labeled MCP content with `responseBodyInContent`; the voucher summary and
+verification results remain available. Voucher list and detail reads can also
+retrieve their codes.
 
 For the same reason, everything that can refuse a batch refuses it before
 minting: the count and validity bounds and the label's length are decided from

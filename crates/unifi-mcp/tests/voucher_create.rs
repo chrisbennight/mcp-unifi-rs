@@ -127,6 +127,57 @@ async fn an_unconfirmed_call_describes_the_batch_and_mints_nothing() {
 }
 
 #[tokio::test]
+async fn creation_retains_complete_small_and_large_accepted_bodies() {
+    for extension in ["controller-field".to_owned(), "x".repeat(60_000)] {
+        let server = MockServer::start().await;
+        mount_site(&server).await;
+        let body = format!(
+            " {} ",
+            serde_json::json!({"vouchers":[{
+            "code":"1234567890", "name":"Upstream name", "createdAt":"2026-09-30T00:00:00Z",
+            "unknownExtension":extension
+        }], "unknownMetadata":true})
+        );
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers"
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_string(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = handler_for(&server)
+            .call(
+                &create(&serde_json::json!({
+                    "name":"guests", "count":1, "timeLimitMinutes":60, "confirm":true
+                })),
+                None,
+            )
+            .await
+            .expect("accepted creation");
+        let output = result.structured_content.expect("structured");
+        assert_eq!(output["applied"], true);
+        assert_eq!(output["responseStatus"], 201);
+        assert_eq!(output["vouchers"][0]["code"], "1234567890");
+        assert_eq!(output["verified"], false);
+        if extension.len() > 50_000 {
+            assert_eq!(output["responseBodyInContent"], true);
+            assert!(
+                result
+                    .content
+                    .iter()
+                    .filter_map(|block| block.as_text())
+                    .any(|text| text.text.strip_prefix("responseBody: ") == Some(body.as_str()))
+            );
+        } else {
+            assert_eq!(output["responseBody"], body);
+        }
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn a_confirmed_call_sends_the_batch_and_returns_every_code() {
     let server = MockServer::start().await;
     mount_site(&server).await;
@@ -531,7 +582,7 @@ async fn multiple_readback_failures_identify_the_vouchers_that_failed() {
 }
 
 #[tokio::test]
-async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_rows() {
+async fn large_readback_failure_keeps_every_issued_code_and_continues_verification() {
     let server = MockServer::start().await;
     let mut accepted = batch(&["1234567890", "2345678901"]);
     accepted["controllerExtension"] =
@@ -550,8 +601,11 @@ async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_ro
         .and(path(format!(
             "{INTEGRATION}/sites/{SITE_ID}/hotspot/vouchers/voucher-1"
         )))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id":"voucher-1","code":"2345678901"})),
+        )
+        .expect(1)
         .mount(&server)
         .await;
     let result = handler_for(&server)
@@ -568,8 +622,8 @@ async fn large_readback_failure_keeps_every_issued_code_and_signals_unchecked_ro
     let output = result.structured_content.expect("structured");
     assert_eq!(output["vouchers"][0]["code"], "1234567890");
     assert_eq!(output["vouchers"][1]["code"], "2345678901");
-    assert_eq!(output["readbackComplete"], false);
-    assert_eq!(output["readbackStopReason"], "responseBudget");
+    assert_eq!(output["readbackComplete"], true);
+    assert!(output.get("readbackStopReason").is_none());
     assert_eq!(output["readbackErrorsInContent"], true);
     assert_eq!(output["responseStatus"], 200);
     assert_eq!(output["responseBodyInContent"], true);
