@@ -319,6 +319,8 @@ Read a complete Network system-log page using `startMs`, `endMs`, `page`
 `severity`. Time windows must be ordered; the controller decides supported
 ranges. `response` retains every original JSON field, including parameters,
 credentials and unknown page metadata. Follow `nextPage` for additional pages.
+`paginationIncomplete` signals a terminal first page containing fewer rows
+than the controller's element count; the original page remains available.
 Large pages use labeled `response` content with `responseInContent: true`.
 Empty pages beyond the reported page count are valid. Network application
 routing follows the authenticated console type; upstream unsupported responses

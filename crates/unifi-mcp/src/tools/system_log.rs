@@ -44,6 +44,8 @@ pub(super) struct EventsReadOutput {
     response_in_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_page: Option<u64>,
+    /// A terminal first page contains fewer rows than the controller reports.
+    pagination_incomplete: bool,
 }
 
 pub(super) async fn read(
@@ -71,6 +73,12 @@ pub(super) async fn read(
         .as_u64()
         .expect("validated page count");
     let next_page = input.page.checked_add(1).filter(|next| *next < total_pages);
+    let pagination_incomplete = input.page == 0
+        && next_page.is_none()
+        && response["total_element_count"]
+            .as_u64()
+            .expect("validated element count")
+            > response["data"].as_array().expect("validated data").len() as u64;
     let text = serde_json::to_string(&response)
         .map_err(|error| McpError::internal_error(error.to_string(), None))?;
     let large = text.len() > MAXIMUM_RESULT_BYTES;
@@ -78,6 +86,7 @@ pub(super) async fn read(
         response: (!large).then_some(response),
         response_in_content: large.then_some(true),
         next_page,
+        pagination_incomplete,
     })?;
     if large {
         result
