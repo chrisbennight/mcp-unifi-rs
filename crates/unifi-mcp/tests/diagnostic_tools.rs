@@ -498,7 +498,7 @@ async fn system_log_source_allows_deep_empty_pages_and_keeps_upstream_failures()
 }
 
 #[tokio::test]
-async fn compact_event_search_signals_a_short_source_page() {
+async fn compact_and_full_event_reads_signal_a_short_source_page() {
     let server = MockServer::start().await;
     login_mock(&server).await;
     Mock::given(method("POST"))
@@ -507,7 +507,7 @@ async fn compact_event_search_signals_a_short_source_page() {
             "data":[{"timestamp":now_ms(),"key":"controller-event"}],
             "page_number":0,"total_element_count":3,"total_page_count":1
         })))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let output = handler_for(&server)
@@ -518,6 +518,26 @@ async fn compact_event_search_signals_a_short_source_page() {
         .expect("structured");
     assert_eq!(output["fetchWindowTruncated"], true);
     assert_eq!(output["rows"].as_array().expect("rows").len(), 1);
+    let output = handler_for(&server)
+        .call(
+            &call(
+                "events.read",
+                &serde_json::json!({"startMs":0,"endMs":now_ms()}),
+            ),
+            None,
+        )
+        .await
+        .expect("complete source page")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["paginationIncomplete"], true);
+    assert!(output.get("nextPage").is_none());
+    assert_eq!(output["response"]["total_element_count"], 3);
+    assert_eq!(output["response"]["total_page_count"], 1);
+    assert_eq!(
+        output["response"]["data"].as_array().expect("data").len(),
+        1
+    );
 }
 
 #[tokio::test]
