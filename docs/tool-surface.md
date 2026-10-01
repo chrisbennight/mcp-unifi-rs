@@ -158,6 +158,26 @@ marked by `profilesInContent` and `pageMetadataInContent`.
 Contradictory page metadata returns the complete
 accepted controller response with a separate validation diagnostic.
 
+### `network.source.read`
+
+`source`, `offset`, `limit` (1-200, default 50).
+
+Complete records behind legacy diagnostic views. Sources are `activeClients`,
+`siteHealth`, `networkConfiguration`, `neighborAccessPoints`, and `dpiCounters`.
+They read the same fixed controller routes used by client, health, network,
+wireless and DPI summaries. DPI uses the existing read-only `by_app` POST.
+
+`records` preserves every field of each selected row. `controllerMetadata`
+preserves every original envelope field other than `data`. Large values move
+intact to labeled content with `recordsInContent` or
+`controllerMetadataInContent`. Errors preserve the original controller response.
+
+The upstream routes return a collection in one bounded response; pagination is
+local to that response. `totalCount` counts its rows, and `nextOffset` continues
+through them. Each call fetches a new response, so changing rows can affect
+later pages. Deep offsets return an empty page. The transport body bound fails
+explicitly instead of returning a partial response.
+
 ### `network.inventory.list/detail` and `network.switching.detail`
 
 These tools use the [official Network Integration API](https://developer.ui.com/network/v10.4.57/openapi.json).

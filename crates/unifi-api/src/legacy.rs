@@ -66,6 +66,16 @@ const PROTECT_DETECTION_TYPES: &[&str] = &[
 ];
 const LOGIN_REQUIRED_CODE: &str = "api.err.LoginRequired";
 
+/// Fixed legacy sources used by Network diagnostics.
+#[derive(Debug, Clone, Copy)]
+pub enum LegacyDiagnosticSource {
+    ActiveClients,
+    SiteHealth,
+    NetworkConfiguration,
+    NeighborAccessPoints,
+    DpiCounters,
+}
+
 /// Connection settings for one controller's legacy API session.
 pub struct LegacyConfig {
     /// Operator-chosen controller name used in logs and tool responses.
@@ -630,6 +640,37 @@ impl LegacyClient {
                 tail,
                 None,
             )
+            .await?;
+        legacy_record_envelope(&bytes)
+    }
+
+    /// Complete records and envelope metadata from one fixed diagnostic source.
+    ///
+    /// # Errors
+    /// Returns the original controller failure or a decode error containing
+    /// the complete accepted response when the envelope is invalid.
+    pub async fn diagnostic_records(
+        &self,
+        site: &str,
+        source: LegacyDiagnosticSource,
+    ) -> Result<serde_json::Value, ApiError> {
+        let (method, tail, body) = match source {
+            LegacyDiagnosticSource::ActiveClients => (Method::GET, ["stat", "sta"], None),
+            LegacyDiagnosticSource::SiteHealth => (Method::GET, ["stat", "health"], None),
+            LegacyDiagnosticSource::NetworkConfiguration => {
+                (Method::GET, ["rest", "networkconf"], None)
+            }
+            LegacyDiagnosticSource::NeighborAccessPoints => {
+                (Method::GET, ["stat", "rogueap"], None)
+            }
+            LegacyDiagnosticSource::DpiCounters => (
+                Method::POST,
+                ["stat", "sitedpi"],
+                Some(serde_json::json!({"type": "by_app"})),
+            ),
+        };
+        let (_, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(RequestClass::IdempotentRead, method, site, &tail, body)
             .await?;
         legacy_record_envelope(&bytes)
     }
