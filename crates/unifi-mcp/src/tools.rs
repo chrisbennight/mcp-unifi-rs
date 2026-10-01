@@ -54,6 +54,8 @@ mod legacy_configuration;
 mod legacy_wlan_request;
 mod network_configuration;
 mod network_request;
+mod network_source;
+use network_source::{NetworkSourceReadInput, NetworkSourceReadOutput};
 mod protect_updates;
 use legacy_configuration::{
     LegacyConfigurationListInput, LegacyConfigurationResult, LegacyConfigurationStatusInput,
@@ -4579,6 +4581,9 @@ impl ToolSpec {
             ToolKind::RadiusProfilesList => {
                 tool::<RadiusProfilesListInput, RadiusProfilesListOutput>(self)
             }
+            ToolKind::NetworkSourceRead => {
+                tool::<NetworkSourceReadInput, NetworkSourceReadOutput>(self)
+            }
             ToolKind::NetworkInventoryList => {
                 tool::<NetworkInventoryListInput, NetworkInventoryListOutput>(self)
             }
@@ -4977,6 +4982,7 @@ impl UnifiMcp {
             ToolKind::NetworksConfigure => self.networks_configure(params).await,
             ToolKind::WifiBroadcastsConfigure => self.wifi_broadcasts_configure(params).await,
             ToolKind::RadiusProfilesList => self.radius_profiles_list(params).await,
+            ToolKind::NetworkSourceRead => self.network_source_read(params).await,
             ToolKind::NetworkInventoryList => self.network_inventory_list(params).await,
             ToolKind::NetworkInventoryDetail => self.network_inventory_detail(params).await,
             ToolKind::NetworkSwitchingDetail => self.network_switching_detail(params).await,

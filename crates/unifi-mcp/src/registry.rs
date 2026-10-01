@@ -43,6 +43,7 @@ pub enum ToolKind {
     NetworksStatus,
     NetworksConfigure,
     RadiusProfilesList,
+    NetworkSourceRead,
     NetworkInventoryList,
     NetworkInventoryDetail,
     NetworkSwitchingDetail,
@@ -178,6 +179,7 @@ impl ToolKind {
             | Self::WlanGroupsList
             | Self::PortForwardsStatus
             | Self::RadiusProfilesList
+            | Self::NetworkSourceRead
             | Self::NetworkInventoryList
             | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
@@ -265,6 +267,7 @@ impl ToolKind {
             | Self::NetworksConfigure
             | Self::WifiBroadcastsConfigure
             | Self::RadiusProfilesList
+            | Self::NetworkSourceRead
             | Self::NetworkInventoryList
             | Self::NetworkInventoryDetail
             | Self::NetworkSwitchingDetail
@@ -770,6 +773,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "Page through the official Network API's RADIUS profiles for this site, with its documented filter. Returns complete profile fields and original page metadata. Large values remain available in MCP content. Continue with nextOffset.",
     ),
     sensitive_read_spec(
+        ToolKind::NetworkSourceRead,
+        "network.source.read",
+        "Page through complete legacy active clients, site health, network configuration, neighboring access points, or DPI counters with source, offset and limit. Returns every selected controller field and complete envelope metadata. Paging is local; each call fetches a new response. Large fields remain in labeled MCP content.",
+    ),
+    sensitive_read_spec(
         ToolKind::NetworkInventoryList,
         "network.inventory.list",
         "Page through sites, connected clients, adopted devices, countries, DPI applications/categories, device tags, LAGs, MC-LAG domains, switch stacks, WAN interfaces, VPN servers, or site-to-site VPN tunnels. Returns complete controller records and original page metadata with a continuation offset. Supports documented list filters.",
@@ -1083,6 +1091,7 @@ mod tests {
         ToolKind::NetworksConfigure,
         ToolKind::WifiBroadcastsConfigure,
         ToolKind::RadiusProfilesList,
+        ToolKind::NetworkSourceRead,
         ToolKind::NetworkInventoryList,
         ToolKind::NetworkInventoryDetail,
         ToolKind::NetworkSwitchingDetail,
@@ -1234,6 +1243,7 @@ mod tests {
                 | ToolKind::NetworksConfigure
                 | ToolKind::WifiBroadcastsConfigure
                 | ToolKind::RadiusProfilesList
+                | ToolKind::NetworkSourceRead
                 | ToolKind::NetworkInventoryList
                 | ToolKind::NetworkInventoryDetail
                 | ToolKind::NetworkSwitchingDetail
