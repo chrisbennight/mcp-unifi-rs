@@ -59,6 +59,86 @@ async fn mount_site(server: &MockServer) {
 }
 
 #[tokio::test]
+async fn native_inventory_pages_report_requested_and_effective_counts() {
+    let server = MockServer::start().await;
+    mount_site(&server).await;
+    let cases = [
+        ("countries", "countries"),
+        ("sites", "sites"),
+        ("dpiApplications", "dpi/applications"),
+        ("dpiCategories", "dpi/categories"),
+        ("clients", "sites/SITE/clients"),
+        ("devices", "sites/SITE/devices"),
+        ("deviceTags", "sites/SITE/device-tags"),
+        ("lags", "sites/SITE/switching/lags"),
+        ("mcLagDomains", "sites/SITE/switching/mc-lag-domains"),
+        ("switchStacks", "sites/SITE/switching/switch-stacks"),
+        ("wanInterfaces", "sites/SITE/wans"),
+        ("vpnServers", "sites/SITE/vpn/servers"),
+        (
+            "siteToSiteVpnTunnels",
+            "sites/SITE/vpn/site-to-site-tunnels",
+        ),
+    ];
+    for &(_, route) in &cases {
+        for (offset, limit, calls) in [(0usize, 50usize, 1), (0, 200, 2), (200, 200, 1)] {
+            let rows: Vec<Value> = (offset..301).take(limit).map(|i| json!({"id":i})).collect();
+            Mock::given(method("GET"))
+                .and(path(format!("{PREFIX}/{}", route.replace("SITE", SITE_ID))))
+                .and(query_param("offset", offset.to_string()))
+                .and(query_param("limit", limit.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "offset":offset,"limit":limit,"count":rows.len(),"totalCount":301,"data":rows
+                })))
+                .expect(calls)
+                .mount(&server)
+                .await;
+        }
+    }
+    let handler = handler_for(&server);
+    for &(kind, _) in &cases {
+        for (requested, offset, effective, returned, next) in [
+            (None, 0usize, 50usize, 50usize, Some(50usize)),
+            (Some(300usize), 0, 200, 200, Some(200)),
+            (Some(usize::MAX), 0, 200, 200, Some(200)),
+            (Some(300), 200, 200, 101, None),
+        ] {
+            let mut input = json!({"kind":kind,"offset":offset});
+            if let Some(limit) = requested {
+                input["limit"] = json!(limit);
+            }
+            let page = handler
+                .call(&call("network.inventory.list", input), None)
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(page["records"].as_array().unwrap().len(), returned);
+            assert_eq!(
+                page["pageCounts"],
+                json!({"requestedLimit":requested.unwrap_or(50),"effectiveLimit":effective,"returned":returned})
+            );
+            assert_eq!(
+                page.get("nextOffset").cloned().unwrap_or(Value::Null),
+                json!(next)
+            );
+        }
+        let before = server.received_requests().await.unwrap().len();
+        assert!(
+            handler
+                .call(
+                    &call("network.inventory.list", json!({"kind":kind,"limit":0})),
+                    None
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), before);
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn every_documented_inventory_route_returns_full_rows_and_a_continuation() {
     let server = MockServer::start().await;
     mount_site(&server).await;

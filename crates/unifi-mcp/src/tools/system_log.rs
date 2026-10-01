@@ -24,19 +24,22 @@ pub(super) struct EventsReadInput {
     /// Zero-based controller page, including pages beyond the reported total.
     #[serde(default)]
     page: u64,
-    /// Rows in one upstream page, 1-1000. Defaults to 100.
+    /// Positive rows in one upstream page. Defaults to 100.
     #[serde(default = "default_page_size")]
-    page_size: u32,
+    #[schemars(range(min = 1))]
+    page_size: usize,
     severity: Option<EventSeverity>,
 }
 
-const fn default_page_size() -> u32 {
+const fn default_page_size() -> usize {
     100
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct EventsReadOutput {
+    requested_limit: usize,
+    returned: usize,
     /// Complete original JSON page, including unknown metadata and fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     response: Option<serde_json::Map<String, Value>>,
@@ -53,6 +56,9 @@ pub(super) async fn read(
     params: &CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
     let input = parse::<EventsReadInput>(params)?;
+    if input.page_size == 0 {
+        return Err(McpError::invalid_params("pageSize must be positive", None));
+    }
     let mut query = SystemLogQuery::new(input.start_ms, input.end_ms, input.page_size)
         .map_err(api_error)?
         .page(input.page);
@@ -83,6 +89,8 @@ pub(super) async fn read(
         .map_err(|error| McpError::internal_error(error.to_string(), None))?;
     let large = text.len() > STRUCTURED_CONTENT_TARGET_BYTES;
     let mut result = structured(EventsReadOutput {
+        requested_limit: input.page_size,
+        returned: response["data"].as_array().expect("validated data").len(),
         response: (!large).then_some(response),
         response_in_content: large.then_some(true),
         next_page,

@@ -168,7 +168,7 @@ capability limits.
 
 | Bound | Value | Applies to | Contract | Signal / recovery | Rationale |
 |---|---|---|---|---|---|
-| Search page limit | 1-200, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset` | one page stays well under the response budget |
+| Search page count | positive, default 50 | clients/devices/events search | caller-paged | `totalMatches`, `nextOffset`; genuine inventory and event scans remain signaled | caller selects rows within existing byte and scan budgets |
 | Search filter length | 128 UTF-8 bytes | compact search filters | fail-loud | input error; surrounding whitespace normalized | bounds local matching work; complete inventory reads have their own typed filters |
 | Voucher creation request | native API field ranges; complete serialized body at most 1 MiB | vouchers.create | fail-loud before controller access | error names the invalid native field or request bound | labels are forwarded unchanged; count and bandwidth fields match the upstream contract |
 | Structured content formatting target | 48 KiB | formatters that move large fields to labeled MCP content | complete values preserved | `...InContent` flags locate moved fields; structured results may exceed the target | avoids repeating large values in structured and text content |
@@ -184,13 +184,13 @@ capability limits.
 | Client-event scan | 200 rows over 24 hours | clients.context | signaled | `recentEventsTruncated` when controller totals exceed the scan | one bounded system-log page balances freshness against fan-out |
 | AP-name join | inherits device inventory scan | clients.search, clients.context | signaled | `apLookupTruncated`; wifi.diagnose folds it into `accessPointsTruncated` | a join can only be as complete as its scan |
 | Event fetch window | 1000 system logs | events.search | signaled | `fetchWindowTruncated`; `events.read` pages complete source records | bounds compact search work |
-| Protect event page | 1-200 rows plus one lookahead, default 50 | protect.events | caller-paged | `nextCursor` freezes the window and filters, then advances by a time key without splitting an equal-timestamp group; an oversized group fails loudly | each call stays within the response budget and never presents a bounded prefix as complete |
+| Protect event page | positive request, effective at most 999 rows plus one lookahead, default 50 | protect.events | caller-paged | `nextCursor` freezes the window and filters, then advances by a time key without splitting an equal-timestamp group; an oversized group fails loudly | each call stays within the response budget and never presents a bounded prefix as complete |
 | Protect event window | positive relative hours or ordered fixed bounds, default latest 24 h | protect.events | caller-windowed | ordered bounds required; name resolution may read inventory first; controller responses determine retained history | row and transport bounds limit each call |
 | Event message text | 256 chars | events.search, clients.context | marked | `…` appended only when cut | one line of context, never a silent excerpt |
 | Overview event counts | two one-row queries over 24 hours | network.overview | controller totals | `recentEvents` gives the window, total, and HIGH/VERY_HIGH count | response totals avoid count saturation; the two reads are not atomic |
 | Network event window | positive hours, default 24 | events.search | caller-chosen | ordered bounds; events.read provides complete controller pages | page and transport bounds limit each call |
 | WAN report window | positive hours or ordered hourly bounds, default 24 h | stats.query, traffic.read | caller-chosen | controller responses determine supported history | transport bounds limit each response |
-| Top applications | 1-50, default 10 | stats.query | caller-chosen | validated; `traffic.read` and `network.source.read` provide complete Activity and DPI source records | bounds ranking output |
+| Top applications | positive, default 10 | stats.query | caller-chosen | validated; `traffic.read` and `network.source.read` provide complete Activity and DPI source records | caller selects ranking output within the existing read budget |
 | Weak-signal floor | -100..-30 dBm, default -75 | wifi.diagnose | caller-chosen | validated | -75 dBm is the usual roaming threshold |
 | Transport response | 4 MiB | every upstream read | fail-loud | bounded-read error | protects the process from a hostile upstream |
 | Client id resolution scan | 1000 rows | guests.authorize | fail-loud | a scan that ended at its ceiling says the address may exist beyond it, rather than reporting it unknown | the client reads address clients by hardware address while the authorization endpoint needs the controller's own id |

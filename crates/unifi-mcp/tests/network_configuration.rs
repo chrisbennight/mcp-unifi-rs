@@ -437,7 +437,7 @@ async fn invalid_input_is_rejected_before_any_upstream_call() {
     let server = MockServer::start().await;
     let handler = handler_for(&server);
     for (name, args) in [
-        ("networks.list", json!({"limit":201})),
+        ("networks.list", json!({"limit":0})),
         ("networks.list", json!({"offset":2_147_483_648_u64})),
         ("networks.list", json!({"filter":"x".repeat(2049)})),
         ("networks.status", json!({"id":".."})),

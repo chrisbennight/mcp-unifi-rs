@@ -14,7 +14,8 @@ pub(super) struct LegacyConfigurationListInput {
     #[serde(default)]
     offset: u32,
     #[serde(default = "super::default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -33,7 +34,7 @@ pub(super) struct LegacyConfigurationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     offset: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    limit: Option<u16>,
+    limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,7 +144,8 @@ pub(super) struct WlanGroupsListInput {
     #[serde(default)]
     offset: u32,
     #[serde(default = "super::default_search_limit")]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -266,8 +268,8 @@ impl UnifiMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<LegacyConfigurationListInput>(params)?;
-        if !(1..=super::MAXIMUM_SEARCH_LIMIT).contains(&input.limit) {
-            return Err(McpError::invalid_params("limit must be 1-200", None));
+        if input.limit == 0 {
+            return Err(McpError::invalid_params("limit must be positive", None));
         }
         let response = self
             .legacy()
@@ -484,9 +486,9 @@ impl UnifiMcp {
     }
 }
 
-fn validate_page(limit: u16) -> Result<(), McpError> {
-    if !(1..=super::MAXIMUM_SEARCH_LIMIT).contains(&limit) {
-        return Err(McpError::invalid_params("limit must be 1-200", None));
+fn validate_page(limit: usize) -> Result<(), McpError> {
+    if limit == 0 {
+        return Err(McpError::invalid_params("limit must be positive", None));
     }
     Ok(())
 }
@@ -494,7 +496,7 @@ fn validate_page(limit: u16) -> Result<(), McpError> {
 fn page(
     mut response: Value,
     requested_offset: u32,
-    limit: u16,
+    limit: usize,
 ) -> Result<CallToolResult, McpError> {
     let rows = if let Value::Array(rows) = &mut response {
         rows
@@ -508,7 +510,7 @@ fn page(
     let offset = usize::try_from(requested_offset)
         .expect("u32 fits supported platforms")
         .min(total);
-    let end = offset.saturating_add(usize::from(limit)).min(total);
+    let end = offset.saturating_add(limit).min(total);
     *rows = rows.drain(offset..end).collect();
     result(
         serde_json::json!({"response": response,"offset":requested_offset,"limit":limit,"totalCount":total,"nextOffset":(end<total).then_some(end)}),

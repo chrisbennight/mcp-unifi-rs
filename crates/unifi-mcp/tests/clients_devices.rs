@@ -640,7 +640,6 @@ async fn search_page_limits_and_nonnegative_offsets_are_enforced() {
 
     for arguments in [
         serde_json::json!({"limit": 0}),
-        serde_json::json!({"limit": 500}),
         serde_json::json!({"offset": -1}),
         serde_json::json!({"query": ""}),
     ] {

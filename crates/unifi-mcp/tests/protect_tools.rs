@@ -2579,6 +2579,61 @@ async fn protect_events_serialize_an_empty_detection_label_list() {
 }
 
 #[tokio::test]
+async fn protect_event_counts_keep_defaults_and_report_the_existing_read_budget() {
+    let server = MockServer::start().await;
+    console_with(&server, sample_cameras()).await;
+    local_console_with(&server, sample_bootstrap()).await;
+    for (effective, requests) in [(50, 1), (300, 1), (999, 1)] {
+        let events: Vec<_> = (0..=effective)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("event-{index}"), "type": "motion", "start": 5000 - index,
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/proxy/protect/api/events"))
+            .and(query_param("limit", (effective + 1).to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(events))
+            .expect(requests)
+            .mount(&server)
+            .await;
+    }
+    let handler = handler_with_events(&server);
+    for (requested, effective) in [(None, 50), (Some(300), 300), (Some(usize::MAX), 999)] {
+        let mut arguments = serde_json::json!({"start": 1000, "end": 6000});
+        if let Some(requested) = requested {
+            arguments["limit"] = serde_json::json!(requested);
+        }
+        let output = handler
+            .call(&call("protect.events", &arguments), None)
+            .await
+            .expect("positive event page")
+            .structured_content
+            .expect("structured");
+        assert_eq!(
+            output["pageCounts"]["requestedLimit"],
+            requested.unwrap_or(50)
+        );
+        assert_eq!(output["pageCounts"]["effectiveLimit"], effective);
+        assert_eq!(output["pageCounts"]["returned"], effective);
+        assert_eq!(output["scannedRows"], effective);
+        assert_eq!(output["complete"], false);
+        assert_eq!(output["nextCursor"]["nextEnd"], 5000 - effective);
+    }
+    handler
+        .call(
+            &call(
+                "protect.events",
+                &serde_json::json!({"start": 1000, "end": 6000, "limit": 0}),
+            ),
+            None,
+        )
+        .await
+        .expect_err("zero count must fail before an event request");
+}
+
+#[tokio::test]
 async fn protect_events_accepts_the_local_display_name_reported_by_search() {
     let server = MockServer::start().await;
     console_with(
