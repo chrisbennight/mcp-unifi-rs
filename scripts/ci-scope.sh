@@ -6,6 +6,7 @@ python=false
 docs=false
 compose=false
 image=false
+publish=false
 case "${GITHUB_EVENT_NAME:?event is required}" in
   workflow_dispatch|schedule) full=true ;;
   push|pull_request)
@@ -15,6 +16,7 @@ case "${GITHUB_EVENT_NAME:?event is required}" in
   *) echo 'Unsupported CI event' >&2; exit 1 ;;
 esac
 if [[ "$full" == true ]]; then
+  publish=true
   rust=true; python=true; docs=true; compose=true; image=true
 else
   [[ "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full base commit is required' >&2; exit 1; }
@@ -33,7 +35,7 @@ else
       .github/workflows/*) rust=true; python=true; docs=true; compose=true; image=true ;;
       Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*/Cargo.toml|.cargo/*) rust=true; image=true ;;
       rustfmt.toml|.rustfmt.toml|clippy.toml|.clippy.toml) rust=true ;;
-      crates/*/tests/*|crates/*/benches/*) rust=true ;;
+      crates/unifi-server/src/collector/tests.rs|crates/*/tests/*|crates/*/benches/*) rust=true ;;
       crates/*/*.md) docs=true ;;
       crates/*) rust=true; image=true ;;
       Dockerfile|.dockerignore|scripts/check_build_context.py|scripts/smoke_image.py|scripts/image_tags.py|scripts/qualify_*|scripts/build*|LICENSE|THIRD_PARTY_NOTICES.md)
@@ -49,8 +51,12 @@ else
     case "$path" in
       crates/unifi-server/src/config.rs|crates/unifi-server/src/portable.rs) docs=true ;;
     esac
+    case "$path" in
+      crates/unifi-server/src/collector/tests.rs|crates/*/tests/*|crates/*/benches/*|crates/*/*.md) ;;
+      Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*|Dockerfile|.dockerignore|LICENSE|THIRD_PARTY_NOTICES.md) publish=true ;;
+    esac
     if [[ ! -e "$path" ]]; then docs=true; fi
   done <"$changed_files"
 fi
-printf 'rust=%s\npython=%s\ndocs=%s\ncompose=%s\nimage=%s\n' \
-  "$rust" "$python" "$docs" "$compose" "$image" >>"${GITHUB_OUTPUT:?output file is required}"
+printf 'rust=%s\npython=%s\ndocs=%s\ncompose=%s\nimage=%s\npublish=%s\n' \
+  "$rust" "$python" "$docs" "$compose" "$image" "$publish" >>"${GITHUB_OUTPUT:?output file is required}"

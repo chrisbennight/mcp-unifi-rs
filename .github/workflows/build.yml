@@ -23,6 +23,7 @@ jobs:
     needs: test
     outputs:
       image: ${{ steps.scope.outputs.image }}
+      publish: ${{ steps.scope.outputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -129,7 +130,7 @@ jobs:
 
   publish:
     needs: [test, image]
-    if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs' && needs.image.outputs.image == 'true'
+    if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs' && needs.image.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
