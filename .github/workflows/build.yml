@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -131,6 +131,9 @@ jobs:
   publish:
     needs: [test, image]
     if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs' && needs.image.outputs.publish == 'true'
+    concurrency:
+      group: mcp-unifi-rs-image-publication
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -53,7 +53,7 @@ else
     esac
     case "$path" in
       crates/unifi-server/src/collector/tests.rs|crates/*/tests/*|crates/*/benches/*|crates/*/*.md) ;;
-      Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*|Dockerfile|.dockerignore|LICENSE|THIRD_PARTY_NOTICES.md) publish=true ;;
+      Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|.cargo/*|crates/*|Dockerfile|.dockerignore|LICENSE|THIRD_PARTY_NOTICES.md) publish=true ;;
     esac
     if [[ ! -e "$path" ]]; then docs=true; fi
   done <"$changed_files"
