@@ -20,6 +20,9 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   image:
+    needs: test
+    outputs:
+      image: ${{ steps.scope.outputs.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -30,8 +33,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
+      - name: Select changed components
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci-scope.sh
       - name: Validate Compose examples
+        if: steps.scope.outputs.compose == 'true'
         env:
           UNIFI_MCP_HTTP_BEARER_CURRENT: 0123456789abcdef0123456789abcdef
         run: |
@@ -49,24 +61,30 @@ jobs:
             "$GITLEAKS_IMAGE" dir --no-banner /scan > /dev/null 2>&1
 
       - name: Verify build-context isolation
+        if: steps.scope.outputs.image == 'true'
         run: python3 scripts/check_build_context.py
 
       - name: Check Dockerfile diagnostics
+        if: steps.scope.outputs.image == 'true'
         run: docker build --check --build-arg 'BUILDKIT_DOCKERFILE_CHECK=error=true' .
 
       - name: Build image
+        if: steps.scope.outputs.image == 'true'
         run: |
           set -euo pipefail
           docker build --build-arg "SOURCE_REVISION=${GITHUB_SHA}" \
             --tag "${IMAGE}:sha-${GITHUB_SHA}" .
 
       - name: Smoke both runtime surfaces
+        if: steps.scope.outputs.image == 'true'
         run: python3 scripts/smoke_image.py "${IMAGE}:sha-${GITHUB_SHA}"
 
       - name: Save tested image
+        if: steps.scope.outputs.image == 'true'
         run: docker save --output "${RUNNER_TEMP}/image.tar" "${IMAGE}:sha-${GITHUB_SHA}"
 
       - name: Inventory source and tested image
+        if: steps.scope.outputs.image == 'true'
         run: |
           set -euo pipefail
           docker run --rm --network none --read-only --cap-drop ALL \
@@ -88,6 +106,7 @@ jobs:
           sha256sum image.tar image.spdx.json source.spdx.json image-metadata.json source-revision.txt > inventory-checksums.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.image == 'true'
         with:
           name: software-inventory
           path: |
@@ -100,7 +119,7 @@ jobs:
           retention-days: 30
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
+        if: (steps.scope.outputs.image == 'true') && (github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs')
         with:
           name: tested-image
           path: ${{ runner.temp }}/image.tar
@@ -110,7 +129,7 @@ jobs:
 
   publish:
     needs: [test, image]
-    if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs'
+    if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs' && needs.image.outputs.image == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

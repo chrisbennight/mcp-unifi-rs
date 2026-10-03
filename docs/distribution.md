@@ -12,11 +12,18 @@ build and isolated smoke tests succeed. The publishing job loads the exact
 saved image from that workflow run and checks its source-revision label. It does
 not rebuild the image. Pull requests have no publication credentials.
 
+Checks select the changed inputs. Markdown runs documentation checks; Rust tests
+run without building an image. Runtime and image packaging changes select the
+image, while Compose examples select their configuration check. The tracked
+source secret scan runs for every candidate. Manual runs and version tags select
+all checks; missing Git history fails selection. Existing check names remain
+required even when their costly steps are skipped.
+
 The smoke test uses the image tagged for that commit and disables registry pulls.
 If the locally built image is missing, validation fails rather than testing a
 different image downloaded under the same tag.
 
-Each publication gets `sha-<full-commit>`. A push to `main` also updates `latest`;
+Each publication gets `sha-<full-commit>`. A push to `main` with image inputs also updates `latest`;
 a version tag such as `v1.2.3` publishes that version without moving `latest`.
 Version tags must match the format enforced by [image_tags.py](../scripts/image_tags.py).
 A rebuilt tag can identify different bytes, so use a registry digest for a
