@@ -22,8 +22,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
+      - name: Select changed components
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci-scope.sh
       - name: Install the pinned Rust toolchain
+        if: steps.scope.outputs.rust == 'true'
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -40,15 +49,19 @@ jobs:
           rustup default "${RUST_TOOLCHAIN_VERSION}"
 
       - name: Verify formatting
+        if: steps.scope.outputs.rust == 'true'
         run: cargo fmt --all -- --check
 
       - name: Lint all targets
+        if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Test all features
+        if: steps.scope.outputs.rust == 'true'
         run: cargo test --workspace --all-features --locked
 
       - name: Verify gateway manifest emission
+        if: steps.scope.outputs.rust == 'true'
         run: |
           set -euo pipefail
           manifest="$(cargo run --locked -p unifi-server -- --emit-gateway-manifest)"
@@ -58,12 +71,15 @@ jobs:
           printf '%s\n' "$manifest" | grep -Fx '  isolation: per_call'
 
       - name: Build documentation
+        if: steps.scope.outputs.rust == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
 
       - name: Validate documentation links
+        if: steps.scope.outputs.docs == 'true'
         run: python3 scripts/check_docs.py
 
       - name: Test documentation validator
+        if: steps.scope.outputs.python == 'true'
         run: python3 -m unittest discover -s scripts/tests
