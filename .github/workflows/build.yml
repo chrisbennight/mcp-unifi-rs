@@ -132,7 +132,8 @@ jobs:
     needs: [test, image]
     if: github.event_name == 'push' && github.repository == 'chrisbennight/mcp-unifi-rs' && needs.image.outputs.publish == 'true'
     concurrency:
-      group: mcp-unifi-rs-image-publication-${{ github.ref }}
+      group: mcp-unifi-rs-image-publication
+      queue: max
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10

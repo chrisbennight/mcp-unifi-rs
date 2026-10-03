@@ -32,7 +32,7 @@ from repository visibility.
 
 ## Verify and retain a deployment
 
-1. Select a successful main or version-tag build in
+1. Select a successful main or version-tag build that completed image publication in
    [GitHub Actions](https://github.com/chrisbennight/mcp-unifi-rs/actions/workflows/build.yml)
    and record its full source revision.
 2. Pull the corresponding `sha-<full-commit>` image, authenticating to GHCR if
