@@ -1527,6 +1527,7 @@ enum ProtectOverviewView {
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(untagged)]
+#[schemars(extend("type" = "object"))]
 enum ProtectOverviewResult {
     Summary(Box<ProtectOverviewOutput>),
     Record(RecordOutput),
@@ -15154,6 +15155,47 @@ mod tests {
                 "{}",
                 spec.name
             );
+        }
+    }
+
+    #[test]
+    fn protect_overview_output_schema_has_an_object_root_and_preserves_views() {
+        let tool = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.name == "protect.overview")
+            .expect("Protect overview is registered")
+            .catalog_tool();
+        let schema = Value::Object((*tool.output_schema.expect("output schema")).clone());
+        assert_eq!(schema["type"], json!("object"));
+
+        for instance in [
+            json!({
+                "console": "fixture",
+                "applicationVersion": "fixture-version",
+                "camerasByState": [],
+                "cameraCount": 0,
+                "recorders": [],
+                "capabilities": {
+                    "publicInventory": true,
+                    "publicInventorySource": "integrationApi",
+                    "localEnrichment": "notConfigured",
+                    "snapshotConsistency": "sequentialRequestSnapshots",
+                    "historicalEventsConfigured": false
+                }
+            }),
+            json!({"record": {"applicationVersion": "fixture-version"}}),
+            json!({"recordInContent": true}),
+        ] {
+            assert!(validates(&schema, &instance), "{instance}");
+        }
+        for instance in [
+            json!(null),
+            json!(true),
+            json!(7),
+            json!("value"),
+            json!([]),
+        ] {
+            assert!(!validates(&schema, &instance), "{instance}");
         }
     }
 
