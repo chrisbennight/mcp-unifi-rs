@@ -4584,7 +4584,8 @@ struct StatsQueryOutput {
     /// Internet activity totals, temporal evidence, and WAN reconciliation.
     #[serde(skip_serializing_if = "Option::is_none")]
     activity: Option<activity::ActivityDetails>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Inline source errors; complete errors may instead be supplied in content.
+    #[schemars(default)]
     source_errors: Vec<StatsSourceError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_errors_in_content: Option<bool>,
@@ -13392,10 +13393,12 @@ pub(crate) fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpE
 /// Keep the structured traffic summary bounded while preserving complete
 /// source errors and, when necessary, the requested Activity page in content.
 fn structured_stats(output: StatsQueryOutput) -> Result<CallToolResult, McpError> {
+    let has_source_errors = !output.source_errors.is_empty();
     let mut value = serde_json::to_value(output)
         .map_err(|_| McpError::internal_error("failed to serialize bounded result", None))?;
     let mut extra_content = Vec::new();
-    if value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
+    if has_source_errors
+        && value.to_string().len() > STRUCTURED_CONTENT_TARGET_BYTES
         && let Value::Object(fields) = &mut value
         && let Some(errors) = fields.remove("sourceErrors")
     {
@@ -15032,6 +15035,96 @@ mod tests {
         jsonschema::validator_for(schema)
             .expect("published schema compiles")
             .is_valid(instance)
+    }
+
+    #[test]
+    fn stats_results_validate_against_the_published_output_schema() {
+        let tool = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.name == "stats.query")
+            .expect("statistics tool is registered")
+            .catalog_tool();
+        let schema = Value::Object((*tool.output_schema.expect("output schema")).clone());
+        for error_body in [
+            None,
+            Some("graph unavailable".to_owned()),
+            Some("g".repeat(60_000)),
+        ] {
+            let errors: Vec<_> = error_body
+                .iter()
+                .map(|error| super::StatsSourceError {
+                    source: "graph",
+                    error: error.clone(),
+                })
+                .collect();
+            let result = super::structured_stats(super::StatsQueryOutput {
+                report: "wanHourly",
+                coverage: super::TrafficCoverage {
+                    status: super::CoverageStatus::Reported,
+                    reason: "Returned hourly buckets.",
+                    unrecognized_records: 0,
+                },
+                counter_semantics: super::CounterSemantics::wan(0, 3_600_000),
+                total_applications: None,
+                wan_hourly: Some(Vec::new()),
+                top_applications: None,
+                activity: None,
+                source_errors: errors,
+                source_errors_in_content: None,
+                activity_in_content: None,
+            })
+            .expect("statistics result");
+            let output = result.structured_content.expect("structured statistics");
+            assert!(validates(&schema, &output), "{output}");
+            if let Some(body) = error_body {
+                if output["sourceErrorsInContent"] == true {
+                    let errors = result
+                        .content
+                        .iter()
+                        .filter_map(|block| block.as_text())
+                        .find_map(|text| text.text.strip_prefix("sourceErrors: "))
+                        .expect("complete errors in content");
+                    let errors: Value = serde_json::from_str(errors).expect("source errors JSON");
+                    assert_eq!(errors[0]["error"], body);
+                } else {
+                    assert_eq!(output["sourceErrors"][0]["error"], body);
+                }
+            } else {
+                assert_eq!(output["sourceErrors"], json!([]));
+            }
+        }
+    }
+
+    #[test]
+    fn large_statistics_without_source_errors_keep_an_explicit_empty_array() {
+        let output = super::StatsQueryOutput {
+            report: "wanHourly",
+            coverage: super::TrafficCoverage {
+                status: super::CoverageStatus::Reported,
+                reason: "Returned hourly buckets.",
+                unrecognized_records: 0,
+            },
+            counter_semantics: super::CounterSemantics::wan(0, 3_600_000),
+            total_applications: None,
+            wan_hourly: Some(vec![
+                super::WanSampleRow {
+                    time: Some(0),
+                    tx_bytes: Some(1.0),
+                    rx_bytes: Some(2.0),
+                };
+                2_000
+            ]),
+            top_applications: None,
+            activity: None,
+            source_errors: Vec::new(),
+            source_errors_in_content: None,
+            activity_in_content: None,
+        };
+        let result = super::structured_stats(output).expect("large hourly report");
+        let output = result.structured_content.expect("structured statistics");
+        assert!(output.to_string().len() > super::STRUCTURED_CONTENT_TARGET_BYTES);
+        assert_eq!(output["sourceErrors"], json!([]));
+        assert!(output.get("sourceErrorsInContent").is_none());
     }
 
     #[test]

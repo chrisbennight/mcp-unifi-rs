@@ -430,13 +430,15 @@ controller body with the local diagnostic.
 A malformed or duplicate WAN comparison hour returns the complete accepted
 hourly site response with the validation reason.
 Display text uses visible truncation markers.
-`sourceErrors` retains the controller's response and local diagnostic for
-Activity, graph, legacy DPI, and catalog lookup failures. HTTP failures also
+`sourceErrors` is an empty array when no source failed. Otherwise it retains
+the controller's response and local diagnostic for Activity, graph, legacy DPI,
+and catalog lookup failures. HTTP failures also
 include the controller's status. A console-family
 decision with no request has no controller response. If the error text exceeds
-the structured content formatting target, `sourceErrorsInContent` points to the complete
-errors in an additional content block while the available report remains in
-the structured result. When the requested Activity page itself exceeds that
+the structured content formatting target, `sourceErrorsInContent` points to the
+complete errors in an additional content block; `sourceErrors` is then omitted
+while the available report remains in the structured result. When the requested
+Activity page itself exceeds that
 budget, `activityInContent` points to its complete data in another content
 block; the structured result keeps coverage and source information.
 
