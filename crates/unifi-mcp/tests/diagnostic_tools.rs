@@ -707,6 +707,7 @@ async fn stats_query_serves_bounded_wan_and_dpi_reports() {
         .expect("wan report");
     let output = result.structured_content.expect("structured");
     assert_eq!(output["report"], "wanHourly");
+    assert_eq!(output["sourceErrors"], serde_json::json!([]));
     assert_eq!(output["wanHourly"][0]["rxBytes"], 4096.0);
     assert_eq!(output["coverage"]["status"], "reported");
     assert_eq!(

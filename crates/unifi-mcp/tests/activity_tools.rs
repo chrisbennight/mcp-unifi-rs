@@ -110,6 +110,7 @@ async fn client_totals_are_useful_paginated_and_reconciled_over_identical_window
     let mut input = args("clientWanHistory");
     input["limit"] = json!(1);
     let output = query(&server, input.clone()).await;
+    assert_eq!(output["sourceErrors"], json!([]));
     assert_eq!(output["counterSemantics"]["source"], "v2/traffic");
     assert_eq!(output["coverage"]["status"], "partial");
     let activity = &output["activity"];
@@ -300,7 +301,7 @@ async fn large_application_rankings_preserve_bounded_name_enrichment() {
                 "partial"
             }
         );
-        assert!(output["sourceErrors"].as_array().is_none_or(Vec::is_empty));
+        assert_eq!(output["sourceErrors"], json!([]));
     }
 }
 
