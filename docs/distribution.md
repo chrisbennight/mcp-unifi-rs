@@ -9,8 +9,17 @@ CI validates Linux with the toolchain in `rust-toolchain.toml`.
 
 GitHub Actions publishes only after source checks, source scanning, the image
 build and isolated smoke tests succeed. The publishing job loads the exact
-saved image from that workflow run and checks its source-revision label. It does
-not rebuild the image. Pull requests have no publication credentials.
+saved image from that exact workflow run and attempt. It verifies the archive
+and loaded image configuration against the tested identity, then verifies the
+published immutable manifest against that configuration. It does not rebuild the
+image. Pull requests have no publication credentials.
+
+The build explicitly selects `linux/amd64`, and the evidence step verifies that
+platform and the full source revision after both native smokes and the existing
+software inventory succeed. Skopeo reads the original archive and daemon
+configuration bytes; Docker IDs are not assumed to be configuration digests.
+The CI-only tool comes from the Ubuntu package repository. Runtime deployments
+do not require Skopeo.
 
 Checks select the changed inputs. Markdown runs documentation checks; Rust tests
 run without building an image. Runtime and image packaging changes select the
@@ -56,7 +65,18 @@ components, so use both inventories. Missing license or version fields mean
 the scanner could not determine them.
 
 The checksum for `image.tar` describes the saved Docker archive, available for
-one day on publishing runs. It is different from a registry manifest digest.
+one day on publishing runs. The attempt-specific `tested-image` artifact also
+contains `tested-image.json`, which binds the archive and configuration digests
+to the source workflow and attempt. These digests differ from a registry
+manifest digest.
+
+After every intended tag verifies against the tested configuration, CI retains
+`unifi-publication.json` in `unifi-publication-<run ID>-<run attempt>`. It records
+the canonical source repository, full revision, source ref, designated workflow,
+run and attempt, verified revision tag, immutable manifest digest, and platform.
+Failed or skipped publication cannot upload this record; stale outputs are
+removed before validation. Consumers must authenticate the designated successful
+workflow run and its artifact. The unsigned record grants no deployment authority.
 Checksums detect a mismatched download but do not authenticate its author.
 Inventories are not vulnerability scans or signed attestations. Preserve them
 before Actions retention expires if you need a longer record.
