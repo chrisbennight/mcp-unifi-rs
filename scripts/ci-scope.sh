@@ -38,7 +38,7 @@ else
       crates/unifi-server/src/collector/tests.rs|crates/*/tests/*|crates/*/benches/*) rust=true ;;
       crates/*/*.md) docs=true ;;
       crates/*) rust=true; image=true ;;
-      Dockerfile|.dockerignore|scripts/check_build_context.py|scripts/smoke_image.py|scripts/image_tags.py|scripts/qualify_*|scripts/build*|LICENSE|THIRD_PARTY_NOTICES.md)
+      Dockerfile|.dockerignore|scripts/check_build_context.py|scripts/smoke_image.py|scripts/image_tags.py|scripts/image_publication.py|scripts/qualify_*|scripts/build*|LICENSE|THIRD_PARTY_NOTICES.md)
         image=true ;;
       compose*.yml|.env*.example) compose=true ;;
     esac
