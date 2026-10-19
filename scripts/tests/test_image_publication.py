@@ -161,10 +161,10 @@ class ImagePublicationTests(unittest.TestCase):
                 self.assertFalse(any(argv[:2] == ["docker", "push"] for argv in boundary.calls))
 
     def test_failed_push_or_registry_proof_never_emits_a_receipt_and_never_retries_pushes(self):
-        for defect in ("push", "config", "child-size", "child-platform", "ambiguous", "tag-drift"):
+        for defect in ("push", "config", "child-size", "child-platform", "ambiguous", "extended-duplicate", "tag-drift"):
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                boundary, patched = self.fixture(root, index=defect in {"child-size", "child-platform", "ambiguous"})
+                boundary, patched = self.fixture(root, index=defect in {"child-size", "child-platform", "ambiguous", "extended-duplicate"})
                 with patched:
                     publication.record(root, boundary.environment)
                     if defect == "push":
@@ -175,8 +175,13 @@ class ImagePublicationTests(unittest.TestCase):
                         boundary.index_change = lambda value: value["manifests"][0].update(size=1)
                     elif defect == "child-platform":
                         boundary.index_change = lambda value: value["manifests"][0]["platform"].update(architecture="arm64")
-                    elif defect == "ambiguous":
-                        boundary.index_change = lambda value: value["manifests"].append(copy.deepcopy(value["manifests"][0]))
+                    elif defect in {"ambiguous", "extended-duplicate"}:
+                        def duplicate(value):
+                            other = copy.deepcopy(value["manifests"][0])
+                            if defect == "extended-duplicate":
+                                other["platform"]["os.features"] = []
+                            value["manifests"].append(other)
+                        boundary.index_change = duplicate
                     else:
                         boundary.tag_change = lambda raw: raw + b" "
                     with self.assertRaises(publication.PublicationError) as error:

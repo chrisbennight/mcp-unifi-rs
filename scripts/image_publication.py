@@ -139,12 +139,14 @@ def registry_digest(tag: str, expected: dict, environment: dict[str, str], authf
         if not isinstance(manifests, list) or len(manifests) > 64:
             raise PublicationError("registry index has an invalid platform inventory")
         candidates = [item for item in manifests if isinstance(item, dict)
-                      and item.get("platform") == {"os": "linux", "architecture": "amd64"}]
+                      and isinstance(item.get("platform"), dict)
+                      and item["platform"].get("os") == "linux" and item["platform"].get("architecture") == "amd64"]
         if len(candidates) != 1:
             raise PublicationError("registry index lacks a unique linux/amd64 manifest")
         child = candidates[0]
         child_digest, size = child.get("digest"), child.get("size")
-        if (not isinstance(child_digest, str) or DIGEST.fullmatch(child_digest) is None
+        if (child.get("platform") != {"os": "linux", "architecture": "amd64"}
+                or not isinstance(child_digest, str) or DIGEST.fullmatch(child_digest) is None
                 or child.get("mediaType") not in MANIFEST_TYPES or type(size) is not int or not 0 < size <= MAX_JSON):
             raise PublicationError("registry platform descriptor is invalid")
         pinned = raw(IMAGE + "@" + child_digest)
