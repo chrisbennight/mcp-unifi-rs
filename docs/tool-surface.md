@@ -95,8 +95,8 @@ this view; use `devices.ports`.
 
 ### `devices.ports`
 
-`device` — id, MAC, or exact name of one switch or gateway. Optional
-`onlyProblems` and `sfpOnly`.
+`device` — id, MAC, or exact name of one device that reports a port table,
+such as a switch or gateway. Optional `onlyProblems` and `sfpOnly`.
 
 One device's per-port diagnostics from the controller's legacy device
 statistics route, so it needs the local session credential. Each port reports
@@ -106,13 +106,18 @@ and whether the controller reports power delivery as good. A port with an
 optical module adds `sfp` with vendor, part, serial, compliance, fault flags,
 receive and transmit power in dBm, temperature, supply voltage, and bias
 current. `poe` at the device level carries the budget, the total the device
-reports delivering, and the sum of the per-port draw this read observed.
+reports delivering, and the sum of the per-port draw this read observed with
+`portsReportingDraw`, the number of ports that contributed. The sum is absent
+when no port reported a draw.
 
 A value the device or module does not report is omitted, never zero. Some
 modules and some gateways report presence and fault flags but no optical
 measurements, so `opticalReadingsReported` is false for them. Text the
-controller sends for a numeric field that is not a number is returned in the
-port's `unrecognizedValues` rather than dropped or converted.
+controller sends for a numeric field that is not a number, including a speed or
+counter, is returned in the port's `unrecognizedValues` (or the device-level
+`poe.unrecognizedValues`) rather than dropped or converted, and it does not
+prevent the other ports from being reported. Text longer than a small bound is
+cut and ends with `[truncated]`.
 
 Counters accumulate since the device last reset and are not rates.
 `problemIndicators` lists the evidence that fired for a port (`rxErrors`,

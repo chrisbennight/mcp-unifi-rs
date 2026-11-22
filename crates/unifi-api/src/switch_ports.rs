@@ -14,6 +14,7 @@ use serde_json::Value;
 
 /// Longest unrecognized wire text retained for diagnosis.
 const MAXIMUM_UNRECOGNIZED_BYTES: usize = 64;
+const TRUNCATION_MARKER: &str = " [truncated]";
 
 /// One numeric measurement as the controller reported it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -61,11 +62,72 @@ impl Reading {
     }
 
     fn unrecognized(text: &str) -> Self {
-        let mut end = text.len().min(MAXIMUM_UNRECOGNIZED_BYTES);
-        while !text.is_char_boundary(end) {
-            end -= 1;
+        Self::Unrecognized(bounded_text(text))
+    }
+}
+
+/// Keep at most [`MAXIMUM_UNRECOGNIZED_BYTES`] of the wire text and mark any
+/// cut, so a prefix is never mistaken for the complete value.
+fn bounded_text(text: &str) -> String {
+    if text.len() <= MAXIMUM_UNRECOGNIZED_BYTES {
+        return text.to_owned();
+    }
+    let mut end = MAXIMUM_UNRECOGNIZED_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATION_MARKER}", &text[..end])
+}
+
+/// One whole-number counter or speed as the controller reported it. It keeps
+/// the same three outcomes as [`Reading`] so one malformed value cannot fail
+/// the decoding of every other port.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Count {
+    /// Missing, null, or an empty string: the device did not report it.
+    #[default]
+    Absent,
+    /// A non-negative whole number.
+    Value(u64),
+    /// Present but not a non-negative whole number. The text is bounded.
+    Unrecognized(String),
+}
+
+impl Count {
+    /// The number, when one was reported.
+    #[must_use]
+    pub fn value(&self) -> Option<u64> {
+        match self {
+            Self::Value(value) => Some(*value),
+            Self::Absent | Self::Unrecognized(_) => None,
         }
-        Self::Unrecognized(text[..end].to_owned())
+    }
+
+    fn from_json(value: &Value) -> Self {
+        match value {
+            Value::Null => Self::Absent,
+            Value::Number(number) => number.as_u64().map_or_else(
+                || Self::Unrecognized(bounded_text(&number.to_string())),
+                Self::Value,
+            ),
+            Value::String(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    Self::Absent
+                } else {
+                    trimmed
+                        .parse::<u64>()
+                        .map_or_else(|_| Self::Unrecognized(bounded_text(trimmed)), Self::Value)
+                }
+            }
+            other => Self::Unrecognized(bounded_text(&other.to_string())),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Count {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_json(&Value::deserialize(deserializer)?))
     }
 }
 
@@ -86,13 +148,18 @@ pub struct SwitchPort {
     pub up: Option<bool>,
     pub enable: Option<bool>,
     /// Negotiated speed in Mbps.
-    pub speed: Option<u32>,
+    #[serde(default)]
+    pub speed: Count,
     pub full_duplex: Option<bool>,
     pub is_uplink: Option<bool>,
-    pub rx_errors: Option<u64>,
-    pub tx_errors: Option<u64>,
-    pub rx_dropped: Option<u64>,
-    pub tx_dropped: Option<u64>,
+    #[serde(default)]
+    pub rx_errors: Count,
+    #[serde(default)]
+    pub tx_errors: Count,
+    #[serde(default)]
+    pub rx_dropped: Count,
+    #[serde(default)]
+    pub tx_dropped: Count,
     /// Whether the port hardware can deliver `PoE`.
     pub port_poe: Option<bool>,
     pub poe_enable: Option<bool>,
@@ -138,7 +205,19 @@ impl SwitchPort {
     /// number, paired with the retained text.
     #[must_use]
     pub fn unrecognized_readings(&self) -> BTreeMap<&'static str, &str> {
-        [
+        let counts = [
+            ("speed", &self.speed),
+            ("rx_errors", &self.rx_errors),
+            ("tx_errors", &self.tx_errors),
+            ("rx_dropped", &self.rx_dropped),
+            ("tx_dropped", &self.tx_dropped),
+        ]
+        .into_iter()
+        .filter_map(|(name, count)| match count {
+            Count::Unrecognized(text) => Some((name, text.as_str())),
+            Count::Absent | Count::Value(_) => None,
+        });
+        let readings = [
             ("poe_power", &self.poe_power),
             ("poe_voltage", &self.poe_voltage),
             ("poe_current", &self.poe_current),
@@ -147,6 +226,25 @@ impl SwitchPort {
             ("sfp_temperature", &self.sfp_temperature),
             ("sfp_voltage", &self.sfp_voltage),
             ("sfp_current", &self.sfp_current),
+        ]
+        .into_iter()
+        .filter_map(|(name, reading)| match reading {
+            Reading::Unrecognized(text) => Some((name, text.as_str())),
+            Reading::Absent | Reading::Value(_) => None,
+        });
+        counts.chain(readings).collect()
+    }
+}
+
+impl SwitchPortReport {
+    /// Device-level `PoE` figures whose wire value was present but not a
+    /// number, paired with the retained text.
+    #[must_use]
+    pub fn unrecognized_readings(&self) -> BTreeMap<&'static str, &str> {
+        [
+            ("total_max_power", &self.total_max_power),
+            ("total_max_effective_power", &self.total_max_effective_power),
+            ("total_used_power", &self.total_used_power),
         ]
         .into_iter()
         .filter_map(|(name, reading)| match reading {
@@ -182,7 +280,7 @@ pub struct SwitchPortReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{Reading, SwitchPortReport};
+    use super::{Count, Reading, SwitchPortReport};
     use serde_json::json;
 
     #[test]
@@ -218,7 +316,8 @@ mod tests {
             serde_json::from_value(json!({"total_used_power": long})).expect("report");
         match report.total_used_power {
             Reading::Unrecognized(text) => {
-                assert!(text.len() <= 64 && !text.is_empty() && long.starts_with(&text));
+                assert!(text.ends_with(" [truncated]"), "{text}");
+                assert!(long.starts_with(text.trim_end_matches(" [truncated]")));
             }
             other => panic!("expected unrecognized, got {other:?}"),
         }
@@ -231,5 +330,35 @@ mod tests {
                 .expect("report");
         assert!(matches!(report.total_max_power, Reading::Unrecognized(_)));
         assert!(matches!(report.total_used_power, Reading::Unrecognized(_)));
+    }
+
+    #[test]
+    fn counts_tolerate_text_without_failing_the_whole_report() {
+        let report: SwitchPortReport = serde_json::from_value(json!({
+            "port_table": [
+                {"port_idx": 1, "speed": "1000", "rx_errors": "n/a", "tx_errors": "",
+                 "rx_dropped": -1, "tx_dropped": 7},
+                {"port_idx": 2, "speed": 2500}
+            ]
+        }))
+        .expect("one malformed counter must not fail the report");
+        let first = &report.port_table[0];
+        assert_eq!(first.speed, Count::Value(1000));
+        assert_eq!(first.rx_errors, Count::Unrecognized("n/a".to_owned()));
+        assert_eq!(first.tx_errors, Count::Absent);
+        assert_eq!(first.rx_dropped, Count::Unrecognized("-1".to_owned()));
+        assert_eq!(first.tx_dropped, Count::Value(7));
+        assert_eq!(first.unrecognized_readings().len(), 2);
+        assert_eq!(report.port_table[1].speed, Count::Value(2500));
+    }
+
+    #[test]
+    fn device_level_totals_report_unrecognized_text() {
+        let report: SwitchPortReport =
+            serde_json::from_value(json!({"total_used_power": "n/a", "total_max_power": 95}))
+                .expect("report");
+        let unrecognized = report.unrecognized_readings();
+        assert_eq!(unrecognized.get("total_used_power"), Some(&"n/a"));
+        assert!(!unrecognized.contains_key("total_max_power"));
     }
 }

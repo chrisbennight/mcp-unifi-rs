@@ -499,8 +499,8 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::DevicesPorts,
         "devices.ports",
-        "One switch or gateway's per-port diagnostics, selected by id, MAC, or \
-         name: link state and speed, error and drop counters, PoE watts, volts \
+        "One device's per-port diagnostics for devices that report a port table, \
+         such as switches and gateways, selected by id, MAC, or name: link state and speed, error and drop counters, PoE watts, volts \
          and amps with the device's PoE budget and draw, and optical module \
          identity with receive and transmit power, temperature, voltage, bias \
          current and fault flags. Values a device or module does not report \

@@ -154,6 +154,7 @@ async fn reports_poe_optical_and_counter_readings_as_numbers() {
     assert_eq!(output["poe"]["usedW"], 12.4);
     assert_eq!(output["poe"]["portDrawSumW"], 4.91);
     assert_eq!(output["poe"]["poeEnabledPorts"], 2);
+    assert_eq!(output["poe"]["portsReportingDraw"], 2);
 
     let poe_port = port(&output, 1);
     assert_eq!(poe_port["poe"]["powerW"], 4.91);
@@ -340,4 +341,63 @@ async fn output_ceiling_is_signaled_not_silent() {
     assert_eq!(output["portsMatching"], 200);
     assert_eq!(output["portsTruncated"], true);
     assert_eq!(output["ports"].as_array().expect("ports").len(), 128);
+}
+
+#[tokio::test]
+async fn malformed_values_do_not_fail_the_report_or_pose_as_zero() {
+    let record = json!({
+        "mac": SWITCH_MAC,
+        "type": "usw",
+        "total_max_power": 95,
+        "total_used_power": "n/a",
+        "port_table": [
+            {"port_idx": 1, "up": true, "speed": "1000", "rx_errors": "n/a", "tx_errors": 3,
+             "port_poe": true, "poe_enable": true, "poe_power": ""},
+            {"port_idx": 2, "up": true, "speed": 2500, "port_poe": true, "poe_enable": true,
+             "poe_power": "oops"},
+        ],
+    });
+    let server = console(&json!([record])).await;
+    let output = handler_for(&server)
+        .call(&call(&json!({"device": "Core Switch"})), None)
+        .await
+        .expect("one malformed value must not fail the device")
+        .structured_content
+        .expect("structured");
+
+    assert_eq!(output["poe"]["budgetW"], 95.0);
+    assert!(output["poe"].get("usedW").is_none());
+    assert_eq!(
+        output["poe"]["unrecognizedValues"]["total_used_power"],
+        "n/a"
+    );
+    // No port reported a usable draw, so there is no observed sum to claim.
+    assert!(output["poe"].get("portDrawSumW").is_none());
+    assert_eq!(output["poe"]["portsReportingDraw"], 0);
+
+    let first = port(&output, 1);
+    assert_eq!(first["speedMbps"], 1000);
+    assert!(first["counters"].get("rxErrors").is_none());
+    assert_eq!(first["counters"]["txErrors"], 3);
+    assert_eq!(first["unrecognizedValues"]["rx_errors"], "n/a");
+    assert_eq!(first["problemIndicators"], json!(["txErrors"]));
+    assert_eq!(port(&output, 2)["unrecognizedValues"]["poe_power"], "oops");
+}
+
+#[tokio::test]
+async fn any_device_that_reports_a_port_table_is_read_whatever_its_type() {
+    let record = json!({
+        "mac": SWITCH_MAC,
+        "type": "uap",
+        "port_table": [{"port_idx": 1, "up": true, "speed": 1000}],
+    });
+    let server = console(&json!([record])).await;
+    let output = handler_for(&server)
+        .call(&call(&json!({"device": "Core Switch"})), None)
+        .await
+        .expect("capability, not device family, decides support")
+        .structured_content
+        .expect("structured");
+    assert_eq!(output["deviceType"], "uap");
+    assert_eq!(output["portsReported"], 1);
 }

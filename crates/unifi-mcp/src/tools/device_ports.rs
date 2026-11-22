@@ -13,7 +13,8 @@ use super::{
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct DevicePortsInput {
-    /// Device id, MAC address, or exact name of one adopted switch or gateway.
+    /// Device id, MAC address, or exact name of one adopted device that reports a
+    /// port table, such as a switch or gateway.
     device: String,
     /// Return only ports with at least one problem indicator.
     #[serde(default)]
@@ -36,9 +37,17 @@ pub(super) struct PoeSummary {
     /// Total power the device reports delivering, in watts.
     #[serde(skip_serializing_if = "Option::is_none")]
     used_w: Option<f64>,
-    /// Sum of the per-port draw this read observed, in watts. Computed over
-    /// every port the device reported, including ports omitted by a filter.
-    port_draw_sum_w: f64,
+    /// Sum of the per-port draw this read observed, in watts, over every port
+    /// the device reported, including ports omitted by a filter. Absent when
+    /// no port reported a draw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port_draw_sum_w: Option<f64>,
+    /// Ports that contributed a draw figure to the sum.
+    ports_reporting_draw: u32,
+    /// Device-level figures the controller reported as text that is not a
+    /// number, keyed by controller field name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    unrecognized_values: BTreeMap<&'static str, String>,
     /// Ports whose `PoE` is enabled.
     poe_enabled_ports: u32,
 }
@@ -202,7 +211,8 @@ impl UnifiMcp {
             })?;
         if report.port_table.is_empty() {
             return Err(McpError::invalid_params(
-                "the device reports no port table; devices.ports supports switches and gateways",
+                "the device reports no port table; devices.ports reads devices that report \
+                 one, such as switches and gateways",
                 None,
             ));
         }
@@ -256,18 +266,31 @@ fn poe_summary(report: &SwitchPortReport) -> Option<PoeSummary> {
     let budget_w = report.total_max_power.value();
     let effective_budget_w = report.total_max_effective_power.value();
     let used_w = report.total_used_power.value();
-    if !poe_capable && budget_w.is_none() && effective_budget_w.is_none() && used_w.is_none() {
+    let unrecognized_values: BTreeMap<&'static str, String> = report
+        .unrecognized_readings()
+        .into_iter()
+        .map(|(name, text)| (name, text.to_owned()))
+        .collect();
+    if !poe_capable
+        && budget_w.is_none()
+        && effective_budget_w.is_none()
+        && used_w.is_none()
+        && unrecognized_values.is_empty()
+    {
         return None;
     }
+    let draws: Vec<f64> = report
+        .port_table
+        .iter()
+        .filter_map(|port| port.poe_power.value())
+        .collect();
     Some(PoeSummary {
         budget_w,
         effective_budget_w,
         used_w,
-        port_draw_sum_w: report
-            .port_table
-            .iter()
-            .filter_map(|port| port.poe_power.value())
-            .sum(),
+        port_draw_sum_w: (!draws.is_empty()).then(|| draws.iter().sum()),
+        ports_reporting_draw: u32::try_from(draws.len()).unwrap_or(u32::MAX),
+        unrecognized_values,
         poe_enabled_ports: u32::try_from(
             report
                 .port_table
@@ -288,14 +311,17 @@ fn port_diagnostics(port: &SwitchPort) -> PortDiagnostics {
         media: port.media.clone(),
         up: port.up,
         enabled: port.enable,
-        speed_mbps: port.speed,
+        speed_mbps: port
+            .speed
+            .value()
+            .and_then(|speed| u32::try_from(speed).ok()),
         full_duplex: port.full_duplex,
         uplink: port.is_uplink,
         counters: PortCounters {
-            rx_errors: port.rx_errors,
-            tx_errors: port.tx_errors,
-            rx_dropped: port.rx_dropped,
-            tx_dropped: port.tx_dropped,
+            rx_errors: port.rx_errors.value(),
+            tx_errors: port.tx_errors.value(),
+            rx_dropped: port.rx_dropped.value(),
+            tx_dropped: port.tx_dropped.value(),
         },
         problem_indicators: problem_indicators(port),
         unrecognized_values: port
@@ -322,10 +348,10 @@ fn nonzero(counter: Option<u64>) -> bool {
 fn problem_indicators(port: &SwitchPort) -> Vec<&'static str> {
     let mut indicators = Vec::new();
     for (fired, name) in [
-        (nonzero(port.rx_errors), "rxErrors"),
-        (nonzero(port.tx_errors), "txErrors"),
-        (nonzero(port.rx_dropped), "rxDropped"),
-        (nonzero(port.tx_dropped), "txDropped"),
+        (nonzero(port.rx_errors.value()), "rxErrors"),
+        (nonzero(port.tx_errors.value()), "txErrors"),
+        (nonzero(port.rx_dropped.value()), "rxDropped"),
+        (nonzero(port.tx_dropped.value()), "txDropped"),
         (port.sfp_rxfault == Some(true), "sfpRxFault"),
         (port.sfp_txfault == Some(true), "sfpTxFault"),
         // A port with no powered device attached reports no delivery; only a

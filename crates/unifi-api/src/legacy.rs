@@ -291,8 +291,8 @@ impl LegacyClient {
         mac: &str,
     ) -> Result<Option<SwitchPortReport>, ApiError> {
         let mac = canonical_device_mac(mac)?;
-        let mut rows: Vec<SwitchPortReport> = self
-            .request_with_reauth(
+        let (rows, bytes): (Vec<SwitchPortReport>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
                 RequestClass::IdempotentRead,
                 Method::GET,
                 site,
@@ -300,14 +300,26 @@ impl LegacyClient {
                 None,
             )
             .await?;
-        // The route addresses one device. Any other row would mean the
-        // controller ignored the selector, so it is not accepted silently.
-        rows.retain(|row| {
-            row.mac
-                .as_deref()
-                .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
-        });
-        Ok(rows.into_iter().next())
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        // The route addresses one device. Rows that are present but none of
+        // them for the requested device mean the controller ignored the
+        // selector or sent a different shape, which is a failure and never
+        // the same outcome as an empty answer.
+        rows.into_iter()
+            .find(|row| {
+                row.mac
+                    .as_deref()
+                    .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
+            })
+            .map(Some)
+            .ok_or_else(|| {
+                crate::error::decode_failure(
+                    &"the response held no record for the requested device",
+                    &bytes,
+                )
+            })
     }
 
     /// Currently connected clients from `stat/sta`, with association,
