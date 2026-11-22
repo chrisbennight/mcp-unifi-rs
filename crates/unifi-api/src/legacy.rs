@@ -291,7 +291,7 @@ impl LegacyClient {
         mac: &str,
     ) -> Result<Option<SwitchPortReport>, ApiError> {
         let mac = canonical_device_mac(mac)?;
-        let (rows, bytes): (Vec<SwitchPortReport>, Vec<u8>) = self
+        let (rows, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
             .request_with_reauth_with_bytes(
                 RequestClass::IdempotentRead,
                 Method::GET,
@@ -322,20 +322,21 @@ impl LegacyClient {
         // diagnostic reports only a count so another device's records are
         // never returned for a one-device read.
         let returned = rows.len();
-        rows.into_iter()
-            .find(|row| {
-                row.mac
-                    .as_deref()
-                    .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
-            })
+        let Some(row) = rows.into_iter().find(|row| {
+            row.get("mac")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
+        }) else {
+            return Err(crate::error::decode_failure(
+                &"the response held no record for the requested device",
+                format!("{returned} record(s) returned, none for the requested device").as_bytes(),
+            ));
+        };
+        // Only the requested device's row is decoded, so a decode failure
+        // carries that row and never another device's.
+        serde_json::from_value::<SwitchPortReport>(row.clone())
             .map(Some)
-            .ok_or_else(|| {
-                crate::error::decode_failure(
-                    &"the response held no record for the requested device",
-                    format!("{returned} record(s) returned, none for the requested device")
-                        .as_bytes(),
-                )
-            })
+            .map_err(|error| crate::error::decode_failure(&error, row.to_string().as_bytes()))
     }
 
     /// Currently connected clients from `stat/sta`, with association,

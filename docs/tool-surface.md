@@ -132,11 +132,11 @@ ports that report an optical module. `portsReported` counts the ports the device
 returned, `portsMatching` those left after filters, and `portsTruncated` marks a
 cut at the 128-port output ceiling.
 
-An unknown device, a device that is not a switch or gateway, a device with no
-port table, an unsupported route, a rejected session, and a malformed response
+An unknown device, a device that is not a switch or gateway (including one whose
+record names no device family), a device with no port table, an unsupported route, a rejected session, and a malformed response
 (including one with no `data` list, or rows only for other devices) are distinct
-errors, never an empty result. A mismatch error reports a count, not another
-device's records.
+errors, never an empty result. A mismatch error reports a count, and a decoding
+error carries only the requested device's record, never another device's.
 
 ### `devices.pending.list`
 

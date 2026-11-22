@@ -215,16 +215,17 @@ impl UnifiMcp {
                     None,
                 )
             })?;
-        if let Some(family) = report.device_type.as_deref()
-            && !PORT_FAMILIES.contains(&family.to_ascii_lowercase().as_str())
-        {
+        // A record that names no family cannot be shown to be a switch or
+        // gateway, so it is refused like any other family.
+        let family = report.device_type.as_deref().unwrap_or("");
+        if !PORT_FAMILIES.contains(&family.to_ascii_lowercase().as_str()) {
             let shown: String = family
                 .chars()
                 .take(MAXIMUM_ECHOED_FAMILY_CHARACTERS)
                 .collect();
             return Err(McpError::invalid_params(
                 format!(
-                    "devices.ports supports switches and gateways; this device reports type {shown}"
+                    "devices.ports supports switches and gateways; this device reports type \"{shown}\""
                 ),
                 None,
             ));
@@ -380,8 +381,15 @@ fn problem_indicators(port: &SwitchPort) -> Vec<&'static str> {
         (nonzero(port.tx_errors.value()), "txErrors"),
         (nonzero(port.rx_dropped.value()), "rxDropped"),
         (nonzero(port.tx_dropped.value()), "txDropped"),
-        (port.sfp_rxfault == Some(true), "sfpRxFault"),
-        (port.sfp_txfault == Some(true), "sfpTxFault"),
+        // A cage the controller says is empty has no module to fault.
+        (
+            port.sfp_found != Some(false) && port.sfp_rxfault == Some(true),
+            "sfpRxFault",
+        ),
+        (
+            port.sfp_found != Some(false) && port.sfp_txfault == Some(true),
+            "sfpTxFault",
+        ),
     ] {
         if fired {
             indicators.push(name);

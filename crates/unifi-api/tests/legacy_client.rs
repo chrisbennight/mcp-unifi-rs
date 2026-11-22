@@ -2545,6 +2545,21 @@ async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
         .mount(&server)
         .await;
 
+    // The matching row is malformed while another device's row is valid: the
+    // failure may carry the requested device's row but never the other's.
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:04",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"mac": "aa:bb:cc:dd:ee:77", "port_table": []},
+                {"mac": "aa:bb:cc:dd:ee:04", "port_table": "not a list"}
+            ]))),
+        )
+        .mount(&server)
+        .await;
+
     let client = client_for(&server);
     let error = client
         .switch_port_report("default", "aa:bb:cc:dd:ee:01")
@@ -2562,6 +2577,17 @@ async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
     );
     assert!(
         !text.contains("ee:99"),
+        "another device's record must not be returned: {text}"
+    );
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:04")
+        .await
+        .expect_err("malformed matching row");
+    let text = error.to_string();
+    assert!(matches!(error, ApiError::DecodeResponse { .. }), "{text}");
+    assert!(text.contains("ee:04"), "{text}");
+    assert!(
+        !text.contains("ee:77"),
         "another device's record must not be returned: {text}"
     );
     // A reply with no data list is malformed, not an unknown device.

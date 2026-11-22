@@ -454,3 +454,40 @@ async fn text_in_the_port_index_and_stale_module_fields_do_not_mislead() {
         .expect("structured");
     assert_eq!(optical["portsMatching"], 0);
 }
+
+#[tokio::test]
+async fn a_record_with_no_family_is_refused_and_empty_cage_faults_are_ignored() {
+    let untyped = json!({"mac": SWITCH_MAC, "port_table": [{"port_idx": 1}]});
+    let server = console(&json!([untyped])).await;
+    let error = handler_for(&server)
+        .call(&call(&json!({"device": "Core Switch"})), None)
+        .await
+        .expect_err("a record that names no family cannot be verified");
+    assert!(error.message.contains("supports switches and gateways"));
+
+    let record = json!({
+        "mac": SWITCH_MAC,
+        "type": "usw",
+        "port_table": [
+            {"port_idx": 1, "sfp_found": false, "sfp_txfault": true, "sfp_rxfault": true},
+            {"port_idx": 2, "sfp_found": true, "sfp_txfault": true},
+        ],
+    });
+    let server = console(&json!([record])).await;
+    let output = handler_for(&server)
+        .call(
+            &call(&json!({"device": "Core Switch", "onlyProblems": true})),
+            None,
+        )
+        .await
+        .expect("problems")
+        .structured_content
+        .expect("structured");
+    let indexes: Vec<u64> = output["ports"]
+        .as_array()
+        .expect("ports")
+        .iter()
+        .map(|port| port["idx"].as_u64().expect("idx"))
+        .collect();
+    assert_eq!(indexes, [2]);
+}
