@@ -112,6 +112,25 @@ See [traffic source evidence](traffic-history.md) for tested requests, prerequis
 remaining unknowns, and the distinction between useful attribution and complete
 accounting. No controller configuration was changed during discovery.
 
+## Switch port diagnostics
+
+`devices.ports` reads one device's record from the legacy `stat/device/{mac}`
+route. The official Integration API reports only each port's index, state,
+connector, and speed, so it cannot supply error counters, PoE power, or optical
+module readings. The field names (`port_table[].poe_power`,
+`port_table[].sfp_rxpower`, and the related fields, plus the device-level
+`total_max_power` and `total_used_power`) follow the long-standing legacy device
+record that
+[Unpoller's switch model](https://github.com/unpoller/unifi/blob/master/device.go)
+and other open-source clients also read. The controller sends the measurements
+as decimal strings, which the server parses to numbers.
+
+Optical readings depend on the module and the device. Some modules and some
+gateways report presence and fault flags only, and a port with no module
+reports none. The tool omits what is not reported. Route availability, field
+names, and units are controller results; fixtures here establish the parsing,
+not a promise for every controller version.
+
 ## Backend used by each capability
 
 | Capability | Backend used here |

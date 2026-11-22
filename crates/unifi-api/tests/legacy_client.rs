@@ -2340,3 +2340,121 @@ async fn invalid_protect_event_page_keeps_the_exact_controller_body() {
         assert!(diagnostic.as_str().contains(expected_diagnostic));
     }
 }
+
+#[tokio::test]
+async fn switch_port_report_reads_one_fixed_route_and_decodes_readings() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .and(header("cookie", "TOKEN=session-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"mac": "aa:bb:cc:dd:ee:02", "port_table": [{"port_idx": 9}]},
+                {"mac": "aa:bb:cc:dd:ee:01", "type": "usw", "total_used_power": 3.5,
+                 "port_table": [{"port_idx": 1, "sfp_rxpower": "-3.59", "poe_power": ""}]}
+            ]))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    // An upper-case MAC is canonicalized, and a row for another device is
+    // never accepted as the answer.
+    let report = client
+        .switch_port_report("default", "AA:BB:CC:DD:EE:01")
+        .await
+        .expect("read")
+        .expect("device present");
+    assert_eq!(report.mac.as_deref(), Some("aa:bb:cc:dd:ee:01"));
+    assert_eq!(report.total_used_power.value(), Some(3.5));
+    assert_eq!(report.port_table.len(), 1);
+    assert_eq!(report.port_table[0].sfp_rxpower.value(), Some(-3.59));
+    assert_eq!(report.port_table[0].poe_power.value(), None);
+}
+
+#[tokio::test]
+async fn switch_port_report_distinguishes_unknown_device_from_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:02",
+        ))
+        .respond_with(ResponseTemplate::new(404).set_body_string("no such route"))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    assert!(
+        client
+            .switch_port_report("default", "aa:bb:cc:dd:ee:01")
+            .await
+            .expect("empty data is a successful answer")
+            .is_none()
+    );
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:02")
+        .await
+        .expect_err("an unsupported route is an error");
+    assert!(error.to_string().contains("no such route"), "{error}");
+}
+
+#[tokio::test]
+async fn switch_port_report_refuses_a_malformed_mac_before_any_request() {
+    let server = MockServer::start().await;
+    // No mock is mounted: any request, including the login, would fail the
+    // read with a different error than the validation message asserted below.
+    let client = client_for(&server);
+    for bad in [
+        "",
+        "aa:bb",
+        "../../x",
+        "aa:bb:cc:dd:ee:0g",
+        "aabbccddee01",
+        "aa:bb:cc:dd:ee:01/x",
+    ] {
+        let error = client
+            .switch_port_report("default", bad)
+            .await
+            .expect_err("malformed mac");
+        assert!(
+            error.to_string().contains("six colon-separated"),
+            "{bad}: {error}"
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recording")
+            .is_empty()
+    );
+}

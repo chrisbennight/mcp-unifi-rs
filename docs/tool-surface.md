@@ -90,6 +90,42 @@ One device's status: identity, state, firmware, uptime, CPU and memory, uplink
 rates, and summarized port and radio tables. If the optional statistics read
 fails, `statisticsError` carries the controller response while identity and
 interface state remain available.
+Per-port counters, PoE power, and optical module readings are not part of
+this view; use `devices.ports`.
+
+### `devices.ports`
+
+`device` — id, MAC, or exact name of one switch or gateway. Optional
+`onlyProblems` and `sfpOnly`.
+
+One device's per-port diagnostics from the controller's legacy device
+statistics route, so it needs the local session credential. Each port reports
+link state, speed, and error and drop counters. A PoE-capable port adds
+`poe` with power in watts, voltage in volts, current in milliamps, mode, class,
+and whether the controller reports power delivery as good. A port with an
+optical module adds `sfp` with vendor, part, serial, compliance, fault flags,
+receive and transmit power in dBm, temperature, supply voltage, and bias
+current. `poe` at the device level carries the budget, the total the device
+reports delivering, and the sum of the per-port draw this read observed.
+
+A value the device or module does not report is omitted, never zero. Some
+modules and some gateways report presence and fault flags but no optical
+measurements, so `opticalReadingsReported` is false for them. Text the
+controller sends for a numeric field that is not a number is returned in the
+port's `unrecognizedValues` rather than dropped or converted.
+
+Counters accumulate since the device last reset and are not rates.
+`problemIndicators` lists the evidence that fired for a port (`rxErrors`,
+`txErrors`, `rxDropped`, `txDropped`, `sfpRxFault`, `sfpTxFault`, and
+`poeNotGood` for a linked port whose PoE is enabled but not healthy). These are
+prompts to investigate, not verdicts, and no optical threshold is judged.
+`onlyProblems` returns ports with at least one indicator and `sfpOnly` returns
+ports that report an optical module. `portsReported` counts the ports the device
+returned, `portsMatching` those left after filters, and `portsTruncated` marks a
+cut at the 128-port output ceiling.
+
+An unknown device, a device with no port table, an unsupported route, a rejected
+session, and a malformed response are distinct errors, never an empty result.
 
 ### `devices.pending.list`
 

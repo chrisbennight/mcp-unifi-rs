@@ -178,7 +178,7 @@ capability limits.
 | AP detail scan | 16 devices | wifi.diagnose | signaled | `accessPointsTruncated`; client-carrying devices scanned first | one upstream call per device makes this the fan-out bound of the whole surface. Complete adopted-device inventory pages remain available through `network.inventory.list` |
 | Rogue AP list | 100 rows | wifi.diagnose | signaled | `rogueApsTruncated`; `network.source.read` pages complete neighboring AP records | bounds diagnostic output; omissions are explicitly signaled |
 | Weak-client list | 50 rows | wifi.diagnose | declared top-N | "the 50 weakest, worst first" is the contract | diagnosis needs the worst cases, not a census |
-| Port table | 128 rows | devices.status, per device | signaled | `portsTruncated` | bounds the compact status table; complete device statistics remain available |
+| Port table | 128 rows | devices.status, devices.ports, per device | signaled | `portsTruncated` | bounds the compact status and port diagnostic tables; complete device statistics remain available |
 | Radio table | 16 rows | devices.status, wifi.diagnose | signaled | `radiosTruncated` | bounds the compact diagnostic table; complete source records remain available |
 | Recent client events | 20 rows | clients.context | signaled | `recentEventsTruncated` when more matches were omitted | context summarizes the bounded site-wide scan |
 | Client-event scan | 200 rows over 24 hours | clients.context | signaled | `recentEventsTruncated` when controller totals exceed the scan | one bounded system-log page balances freshness against fan-out |

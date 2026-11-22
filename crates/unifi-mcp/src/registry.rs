@@ -34,6 +34,7 @@ pub enum ToolKind {
     ClientsContext,
     DevicesSearch,
     DevicesStatus,
+    DevicesPorts,
     PendingDevicesList,
     DevicesAdopt,
     DevicesRemove,
@@ -168,6 +169,7 @@ impl ToolKind {
             | Self::ClientsContext
             | Self::DevicesSearch
             | Self::DevicesStatus
+            | Self::DevicesPorts
             | Self::PendingDevicesList
             | Self::GuestsStatus
             | Self::FirewallRead
@@ -259,6 +261,7 @@ impl ToolKind {
             | Self::ClientsContext
             | Self::DevicesSearch
             | Self::DevicesStatus
+            | Self::DevicesPorts
             | Self::PendingDevicesList
             | Self::DevicesAdopt
             | Self::DevicesRemove
@@ -490,7 +493,20 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "devices.status",
         "One device's bounded status: identity, state, firmware, uptime, CPU \
          and memory utilization, uplink rates, and summarized port and radio \
-         tables, selected by id, MAC, or name.",
+         tables, selected by id, MAC, or name. Per-port counters, PoE power, \
+         and optical module readings come from devices.ports.",
+    ),
+    read_spec(
+        ToolKind::DevicesPorts,
+        "devices.ports",
+        "One switch or gateway's per-port diagnostics, selected by id, MAC, or \
+         name: link state and speed, error and drop counters, PoE watts, volts \
+         and amps with the device's PoE budget and draw, and optical module \
+         identity with receive and transmit power, temperature, voltage, bias \
+         current and fault flags. Values a device or module does not report \
+         are omitted, never zero; some modules report presence only. Counters \
+         are cumulative since the device last reset. Filter with onlyProblems \
+         or sfpOnly. Requires the local session credential.",
     ),
     sensitive_read_spec(
         ToolKind::PendingDevicesList,
@@ -1087,6 +1103,7 @@ mod tests {
         ToolKind::ClientsContext,
         ToolKind::DevicesSearch,
         ToolKind::DevicesStatus,
+        ToolKind::DevicesPorts,
         ToolKind::PendingDevicesList,
         ToolKind::DevicesAdopt,
         ToolKind::DevicesRemove,
@@ -1240,6 +1257,7 @@ mod tests {
                 | ToolKind::ClientsContext
                 | ToolKind::DevicesSearch
                 | ToolKind::DevicesStatus
+                | ToolKind::DevicesPorts
                 | ToolKind::PendingDevicesList
                 | ToolKind::DevicesAdopt
                 | ToolKind::DevicesRemove

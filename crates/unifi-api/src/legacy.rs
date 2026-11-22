@@ -35,6 +35,7 @@ use crate::{
         ProtectBootstrap, ProtectEvent, ProtectEventContinuation, ProtectEventPage,
         ProtectLocalCamera,
     },
+    switch_ports::SwitchPortReport,
 };
 
 /// Longest `Retry-After` honored before retrying an idempotent read once.
@@ -272,6 +273,41 @@ impl LegacyClient {
             None,
         )
         .await
+    }
+
+    /// One device's per-port link, counter, `PoE`, and optical-module record
+    /// from `stat/device/{mac}`. `Ok(None)` means the controller answered
+    /// successfully with no device for that MAC; an unsupported route,
+    /// rejected session, and malformed body are errors, never an empty result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Config`] when `mac` is not six colon-separated
+    /// hexadecimal pairs, and an [`ApiError`] when the session, request, or
+    /// decoding fails.
+    pub async fn switch_port_report(
+        &self,
+        site: &str,
+        mac: &str,
+    ) -> Result<Option<SwitchPortReport>, ApiError> {
+        let mac = canonical_device_mac(mac)?;
+        let mut rows: Vec<SwitchPortReport> = self
+            .request_with_reauth(
+                RequestClass::IdempotentRead,
+                Method::GET,
+                site,
+                &["stat", "device", &mac],
+                None,
+            )
+            .await?;
+        // The route addresses one device. Any other row would mean the
+        // controller ignored the selector, so it is not accepted silently.
+        rows.retain(|row| {
+            row.mac
+                .as_deref()
+                .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
+        });
+        Ok(rows.into_iter().next())
     }
 
     /// Currently connected clients from `stat/sta`, with association,
@@ -2009,4 +2045,21 @@ fn finish_protect_event_page(
         scanned_rows,
         next: Some(ProtectEventContinuation { next_end }),
     })
+}
+
+/// The lowercase colon-separated form of a device MAC. The value becomes a
+/// request path segment, so anything else is refused before a request is made.
+fn canonical_device_mac(mac: &str) -> Result<String, ApiError> {
+    let groups: Vec<&str> = mac.split(':').collect();
+    let valid = groups.len() == 6
+        && groups
+            .iter()
+            .all(|group| group.len() == 2 && group.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if valid {
+        Ok(mac.to_ascii_lowercase())
+    } else {
+        Err(ApiError::Config(
+            "device MAC must be six colon-separated hexadecimal pairs".to_owned(),
+        ))
+    }
 }
