@@ -118,10 +118,7 @@ impl Count {
                 if trimmed.is_empty() {
                     Self::Absent
                 } else {
-                    trimmed
-                        .parse::<u64>()
-                        .ok()
-                        .or_else(|| trimmed.parse::<f64>().ok().and_then(whole_number))
+                    whole_number_text(trimmed)
                         .map_or_else(|| Self::Unrecognized(bounded_text(trimmed)), Self::Value)
                 }
             }
@@ -141,6 +138,23 @@ fn whole_number(parsed: f64) -> Option<u64> {
     const LARGEST_EXACT: f64 = 9_007_199_254_740_992.0;
     (parsed.is_finite() && parsed >= 0.0 && parsed.fract() == 0.0 && parsed <= LARGEST_EXACT)
         .then_some(parsed as u64)
+}
+
+/// A whole number written as text, optionally with a zero-only fractional
+/// part such as `3.0`. The text is matched exactly, never rounded through a
+/// float, so `0.99999999999999999` stays unrecognized.
+fn whole_number_text(text: &str) -> Option<u64> {
+    let whole = match text.split_once('.') {
+        None => text,
+        Some((whole, zeros)) if !zeros.is_empty() && zeros.bytes().all(|byte| byte == b'0') => {
+            whole
+        }
+        Some(_) => return None,
+    };
+    if whole.is_empty() || !whole.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    whole.parse().ok()
 }
 
 impl<'de> Deserialize<'de> for Count {
@@ -375,16 +389,20 @@ mod tests {
     #[test]
     fn whole_numbers_written_as_decimals_are_counts() {
         let report: SwitchPortReport = serde_json::from_value(json!({
-            "port_table": [{"speed": 1000.0, "rx_errors": "3.0", "tx_errors": 2.5,
-                            "rx_dropped": "-0", "tx_dropped": "1e3"}]
+            "port_table": [{"speed": 1000.0, "rx_errors": "3.000", "tx_errors": 2.5,
+                            "rx_dropped": "0.99999999999999999", "tx_dropped": "1e3"}]
         }))
         .expect("report");
         let port = &report.port_table[0];
         assert_eq!(port.speed, Count::Value(1000));
         assert_eq!(port.rx_errors, Count::Value(3));
         assert_eq!(port.tx_errors, Count::Unrecognized("2.5".to_owned()));
-        assert_eq!(port.rx_dropped, Count::Value(0));
-        assert_eq!(port.tx_dropped, Count::Value(1000));
+        // Text is matched exactly and never rounded through a float.
+        assert_eq!(
+            port.rx_dropped,
+            Count::Unrecognized("0.99999999999999999".to_owned())
+        );
+        assert_eq!(port.tx_dropped, Count::Unrecognized("1e3".to_owned()));
     }
 
     #[test]

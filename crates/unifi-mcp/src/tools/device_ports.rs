@@ -435,9 +435,11 @@ fn port_sfp(cage: &SwitchPort) -> Option<PortSfp> {
     let serial = nonempty(cage.sfp_serial.as_deref());
     // A controller that says no module is present is believed over any
     // leftover identity or reading fields.
+    let faulted = cage.sfp_rxfault == Some(true) || cage.sfp_txfault == Some(true);
     let present = cage.sfp_found == Some(true)
         || (cage.sfp_found != Some(false)
             && (optical_readings_reported
+                || faulted
                 || vendor.is_some()
                 || part.is_some()
                 || serial.is_some()));

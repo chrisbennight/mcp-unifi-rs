@@ -490,4 +490,18 @@ async fn a_record_with_no_family_is_refused_and_empty_cage_faults_are_ignored() 
         .map(|port| port["idx"].as_u64().expect("idx"))
         .collect();
     assert_eq!(indexes, [2]);
+
+    // A fault with no other module data still reports the module, so
+    // `sfpOnly` keeps a port that `onlyProblems` flags for the same fault.
+    let both = handler_for(&server)
+        .call(
+            &call(&json!({"device": "Core Switch", "onlyProblems": true, "sfpOnly": true})),
+            None,
+        )
+        .await
+        .expect("problems with modules")
+        .structured_content
+        .expect("structured");
+    assert_eq!(both["portsMatching"], 1);
+    assert_eq!(port(&both, 2)["sfp"]["txFault"], true);
 }
