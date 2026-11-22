@@ -433,6 +433,8 @@ fn port_sfp(cage: &SwitchPort) -> Option<PortSfp> {
     let vendor = nonempty(cage.sfp_vendor.as_deref());
     let part = nonempty(cage.sfp_part.as_deref());
     let serial = nonempty(cage.sfp_serial.as_deref());
+    let revision = nonempty(cage.sfp_rev.as_deref());
+    let compliance = nonempty(cage.sfp_compliance.as_deref());
     // A controller that says no module is present is believed over any
     // leftover identity or reading fields.
     let faulted = cage.sfp_rxfault == Some(true) || cage.sfp_txfault == Some(true);
@@ -442,14 +444,16 @@ fn port_sfp(cage: &SwitchPort) -> Option<PortSfp> {
                 || faulted
                 || vendor.is_some()
                 || part.is_some()
-                || serial.is_some()));
-    present.then(|| PortSfp {
+                || serial.is_some()
+                || revision.is_some()
+                || compliance.is_some()));
+    present.then_some(PortSfp {
         found: cage.sfp_found,
         vendor,
         part,
         serial,
-        revision: nonempty(cage.sfp_rev.as_deref()),
-        compliance: nonempty(cage.sfp_compliance.as_deref()),
+        revision,
+        compliance,
         rx_fault: cage.sfp_rxfault,
         tx_fault: cage.sfp_txfault,
         rx_power_dbm,

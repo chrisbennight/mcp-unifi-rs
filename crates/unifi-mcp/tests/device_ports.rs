@@ -470,7 +470,11 @@ async fn a_record_with_no_family_is_refused_and_empty_cage_faults_are_ignored() 
         "type": "usw",
         "port_table": [
             {"port_idx": 1, "sfp_found": false, "sfp_txfault": true, "sfp_rxfault": true},
-            {"port_idx": 2, "sfp_found": true, "sfp_txfault": true},
+            // No presence flag, identity, or measurement: the fault alone is
+            // the evidence of a module.
+            {"port_idx": 2, "sfp_txfault": true},
+            // Only a compliance code, with no presence flag: still a module.
+            {"port_idx": 3, "sfp_compliance": "10GBase-SR", "up": true},
         ],
     });
     let server = console(&json!([record])).await;
@@ -504,4 +508,16 @@ async fn a_record_with_no_family_is_refused_and_empty_cage_faults_are_ignored() 
         .expect("structured");
     assert_eq!(both["portsMatching"], 1);
     assert_eq!(port(&both, 2)["sfp"]["txFault"], true);
+
+    let optical = handler_for(&server)
+        .call(
+            &call(&json!({"device": "Core Switch", "sfpOnly": true})),
+            None,
+        )
+        .await
+        .expect("optical only")
+        .structured_content
+        .expect("structured");
+    assert_eq!(optical["portsMatching"], 2);
+    assert_eq!(port(&optical, 3)["sfp"]["compliance"], "10GBase-SR");
 }

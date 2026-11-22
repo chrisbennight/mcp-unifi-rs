@@ -2585,10 +2585,11 @@ async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
         .expect_err("malformed matching row");
     let text = error.to_string();
     assert!(matches!(error, ApiError::DecodeResponse { .. }), "{text}");
-    assert!(text.contains("ee:04"), "{text}");
+    // The record is withheld; only the decoder's diagnostic is reported.
+    assert!(text.contains("withheld"), "{text}");
     assert!(
-        !text.contains("ee:77"),
-        "another device's record must not be returned: {text}"
+        !text.contains("ee:04") && !text.contains("ee:77"),
+        "no device record may be returned: {text}"
     );
     // A reply with no data list is malformed, not an unknown device.
     let error = client

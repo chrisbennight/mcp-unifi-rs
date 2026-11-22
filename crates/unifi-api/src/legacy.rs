@@ -332,11 +332,15 @@ impl LegacyClient {
                 format!("{returned} record(s) returned, none for the requested device").as_bytes(),
             ));
         };
-        // Only the requested device's row is decoded, so a decode failure
-        // carries that row and never another device's.
-        serde_json::from_value::<SwitchPortReport>(row.clone())
+        // Only the requested device's row is decoded. A device record carries
+        // fields far beyond the diagnostic schema, so a decode failure reports
+        // the decoder's diagnostic and withholds the record itself.
+        serde_json::from_value::<SwitchPortReport>(row)
             .map(Some)
-            .map_err(|error| crate::error::decode_failure(&error, row.to_string().as_bytes()))
+            .map_err(|error| ApiError::DecodeResponse {
+                response: BoundedMessage::new("the device record is withheld"),
+                diagnostic: BoundedMessage::new(&error.to_string()),
+            })
     }
 
     /// Currently connected clients from `stat/sta`, with association,

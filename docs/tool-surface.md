@@ -136,8 +136,9 @@ An unknown device, a device that is not a switch or gateway (including one whose
 record names no device family), a device with no port table, an unsupported route, a rejected session, and a malformed response
 (including one with no `data` list, or rows only for other devices) are distinct
 errors, never an empty result. A mismatch error reports a count, and failing to
-decode the requested device's record carries that record alone. A reply too
-malformed to read as the controller's envelope is returned as the shared
+decode the requested device's record reports the decoder's diagnostic and
+withholds the record, which holds fields beyond the diagnostic schema. A reply
+too malformed to read as the controller's envelope is returned as the shared
 transport preserves failed responses.
 
 ### `devices.pending.list`
