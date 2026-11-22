@@ -95,14 +95,16 @@ this view; use `devices.ports`.
 
 ### `devices.ports`
 
-`device` — id, MAC, or exact name of one device that reports a port table,
-such as a switch or gateway. Optional `onlyProblems` and `sfpOnly`.
+`device` — id, MAC, or exact name of one switch or gateway. Optional
+`onlyProblems` and `sfpOnly`.
 
 One device's per-port diagnostics from the controller's legacy device
 statistics route, so it needs the local session credential. Each port reports
 link state, speed, and error and drop counters. A PoE-capable port adds
 `poe` with power in watts, voltage in volts, current in milliamps, mode, class,
-and whether the controller reports power delivery as good. A port with an
+and whether the controller reports power delivery as good (`good`, reported
+as is and not treated as a problem, because a self-powered device on a
+PoE-enabled port may legitimately report no delivery). A port with an
 optical module adds `sfp` with vendor, part, serial, compliance, fault flags,
 receive and transmit power in dBm, temperature, supply voltage, and bias
 current. `poe` at the device level carries the budget, the total the device
@@ -121,16 +123,20 @@ cut and ends with `[truncated]`.
 
 Counters accumulate since the device last reset and are not rates.
 `problemIndicators` lists the evidence that fired for a port (`rxErrors`,
-`txErrors`, `rxDropped`, `txDropped`, `sfpRxFault`, `sfpTxFault`, and
-`poeNotGood` for a linked port whose PoE is enabled but not healthy). These are
-prompts to investigate, not verdicts, and no optical threshold is judged.
+`txErrors`, `rxDropped`, `txDropped`, `sfpRxFault`, and `sfpTxFault`). These
+are prompts to investigate, not verdicts, and no optical threshold is judged.
+A port the controller says holds no module is reported without optical data
+even if stale module fields remain.
 `onlyProblems` returns ports with at least one indicator and `sfpOnly` returns
 ports that report an optical module. `portsReported` counts the ports the device
 returned, `portsMatching` those left after filters, and `portsTruncated` marks a
 cut at the 128-port output ceiling.
 
-An unknown device, a device with no port table, an unsupported route, a rejected
-session, and a malformed response are distinct errors, never an empty result.
+An unknown device, a device that is not a switch or gateway, a device with no
+port table, an unsupported route, a rejected session, and a malformed response
+(including one with no `data` list, or rows only for other devices) are distinct
+errors, never an empty result. A mismatch error reports a count, not another
+device's records.
 
 ### `devices.pending.list`
 

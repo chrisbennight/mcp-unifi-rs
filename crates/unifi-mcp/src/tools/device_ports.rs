@@ -13,8 +13,7 @@ use super::{
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct DevicePortsInput {
-    /// Device id, MAC address, or exact name of one adopted device that reports a
-    /// port table, such as a switch or gateway.
+    /// Device id, MAC address, or exact name of one adopted switch or gateway.
     device: String,
     /// Return only ports with at least one problem indicator.
     #[serde(default)]
@@ -185,6 +184,13 @@ pub(super) struct DevicePortsOutput {
     counter_semantics: &'static str,
 }
 
+/// Controller device families that carry switch ports. Access points and other
+/// device families are refused so a caller learns the tool does not apply
+/// rather than receiving an unrelated one-port record.
+const PORT_FAMILIES: &[&str] = &["usw", "ugw", "uxg", "udm", "ucg"];
+/// Longest controller-reported family text echoed in a refusal.
+const MAXIMUM_ECHOED_FAMILY_CHARACTERS: usize = 32;
+
 const COUNTER_SEMANTICS: &str = "Error and drop counters are cumulative since the device last reset, not rates. Problem indicators are evidence to investigate, not verdicts.";
 
 impl UnifiMcp {
@@ -209,10 +215,23 @@ impl UnifiMcp {
                     None,
                 )
             })?;
+        if let Some(family) = report.device_type.as_deref()
+            && !PORT_FAMILIES.contains(&family.to_ascii_lowercase().as_str())
+        {
+            let shown: String = family
+                .chars()
+                .take(MAXIMUM_ECHOED_FAMILY_CHARACTERS)
+                .collect();
+            return Err(McpError::invalid_params(
+                format!(
+                    "devices.ports supports switches and gateways; this device reports type {shown}"
+                ),
+                None,
+            ));
+        }
         if report.port_table.is_empty() {
             return Err(McpError::invalid_params(
-                "the device reports no port table; devices.ports reads devices that report \
-                 one, such as switches and gateways",
+                "the device reports no port table; devices.ports supports switches and gateways",
                 None,
             ));
         }
@@ -233,16 +252,23 @@ fn build_output(
 ) -> DevicePortsOutput {
     let ports_reported = report.port_table.len();
     let poe = poe_summary(&report);
-    let mut matching: Vec<PortDiagnostics> = report
+    // Every port is evaluated so the matching count is exact, but only the
+    // ports that fit the output ceiling are retained.
+    let mut matching: Vec<PortDiagnostics> = Vec::new();
+    let mut ports_matching = 0_usize;
+    for port in report
         .port_table
         .iter()
         .map(port_diagnostics)
         .filter(|port| !only_problems || !port.problem_indicators.is_empty())
         .filter(|port| !sfp_only || port.sfp.is_some())
-        .collect();
-    let ports_matching = matching.len();
+    {
+        ports_matching += 1;
+        if matching.len() < PORT_TABLE_CEILING {
+            matching.push(port);
+        }
+    }
     let truncated = ports_matching > PORT_TABLE_CEILING;
-    matching.truncate(PORT_TABLE_CEILING);
     DevicePortsOutput {
         id,
         name: report.name,
@@ -259,10 +285,9 @@ fn build_output(
 }
 
 fn poe_summary(report: &SwitchPortReport) -> Option<PoeSummary> {
-    let poe_capable = report
-        .port_table
-        .iter()
-        .any(|port| port.port_poe == Some(true) || port.poe_enable.is_some());
+    let poe_capable = report.port_table.iter().any(|port| {
+        port.port_poe == Some(true) || port.poe_enable.is_some() || port.poe_power.value().is_some()
+    });
     let budget_w = report.total_max_power.value();
     let effective_budget_w = report.total_max_effective_power.value();
     let used_w = report.total_used_power.value();
@@ -306,7 +331,10 @@ fn port_diagnostics(port: &SwitchPort) -> PortDiagnostics {
     let poe = port_poe(port);
     let sfp = port_sfp(port);
     PortDiagnostics {
-        idx: port.port_idx,
+        idx: port
+            .port_idx
+            .value()
+            .and_then(|idx| u32::try_from(idx).ok()),
         name: port.name.clone(),
         media: port.media.clone(),
         up: port.up,
@@ -354,12 +382,6 @@ fn problem_indicators(port: &SwitchPort) -> Vec<&'static str> {
         (nonzero(port.tx_dropped.value()), "txDropped"),
         (port.sfp_rxfault == Some(true), "sfpRxFault"),
         (port.sfp_txfault == Some(true), "sfpTxFault"),
-        // A port with no powered device attached reports no delivery; only a
-        // linked port whose PoE is enabled but not healthy is a fault.
-        (
-            port.up == Some(true) && port.poe_enable == Some(true) && port.poe_good == Some(false),
-            "poeNotGood",
-        ),
     ] {
         if fired {
             indicators.push(name);
@@ -403,11 +425,14 @@ fn port_sfp(cage: &SwitchPort) -> Option<PortSfp> {
     let vendor = nonempty(cage.sfp_vendor.as_deref());
     let part = nonempty(cage.sfp_part.as_deref());
     let serial = nonempty(cage.sfp_serial.as_deref());
+    // A controller that says no module is present is believed over any
+    // leftover identity or reading fields.
     let present = cage.sfp_found == Some(true)
-        || optical_readings_reported
-        || vendor.is_some()
-        || part.is_some()
-        || serial.is_some();
+        || (cage.sfp_found != Some(false)
+            && (optical_readings_reported
+                || vendor.is_some()
+                || part.is_some()
+                || serial.is_some()));
     present.then(|| PortSfp {
         found: cage.sfp_found,
         vendor,

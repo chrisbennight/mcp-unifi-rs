@@ -2535,6 +2535,16 @@ async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
         .mount(&server)
         .await;
 
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:03",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"meta": {"rc": "ok"}})),
+        )
+        .mount(&server)
+        .await;
+
     let client = client_for(&server);
     let error = client
         .switch_port_report("default", "aa:bb:cc:dd:ee:01")
@@ -2545,10 +2555,19 @@ async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
         .switch_port_report("default", "aa:bb:cc:dd:ee:02")
         .await
         .expect_err("rows for another device");
+    let text = error.to_string();
     assert!(
-        error
-            .to_string()
-            .contains("no record for the requested device"),
-        "{error}"
+        text.contains("no record for the requested device"),
+        "{text}"
     );
+    assert!(
+        !text.contains("ee:99"),
+        "another device's record must not be returned: {text}"
+    );
+    // A reply with no data list is malformed, not an unknown device.
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:03")
+        .await
+        .expect_err("no data list");
+    assert!(error.to_string().contains("no data list"), "{error}");
 }

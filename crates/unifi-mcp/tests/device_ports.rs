@@ -168,11 +168,13 @@ async fn reports_poe_optical_and_counter_readings_as_numbers() {
     assert_eq!(copper["counters"]["rxErrors"], 7);
     assert_eq!(copper["problemIndicators"], json!(["rxErrors"]));
 
-    // A linked PoE port that is enabled but not healthy is flagged; its zero
+    // A linked PoE port reporting no good delivery is reported as is, not
+    // flagged: a self-powered endpoint legitimately looks the same. Its zero
     // draw is a reported value, not an absent one.
     let unhealthy = port(&output, 3);
     assert_eq!(unhealthy["poe"]["powerW"], 0.0);
-    assert_eq!(unhealthy["problemIndicators"], json!(["poeNotGood"]));
+    assert_eq!(unhealthy["poe"]["good"], false);
+    assert_eq!(unhealthy["problemIndicators"], json!([]));
 
     let optical = port(&output, 25);
     assert_eq!(optical["sfp"]["rxPowerDbm"], -3.59);
@@ -237,9 +239,9 @@ async fn filters_select_problem_ports_and_optical_ports() {
         .iter()
         .map(|port| port["idx"].as_u64().expect("idx"))
         .collect();
-    assert_eq!(indexes, [2, 3, 26]);
+    assert_eq!(indexes, [2, 26]);
     assert_eq!(problems["portsReported"], 6);
-    assert_eq!(problems["portsMatching"], 3);
+    assert_eq!(problems["portsMatching"], 2);
 
     let optical = handler
         .call(
@@ -385,19 +387,70 @@ async fn malformed_values_do_not_fail_the_report_or_pose_as_zero() {
 }
 
 #[tokio::test]
-async fn any_device_that_reports_a_port_table_is_read_whatever_its_type() {
+async fn devices_that_are_not_switches_or_gateways_are_refused() {
     let record = json!({
         "mac": SWITCH_MAC,
         "type": "uap",
         "port_table": [{"port_idx": 1, "up": true, "speed": 1000}],
     });
     let server = console(&json!([record])).await;
+    let error = handler_for(&server)
+        .call(&call(&json!({"device": "Core Switch"})), None)
+        .await
+        .expect_err("an access point is not a switch or gateway");
+    assert!(
+        error.message.contains("supports switches and gateways") && error.message.contains("uap"),
+        "{}",
+        error.message
+    );
+
+    // A gateway family is accepted.
+    let gateway = json!({"mac": SWITCH_MAC, "type": "udm", "port_table": [{"port_idx": 1}]});
+    let server = console(&json!([gateway])).await;
     let output = handler_for(&server)
         .call(&call(&json!({"device": "Core Switch"})), None)
         .await
-        .expect("capability, not device family, decides support")
+        .expect("gateway")
         .structured_content
         .expect("structured");
-    assert_eq!(output["deviceType"], "uap");
-    assert_eq!(output["portsReported"], 1);
+    assert_eq!(output["deviceType"], "udm");
+}
+
+#[tokio::test]
+async fn text_in_the_port_index_and_stale_module_fields_do_not_mislead() {
+    let record = json!({
+        "mac": SWITCH_MAC,
+        "type": "usw",
+        "port_table": [
+            {"port_idx": "one", "up": true, "poe_power": "3.2"},
+            {"port_idx": 2, "sfp_found": false, "sfp_vendor": "STALE",
+             "sfp_rxpower": "-1.0"},
+        ],
+    });
+    let server = console(&json!([record])).await;
+    let handler = handler_for(&server);
+    let output = handler
+        .call(&call(&json!({"device": "Core Switch"})), None)
+        .await
+        .expect("a malformed port index must not fail the device")
+        .structured_content
+        .expect("structured");
+    let ports = output["ports"].as_array().expect("ports");
+    assert_eq!(ports[0]["unrecognizedValues"]["port_idx"], "one");
+    // The device summary appears from per-port draw alone.
+    assert_eq!(output["poe"]["portDrawSumW"], 3.2);
+    assert_eq!(output["poe"]["portsReportingDraw"], 1);
+    // A module the controller says is absent is not reported as present.
+    assert!(ports[1].get("sfp").is_none());
+
+    let optical = handler
+        .call(
+            &call(&json!({"device": "Core Switch", "sfpOnly": true})),
+            None,
+        )
+        .await
+        .expect("optical only")
+        .structured_content
+        .expect("structured");
+    assert_eq!(optical["portsMatching"], 0);
 }

@@ -141,7 +141,8 @@ impl<'de> Deserialize<'de> for Reading {
 /// `snake_case` on the wire. Every value is controller-reported and untrusted.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SwitchPort {
-    pub port_idx: Option<u32>,
+    #[serde(default)]
+    pub port_idx: Count,
     pub name: Option<String>,
     /// Connector family such as `GE`, `SFP`, or `SFP+`.
     pub media: Option<String>,
@@ -206,6 +207,7 @@ impl SwitchPort {
     #[must_use]
     pub fn unrecognized_readings(&self) -> BTreeMap<&'static str, &str> {
         let counts = [
+            ("port_idx", &self.port_idx),
             ("speed", &self.speed),
             ("rx_errors", &self.rx_errors),
             ("tx_errors", &self.tx_errors),

@@ -300,13 +300,28 @@ impl LegacyClient {
                 None,
             )
             .await?;
+        // The shared envelope treats a missing `data` member as an empty list.
+        // For a device read that would pass off a malformed reply as "no such
+        // device", so the list must actually be present.
+        let has_data_list = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|envelope| envelope.get("data").map(serde_json::Value::is_array))
+            == Some(true);
+        if !has_data_list {
+            return Err(crate::error::decode_failure(
+                &"the response carried no data list",
+                &bytes,
+            ));
+        }
         if rows.is_empty() {
             return Ok(None);
         }
         // The route addresses one device. Rows that are present but none of
         // them for the requested device mean the controller ignored the
-        // selector or sent a different shape, which is a failure and never
-        // the same outcome as an empty answer.
+        // selector or sent a different shape. That is a failure, and the
+        // diagnostic reports only a count so another device's records are
+        // never returned for a one-device read.
+        let returned = rows.len();
         rows.into_iter()
             .find(|row| {
                 row.mac
@@ -317,7 +332,8 @@ impl LegacyClient {
             .ok_or_else(|| {
                 crate::error::decode_failure(
                     &"the response held no record for the requested device",
-                    &bytes,
+                    format!("{returned} record(s) returned, none for the requested device")
+                        .as_bytes(),
                 )
             })
     }
