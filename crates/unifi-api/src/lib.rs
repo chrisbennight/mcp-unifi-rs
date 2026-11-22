@@ -26,6 +26,7 @@ mod legacy;
 pub mod models;
 pub mod pinning;
 pub mod protect;
+pub mod switch_ports;
 pub mod system_log;
 pub mod traffic;
 

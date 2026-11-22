@@ -2340,3 +2340,261 @@ async fn invalid_protect_event_page_keeps_the_exact_controller_body() {
         assert!(diagnostic.as_str().contains(expected_diagnostic));
     }
 }
+
+#[tokio::test]
+async fn switch_port_report_reads_one_fixed_route_and_decodes_readings() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .and(header("cookie", "TOKEN=session-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"mac": "aa:bb:cc:dd:ee:02", "port_table": [{"port_idx": 9}]},
+                {"mac": "aa:bb:cc:dd:ee:01", "type": "usw", "total_used_power": 3.5,
+                 "port_table": [{"port_idx": 1, "sfp_rxpower": "-3.59", "poe_power": ""}]}
+            ]))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    // An upper-case MAC is canonicalized, and a row for another device is
+    // never accepted as the answer.
+    let report = client
+        .switch_port_report("default", "AA:BB:CC:DD:EE:01")
+        .await
+        .expect("read")
+        .expect("device present");
+    assert_eq!(report.mac.as_deref(), Some("aa:bb:cc:dd:ee:01"));
+    assert_eq!(report.total_used_power.value(), Some(3.5));
+    assert_eq!(report.port_table.len(), 1);
+    assert_eq!(report.port_table[0].sfp_rxpower.value(), Some(-3.59));
+    assert_eq!(report.port_table[0].poe_power.value(), None);
+}
+
+#[tokio::test]
+async fn switch_port_report_distinguishes_unknown_device_from_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([]))))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:02",
+        ))
+        .respond_with(ResponseTemplate::new(404).set_body_string("no such route"))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    assert!(
+        client
+            .switch_port_report("default", "aa:bb:cc:dd:ee:01")
+            .await
+            .expect("empty data is a successful answer")
+            .is_none()
+    );
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:02")
+        .await
+        .expect_err("an unsupported route is an error");
+    assert!(error.to_string().contains("no such route"), "{error}");
+}
+
+#[tokio::test]
+async fn switch_port_report_refuses_a_malformed_mac_before_any_request() {
+    let server = MockServer::start().await;
+    // No mock is mounted: any request, including the login, would fail the
+    // read with a different error than the validation message asserted below.
+    let client = client_for(&server);
+    for bad in [
+        "",
+        "aa:bb",
+        "../../x",
+        "aa:bb:cc:dd:ee:0g",
+        "aabbccddee01",
+        "aa:bb:cc:dd:ee:01/x",
+    ] {
+        let error = client
+            .switch_port_report("default", bad)
+            .await
+            .expect_err("malformed mac");
+        assert!(
+            error.to_string().contains("six colon-separated"),
+            "{bad}: {error}"
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recording")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn switch_port_report_reauthenticates_once_and_replays_its_own_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .respond_with(ResponseTemplate::new(401).set_body_json(
+            serde_json::json!({"meta": {"rc": "error", "msg": "api.err.LoginRequired"}}),
+        ))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
+            &serde_json::json!([{"mac": "aa:bb:cc:dd:ee:01", "port_table": [{"port_idx": 1}]}]),
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let report = client_for(&server)
+        .switch_port_report("default", "aa:bb:cc:dd:ee:01")
+        .await
+        .expect("read after one re-authentication")
+        .expect("device present");
+    assert_eq!(report.port_table.len(), 1);
+}
+
+#[tokio::test]
+async fn switch_port_report_rejects_malformed_and_mismatched_replies() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/auth/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "TOKEN=session-1; Path=/")
+                .set_body_json(serde_json::json!({})),
+        )
+        .mount(&server)
+        .await;
+    // A port table that is not a list cannot be decoded.
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:01",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
+            &serde_json::json!([{"mac": "aa:bb:cc:dd:ee:01", "port_table": "not a list"}]),
+        )))
+        .mount(&server)
+        .await;
+    // Rows that are present but belong to another device are a failure, not
+    // the same outcome as an empty answer.
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:02",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_envelope(
+            &serde_json::json!([{"mac": "aa:bb:cc:dd:ee:99", "port_table": []}, {"port_table": []}]),
+        )))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:03",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"meta": {"rc": "ok"}})),
+        )
+        .mount(&server)
+        .await;
+
+    // The matching row is malformed while another device's row is valid: the
+    // failure may carry the requested device's row but never the other's.
+    Mock::given(method("GET"))
+        .and(path(
+            "/proxy/network/api/s/default/stat/device/aa:bb:cc:dd:ee:04",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ok_envelope(&serde_json::json!([
+                {"mac": "aa:bb:cc:dd:ee:77", "port_table": []},
+                {"mac": "aa:bb:cc:dd:ee:04", "port_table": "not a list"}
+            ]))),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server);
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:01")
+        .await
+        .expect_err("malformed port table");
+    assert!(matches!(error, ApiError::DecodeResponse { .. }), "{error}");
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:02")
+        .await
+        .expect_err("rows for another device");
+    let text = error.to_string();
+    assert!(
+        text.contains("no record for the requested device"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("ee:99"),
+        "another device's record must not be returned: {text}"
+    );
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:04")
+        .await
+        .expect_err("malformed matching row");
+    let text = error.to_string();
+    assert!(matches!(error, ApiError::DecodeResponse { .. }), "{text}");
+    // The record is withheld; only the decoder's diagnostic is reported.
+    assert!(text.contains("withheld"), "{text}");
+    assert!(
+        !text.contains("ee:04") && !text.contains("ee:77"),
+        "no device record may be returned: {text}"
+    );
+    // A reply with no data list is malformed, not an unknown device.
+    let error = client
+        .switch_port_report("default", "aa:bb:cc:dd:ee:03")
+        .await
+        .expect_err("no data list");
+    assert!(error.to_string().contains("no data list"), "{error}");
+}

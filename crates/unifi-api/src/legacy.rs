@@ -35,6 +35,7 @@ use crate::{
         ProtectBootstrap, ProtectEvent, ProtectEventContinuation, ProtectEventPage,
         ProtectLocalCamera,
     },
+    switch_ports::SwitchPortReport,
 };
 
 /// Longest `Retry-After` honored before retrying an idempotent read once.
@@ -272,6 +273,74 @@ impl LegacyClient {
             None,
         )
         .await
+    }
+
+    /// One device's per-port link, counter, `PoE`, and optical-module record
+    /// from `stat/device/{mac}`. `Ok(None)` means the controller answered
+    /// successfully with no device for that MAC; an unsupported route,
+    /// rejected session, and malformed body are errors, never an empty result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Config`] when `mac` is not six colon-separated
+    /// hexadecimal pairs, and an [`ApiError`] when the session, request, or
+    /// decoding fails.
+    pub async fn switch_port_report(
+        &self,
+        site: &str,
+        mac: &str,
+    ) -> Result<Option<SwitchPortReport>, ApiError> {
+        let mac = canonical_device_mac(mac)?;
+        let (rows, bytes): (Vec<serde_json::Value>, Vec<u8>) = self
+            .request_with_reauth_with_bytes(
+                RequestClass::IdempotentRead,
+                Method::GET,
+                site,
+                &["stat", "device", &mac],
+                None,
+            )
+            .await?;
+        // The shared envelope treats a missing `data` member as an empty list.
+        // For a device read that would pass off a malformed reply as "no such
+        // device", so the list must actually be present.
+        let has_data_list = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|envelope| envelope.get("data").map(serde_json::Value::is_array))
+            == Some(true);
+        if !has_data_list {
+            return Err(crate::error::decode_failure(
+                &"the response carried no data list",
+                &bytes,
+            ));
+        }
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        // The route addresses one device. Rows that are present but none of
+        // them for the requested device mean the controller ignored the
+        // selector or sent a different shape. That is a failure, and the
+        // diagnostic reports only a count so another device's records are
+        // never returned for a one-device read.
+        let returned = rows.len();
+        let Some(row) = rows.into_iter().find(|row| {
+            row.get("mac")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|reported| reported.eq_ignore_ascii_case(&mac))
+        }) else {
+            return Err(crate::error::decode_failure(
+                &"the response held no record for the requested device",
+                format!("{returned} record(s) returned, none for the requested device").as_bytes(),
+            ));
+        };
+        // Only the requested device's row is decoded. A device record carries
+        // fields far beyond the diagnostic schema, so a decode failure reports
+        // the decoder's diagnostic and withholds the record itself.
+        serde_json::from_value::<SwitchPortReport>(row)
+            .map(Some)
+            .map_err(|error| ApiError::DecodeResponse {
+                response: BoundedMessage::new("the device record is withheld"),
+                diagnostic: BoundedMessage::new(&error.to_string()),
+            })
     }
 
     /// Currently connected clients from `stat/sta`, with association,
@@ -2009,4 +2078,21 @@ fn finish_protect_event_page(
         scanned_rows,
         next: Some(ProtectEventContinuation { next_end }),
     })
+}
+
+/// The lowercase colon-separated form of a device MAC. The value becomes a
+/// request path segment, so anything else is refused before a request is made.
+fn canonical_device_mac(mac: &str) -> Result<String, ApiError> {
+    let groups: Vec<&str> = mac.split(':').collect();
+    let valid = groups.len() == 6
+        && groups
+            .iter()
+            .all(|group| group.len() == 2 && group.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if valid {
+        Ok(mac.to_ascii_lowercase())
+    } else {
+        Err(ApiError::Config(
+            "device MAC must be six colon-separated hexadecimal pairs".to_owned(),
+        ))
+    }
 }

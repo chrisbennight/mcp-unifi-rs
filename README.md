@@ -24,6 +24,10 @@ changes preview before you confirm them.
   and recent events with `clients.context`.
 - **Investigate slow Wi-Fi.** Use `wifi.diagnose` to inspect radio load and
   weak-signal clients, then check a device or recent controller events.
+- **Check a switch port.** Use `devices.ports` to read a switch's per-port link
+  state, error and drop counters, PoE power against the switch's budget, and
+  the light levels and temperature of an installed fiber module, where the
+  module reports them.
 - **Check Protect inventory and images.** Find cameras, inspect their reported state,
   fetch a camera JPEG with `cameras.snapshot`, control PTZ presets and patrols,
   manage RTSPS stream handles, and start talkback sessions.

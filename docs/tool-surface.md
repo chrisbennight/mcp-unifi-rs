@@ -90,6 +90,56 @@ One device's status: identity, state, firmware, uptime, CPU and memory, uplink
 rates, and summarized port and radio tables. If the optional statistics read
 fails, `statisticsError` carries the controller response while identity and
 interface state remain available.
+Per-port counters, PoE power, and optical module readings are not part of
+this view; use `devices.ports`.
+
+### `devices.ports`
+
+`device` — id, MAC, or exact name of one switch or gateway. Optional
+`onlyProblems` and `sfpOnly`.
+
+One device's per-port diagnostics from the controller's legacy device
+statistics route, so it needs the local session credential. Each port reports
+link state, speed, and error and drop counters. A PoE-capable port adds
+`poe` with power in watts, voltage in volts, current in milliamps, mode, class,
+and whether the controller reports power delivery as good (`good`, reported
+as is and not treated as a problem, because a self-powered device on a
+PoE-enabled port may legitimately report no delivery). A port with an
+optical module adds `sfp` with vendor, part, serial, compliance, fault flags,
+receive and transmit power in dBm, temperature, supply voltage, and bias
+current. `poe` at the device level carries the budget, the total the device
+reports delivering, and the sum of the per-port draw this read observed with
+`portsReportingDraw`, the number of ports that contributed. The sum is absent
+when no port reported a draw.
+
+A value the device or module does not report is omitted, never zero. Some
+modules and some gateways report presence and fault flags but no optical
+measurements, so `opticalReadingsReported` is false for them. Text the
+controller sends for a numeric field that is not a number, including a speed or
+counter, is returned in the port's `unrecognizedValues` (or the device-level
+`poe.unrecognizedValues`) rather than dropped or converted, and it does not
+prevent the other ports from being reported. Text longer than a small bound is
+cut and ends with `[truncated]`.
+
+Counters accumulate since the device last reset and are not rates.
+`problemIndicators` lists the evidence that fired for a port (`rxErrors`,
+`txErrors`, `rxDropped`, `txDropped`, `sfpRxFault`, and `sfpTxFault`). These
+are prompts to investigate, not verdicts, and no optical threshold is judged.
+A port the controller says holds no module is reported without optical data
+even if stale module fields remain.
+`onlyProblems` returns ports with at least one indicator and `sfpOnly` returns
+ports that report an optical module. `portsReported` counts the ports the device
+returned, `portsMatching` those left after filters, and `portsTruncated` marks a
+cut at the 128-port output ceiling.
+
+An unknown device, a device that is not a switch or gateway (including one whose
+record names no device family), a device with no port table, an unsupported route, a rejected session, and a malformed response
+(including one with no `data` list, or rows only for other devices) are distinct
+errors, never an empty result. A mismatch error reports a count, and failing to
+decode the requested device's record reports the decoder's diagnostic and
+withholds the record, which holds fields beyond the diagnostic schema. A reply
+too malformed to read as the controller's envelope is returned as the shared
+transport preserves failed responses.
 
 ### `devices.pending.list`
 

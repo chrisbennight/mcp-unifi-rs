@@ -49,11 +49,13 @@ use crate::{
 };
 
 mod activity;
+mod device_ports;
 mod firewall_policy_request;
 mod legacy_configuration;
 mod legacy_wlan_request;
 mod network_configuration;
 mod network_request;
+use device_ports::{DevicePortsInput, DevicePortsOutput};
 mod network_source;
 use network_source::{NetworkSourceReadInput, NetworkSourceReadOutput};
 mod protect_updates;
@@ -4613,6 +4615,7 @@ impl ToolSpec {
             ToolKind::ClientsContext => tool::<ClientSelectorInput, ClientContextOutput>(self),
             ToolKind::DevicesSearch => tool::<DevicesSearchInput, DevicesSearchOutput>(self),
             ToolKind::DevicesStatus => tool::<DeviceSelectorInput, DeviceStatusOutput>(self),
+            ToolKind::DevicesPorts => tool::<DevicePortsInput, DevicePortsOutput>(self),
             ToolKind::PendingDevicesList => {
                 tool::<PendingDevicesListInput, PendingDevicesListOutput>(self)
             }
@@ -5025,6 +5028,7 @@ impl UnifiMcp {
             ToolKind::ClientsContext => self.clients_context(params).await,
             ToolKind::DevicesSearch => self.devices_search(params).await,
             ToolKind::DevicesStatus => self.devices_status(params).await,
+            ToolKind::DevicesPorts => self.devices_ports(params).await,
             ToolKind::PendingDevicesList => self.pending_devices_list(params).await,
             ToolKind::DevicesAdopt => self.devices_adopt(params).await,
             ToolKind::DevicesRemove => self.devices_remove(params).await,
@@ -5599,12 +5603,10 @@ impl UnifiMcp {
         devices_remove_result(output)
     }
 
-    async fn devices_status(
-        &self,
-        params: &CallToolRequestParams,
-    ) -> Result<CallToolResult, McpError> {
-        let input = parse::<DeviceSelectorInput>(params)?;
-        let selector = input.device.trim();
+    /// Resolve an id, MAC, or exact name to exactly one adopted device,
+    /// refusing a name that a truncated inventory cannot prove unique.
+    pub(super) async fn resolve_device(&self, selector: &str) -> Result<DeviceSummary, McpError> {
+        let selector = selector.trim();
         if selector.is_empty() || selector.len() > MAXIMUM_QUERY_LENGTH {
             return Err(McpError::invalid_params(
                 "device selector must be an id, MAC, or name",
@@ -5642,6 +5644,15 @@ impl UnifiMcp {
                 None,
             ));
         }
+        Ok(device.clone())
+    }
+
+    async fn devices_status(
+        &self,
+        params: &CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let input = parse::<DeviceSelectorInput>(params)?;
+        let device = self.resolve_device(&input.device).await?;
 
         let site_id = self.site_id().await?;
         let detail = self
