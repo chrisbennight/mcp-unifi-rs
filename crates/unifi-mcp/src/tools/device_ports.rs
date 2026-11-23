@@ -504,7 +504,21 @@ mod tests {
                  "sfp_vendor": "UBNT", "sfp_rxpower": "-3.59", "sfp_txpower": "oops"},
             ],
         });
+        // A PoE summary whose readings are all numeric, so its own
+        // unrecognized-values map is empty and omitted.
+        let numeric_poe = json!({
+            "mac": "aa:bb:cc:dd:ee:01", "type": "usw",
+            "total_max_power": 95, "total_used_power": 12.4,
+            "port_table": [{"port_idx": 1, "up": true, "port_poe": true,
+                            "poe_enable": true, "poe_power": "4.9"}],
+        });
         for (name, value, only_problems, sfp_only) in [
+            (
+                "a device with a numeric PoE summary",
+                &numeric_poe,
+                false,
+                false,
+            ),
             ("a sparse device", &sparse, false, false),
             ("a populated device", &populated, false, false),
             ("a filter that matches nothing", &sparse, true, true),
