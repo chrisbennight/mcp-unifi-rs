@@ -46,6 +46,7 @@ pub(super) struct PoeSummary {
     /// Device-level figures the controller reported as text that is not a
     /// number, keyed by controller field name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(default)]
     unrecognized_values: BTreeMap<&'static str, String>,
     /// Ports whose `PoE` is enabled.
     poe_enabled_ports: u32,
@@ -156,6 +157,7 @@ pub(super) struct PortDiagnostics {
     /// Numeric fields the controller reported as text that is not a number,
     /// keyed by controller field name. Those readings are omitted above.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(default)]
     unrecognized_values: BTreeMap<&'static str, String>,
 }
 
@@ -463,4 +465,77 @@ fn port_sfp(cage: &SwitchPort) -> Option<PortSfp> {
         bias_current_ma,
         optical_readings_reported,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+    use unifi_api::switch_ports::SwitchPortReport;
+
+    use super::build_output;
+    use crate::registry::TOOL_REGISTRY;
+
+    fn report(value: &Value) -> SwitchPortReport {
+        serde_json::from_value(value.clone()).expect("report")
+    }
+
+    /// The gateway validates every result against the published output
+    /// schema, so a field the server omits must not be declared required.
+    #[test]
+    fn results_validate_against_the_published_output_schema() {
+        let tool = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.name == "devices.ports")
+            .expect("device ports tool is registered")
+            .catalog_tool();
+        let schema = Value::Object((*tool.output_schema.expect("output schema")).clone());
+        let validator = jsonschema::validator_for(&schema).expect("published schema compiles");
+
+        let sparse = json!({"mac": "aa:bb:cc:dd:ee:01", "type": "usw",
+            "port_table": [{"port_idx": 1, "up": true, "speed": 1000}]});
+        let populated = json!({
+            "mac": "aa:bb:cc:dd:ee:01", "type": "usw",
+            "total_max_power": 95, "total_used_power": "n/a",
+            "port_table": [
+                {"port_idx": 1, "up": true, "speed": "1000", "rx_errors": "n/a",
+                 "port_poe": true, "poe_enable": true, "poe_good": true,
+                 "poe_power": "4.91", "poe_voltage": "47.88", "poe_current": "102.5"},
+                {"port_idx": 25, "media": "SFP+", "up": true, "sfp_found": true,
+                 "sfp_vendor": "UBNT", "sfp_rxpower": "-3.59", "sfp_txpower": "oops"},
+            ],
+        });
+        // A PoE summary whose readings are all numeric, so its own
+        // unrecognized-values map is empty and omitted.
+        let numeric_poe = json!({
+            "mac": "aa:bb:cc:dd:ee:01", "type": "usw",
+            "total_max_power": 95, "total_used_power": 12.4,
+            "port_table": [{"port_idx": 1, "up": true, "port_poe": true,
+                            "poe_enable": true, "poe_power": "4.9"}],
+        });
+        for (name, value, only_problems, sfp_only) in [
+            (
+                "a device with a numeric PoE summary",
+                &numeric_poe,
+                false,
+                false,
+            ),
+            ("a sparse device", &sparse, false, false),
+            ("a populated device", &populated, false, false),
+            ("a filter that matches nothing", &sparse, true, true),
+        ] {
+            let output = super::structured(build_output(
+                "device-id".to_owned(),
+                report(value),
+                only_problems,
+                sfp_only,
+            ))
+            .expect("structured result")
+            .structured_content
+            .expect("structured content");
+            assert!(
+                validator.is_valid(&output),
+                "{name} must validate against the published schema: {output}"
+            );
+        }
+    }
 }
